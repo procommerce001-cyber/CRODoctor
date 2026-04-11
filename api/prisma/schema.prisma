@@ -8,7 +8,195 @@ datasource db {
 }
 
 model Store {
+  id          String    @id @default(cuid())
+  name        String
+  shopDomain  String?   @unique
+  accessToken String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  products          Product[]
+  orders            Order[]
+  themeSnapshots    ThemeSnapshot[]
+  croExecutions     CroExecution[]
+  actionItems       ActionItem[]
+  contentExecutions ContentExecution[]
+}
+
+model Product {
+  id               String    @id @default(cuid())
+  storeId          String
+  shopifyProductId String
+  title            String
+  handle           String
+  status           String
+  vendor           String?
+  productType      String?
+  tags             String?
+  bodyHtml         String?
+  publishedAt      DateTime?
+  createdAt        DateTime
+  updatedAt        DateTime
+
+  store     Store            @relation(fields: [storeId], references: [id])
+  variants  ProductVariant[]
+  images    ProductImage[]
+  lineItems OrderLineItem[]
+
+  @@unique([storeId, shopifyProductId])
+}
+
+model ProductVariant {
+  id                String   @id @default(cuid())
+  productId         String
+  shopifyVariantId  String   @unique
+  title             String
+  sku               String?
+  price             Decimal
+  compareAtPrice    Decimal?
+  inventoryQuantity Int?
+  availableForSale  Boolean  @default(true)
+  createdAt         DateTime
+  updatedAt         DateTime
+
+  product   Product        @relation(fields: [productId], references: [id])
+  lineItems OrderLineItem[]
+}
+
+model ProductImage {
+  id             String  @id @default(cuid())
+  productId      String
+  shopifyImageId String  @unique
+  src            String
+  altText        String?
+  position       Int     @default(0)
+
+  product Product @relation(fields: [productId], references: [id])
+}
+
+model Order {
+  id                 String    @id @default(cuid())
+  storeId            String
+  shopifyOrderId     String
+  orderNumber        Int
+  financialStatus    String?
+  fulfillmentStatus  String?
+  currency           String
+  subtotalPrice      Decimal
+  totalDiscounts     Decimal   @default(0)
+  totalShippingPrice Decimal   @default(0)
+  totalTax           Decimal   @default(0)
+  totalPrice         Decimal
+  itemCount          Int
+  landingSite        String?
+  referringSite      String?
+  createdAt          DateTime
+  updatedAt          DateTime
+  cancelledAt        DateTime?
+
+  store     Store          @relation(fields: [storeId], references: [id])
+  lineItems OrderLineItem[]
+
+  @@unique([storeId, shopifyOrderId])
+}
+
+model ThemeSnapshot {
   id        String   @id @default(cuid())
-  name      String
+  storeId   String
+  themeId   String
+  themeName String
+  files     Json     // { "sections/main-product.liquid": "original content..." }
   createdAt DateTime @default(now())
+
+  store      Store          @relation(fields: [storeId], references: [id])
+  executions CroExecution[]
+}
+
+model CroExecution {
+  id           String    @id @default(cuid())
+  storeId      String
+  issueId      String    // maps to CRO rule id (e.g. 'trust_badges')
+  productId    String?
+  changeType   String    // THEME_PATCH | CONTENT_CHANGE | APP_CONFIG
+  status       String    // PENDING | VALIDATED | DRAFT_APPLIED | APPROVED | PUBLISHED | ROLLED_BACK | FAILED
+  draftThemeId String?
+  snapshotId   String?
+  patchJson    Json      // full generated patch details
+  validationLog Json?    // warnings/errors from validation
+  errorMessage String?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  store    Store          @relation(fields: [storeId], references: [id])
+  snapshot ThemeSnapshot? @relation(fields: [snapshotId], references: [id])
+}
+
+// ---------------------------------------------------------------------------
+// ActionItem — persists review decisions made in the Action Center.
+// One row per (store, product, issue). Upserted on every PATCH/POST.
+// ---------------------------------------------------------------------------
+model ActionItem {
+  id                   String   @id @default(cuid())
+  storeId              String
+  productId            String
+  issueId              String
+  // pending | approved | rejected | deferred
+  reviewStatus         String   @default("pending")
+  // which generatedFix variant the reviewer selected (0 = bestGuess)
+  selectedVariantIndex Int?
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  store Store @relation(fields: [storeId], references: [id])
+
+  @@unique([storeId, productId, issueId])
+}
+
+// ---------------------------------------------------------------------------
+// ContentExecution — immutable audit log for content_change apply calls.
+// One row per call (preview or apply). Never deleted; status tracks outcome.
+// Status: previewed | applied | rolled_back | failed
+// ---------------------------------------------------------------------------
+model ContentExecution {
+  id                   String   @id @default(cuid())
+  storeId              String
+  productId            String
+  issueId              String
+  selectedVariantIndex Int?
+  // replace_full_body | insert_after_anchor | replace_matched_block | rollback | null on gate-blocked rows
+  patchMode            String?
+  // the anchor text/marker used for insert_after_anchor (e.g. "</p>", "<ul")
+  anchorUsed           String?
+  // exact block text that was matched for replace_matched_block
+  matchedBlock         String?
+  // snapshot of the full product field before the change (null on preview-only rows)
+  previousContent      String?
+  // the generated fix text (paragraph content, not full body)
+  newContent           String
+  // the full resulting body_html after patching (null on preview-only rows)
+  resultContent        String?
+  // previewed | applied | rolled_back | failed
+  status               String   @default("previewed")
+  createdAt            DateTime @default(now())
+
+  store Store @relation(fields: [storeId], references: [id])
+}
+
+model OrderLineItem {
+  id                String  @id @default(cuid())
+  orderId           String
+  productId         String?
+  variantId         String?
+  shopifyLineItemId String
+  title             String
+  quantity          Int
+  price             Decimal
+  totalDiscount     Decimal @default(0)
+  vendor            String?
+
+  order   Order           @relation(fields: [orderId], references: [id])
+  product Product?        @relation(fields: [productId], references: [id])
+  variant ProductVariant? @relation(fields: [variantId], references: [id])
+
+  @@unique([orderId, shopifyLineItemId])
 }
