@@ -12,10 +12,11 @@
 //   - Never write to Shopify. Never patch theme code.
 // ---------------------------------------------------------------------------
 
-const { analyzeProduct }    = require('./cro/analyzeProduct');
-const { toCroProduct }      = require('./cro/formatters');
-const { APPLY_TYPE_MAP }    = require('./cro/constants');
-const { fetchOrderMetrics } = require('./shopify-admin.service');
+const { analyzeProduct }      = require('./cro/analyzeProduct');
+const { toCroProduct }        = require('./cro/formatters');
+const { APPLY_TYPE_MAP }      = require('./cro/constants');
+const { fetchOrderMetrics, updateProductDescription } = require('./shopify-admin.service');
+const { classifyExecution }   = require('./cro/classifyExecution');
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -47,7 +48,16 @@ function classifyFix(issue) {
 // reviewStatus defaults to 'pending'; caller merges persisted state over this.
 // ---------------------------------------------------------------------------
 function toActionItem(issue) {
-  const { applyType, canAutoApply, humanReviewRequired } = classifyFix(issue);
+  const { applyType, humanReviewRequired } = classifyFix(issue);
+  const {
+    canAutoApply,
+    executionType,
+    riskLevel,
+    reason: classificationReason,
+  } = classifyExecution({
+    implementationType: issue.implementationType,
+    confidence:         issue.confidence,
+  });
 
   // ── Expert insight fields ─────────────────────────────────────────────────
   // Sourced from rule.build(). All rules produce these — map them into the
@@ -102,6 +112,9 @@ function toActionItem(issue) {
     reviewStatus:         'pending',
     selectedVariantIndex: null,
     canAutoApply,
+    executionType,
+    riskLevel,
+    classificationReason,
     applyType,
     humanReviewRequired,
 
@@ -755,10 +768,258 @@ async function getProductReport(rawProduct, _opts = {}) {
   };
 }
 
+// ---------------------------------------------------------------------------
+// buildActionSummary — human-readable one-liner of what will change.
+// Derived entirely from existing action item fields. No new logic.
+// ---------------------------------------------------------------------------
+function buildActionSummary(item) {
+  const parts = [];
+  if (item.fix?.action)     parts.push(item.fix.action);
+  if (item.placement)       parts.push(`Placement: ${item.placement}`);
+  if (item.fix?.difficulty) parts.push(`Difficulty: ${item.fix.difficulty}`);
+  return parts.join(' — ') || item.title || item.issueId;
+}
+
+// ---------------------------------------------------------------------------
+// buildContentChangePreview
+// For content_change items only: resolves currentContent, proposedContent,
+// and a human-readable diffSummary. All other applyTypes return null fields.
+// rawProduct is the DB product row (bodyHtml is the only target field for
+// all current CONTENT_CHANGE rules).
+// ---------------------------------------------------------------------------
+function buildContentChangePreview(item, rawProduct) {
+  if (item.applyType !== 'content_change') {
+    return { currentContent: null, proposedContent: null, diffSummary: null };
+  }
+
+  const currentContent  = rawProduct?.bodyHtml ?? null;
+  const proposedContent = item.generatedFix?.bestGuess?.content ?? null;
+
+  let diffSummary;
+  if (!proposedContent) {
+    diffSummary = 'No generated fix available yet — content cannot be previewed.';
+  } else if (!currentContent || currentContent.trim().length === 0) {
+    const words = proposedContent.split(/\s+/).filter(Boolean).length;
+    diffSummary = `Description is empty. Proposed content (${words} words) will become the full body.`;
+  } else {
+    const currentWords  = currentContent.replace(/<[^>]*>/g, ' ').split(/\s+/).filter(Boolean).length;
+    const proposedWords = proposedContent.split(/\s+/).filter(Boolean).length;
+    diffSummary = `Desire block (${proposedWords} words) will be inserted into existing description (${currentWords} words). Existing content is preserved.`;
+  }
+
+  return { currentContent, proposedContent, diffSummary };
+}
+
+// ---------------------------------------------------------------------------
+// buildActionPreview
+// Groups action items into autoApplicable / requiresReview buckets.
+// Includes all classification fields + a human-readable changeSummary.
+// For content_change items, adds currentContent, proposedContent, diffSummary.
+// Does not apply anything. Pure projection over existing action items.
+// ---------------------------------------------------------------------------
+function buildActionPreview(actions, rawProduct) {
+  const autoApplicable = [];
+  const requiresReview = [];
+
+  for (const item of actions) {
+    const contentPreview = buildContentChangePreview(item, rawProduct);
+
+    const entry = {
+      issueId:              item.issueId,
+      title:                item.title,
+      severity:             item.severity,
+      canAutoApply:         item.canAutoApply,
+      executionType:        item.executionType,
+      riskLevel:            item.riskLevel,
+      classificationReason: item.classificationReason,
+      applyType:            item.applyType,
+      reviewStatus:         item.reviewStatus,
+      changeSummary:        buildActionSummary(item),
+      ...contentPreview,
+    };
+
+    if (item.canAutoApply) {
+      autoApplicable.push(entry);
+    } else {
+      requiresReview.push(entry);
+    }
+  }
+
+  return {
+    autoApplicable,
+    requiresReview,
+    totals: {
+      autoApplicable: autoApplicable.length,
+      requiresReview: requiresReview.length,
+      total:          actions.length,
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// checkApplyGate
+//
+// Pure gate check for a single content_change action item.
+// Does NOT run patch detection. Does NOT write anything.
+// Returns a deterministic gated response.
+//
+// item      — action item from getProductActions (review state already merged)
+// rawProduct — DB product row (for currentContent)
+// ---------------------------------------------------------------------------
+function checkApplyGate(item, rawProduct) {
+  const meta = {
+    issueId:       item.issueId,
+    title:         item.title,
+    severity:      item.severity,
+    applyType:     item.applyType,
+    canAutoApply:  item.canAutoApply,
+    executionType: item.executionType,
+    riskLevel:     item.riskLevel,
+    reviewStatus:  item.reviewStatus,
+  };
+
+  if (item.applyType !== 'content_change') {
+    return {
+      eligibleToApply: false,
+      blockReason:     `applyType is "${item.applyType}". Only content_change actions can be applied.`,
+      currentContent:  null,
+      proposedContent: null,
+      meta,
+    };
+  }
+
+  if (!item.canAutoApply) {
+    return {
+      eligibleToApply: false,
+      blockReason:     'canAutoApply is false. Issue confidence is too low for automated execution.',
+      currentContent:  null,
+      proposedContent: null,
+      meta,
+    };
+  }
+
+  if (item.reviewStatus !== 'approved') {
+    return {
+      eligibleToApply: false,
+      blockReason:     `reviewStatus is "${item.reviewStatus}". Action must be approved before it can be applied.`,
+      currentContent:  null,
+      proposedContent: null,
+      meta,
+    };
+  }
+
+  const currentContent  = rawProduct?.bodyHtml ?? null;
+  const proposedContent = item.generatedFix?.bestGuess?.content ?? null;
+
+  if (!proposedContent) {
+    return {
+      eligibleToApply: false,
+      blockReason:     'No generated fix content available for this action.',
+      currentContent,
+      proposedContent: null,
+      meta,
+    };
+  }
+
+  return {
+    eligibleToApply: true,
+    blockReason:     null,
+    currentContent,
+    proposedContent,
+    meta,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// mergeProposedContent
+// Builds the full resultContent by inserting proposedContent into the existing
+// body. Inserts after the first closing </p> tag if one exists; otherwise
+// prepends. Falls back to full replacement when body is empty.
+// ---------------------------------------------------------------------------
+function mergeProposedContent(currentContent, proposedContent) {
+  const wrapped = `<p>${proposedContent}</p>`;
+  if (!currentContent || currentContent.trim().length === 0) return wrapped;
+  const idx = currentContent.indexOf('</p>');
+  if (idx !== -1) {
+    return currentContent.slice(0, idx + 4) + '\n' + wrapped + currentContent.slice(idx + 4);
+  }
+  return wrapped + '\n' + currentContent;
+}
+
+// ---------------------------------------------------------------------------
+// applyContentChange
+//
+// Real execution for a single CONTENT_CHANGE action item.
+// Flow:
+//   1. Gate check via checkApplyGate — abort if not eligible
+//   2. Build resultContent from current + proposed
+//   3. Write to Shopify via updateProductDescription
+//   4. On success: persist ContentExecution record + update local product
+//   5. On Shopify failure: return error, do not persist
+// ---------------------------------------------------------------------------
+async function applyContentChange(prisma, store, rawProduct, actionItem) {
+  // 1. Gate
+  const gate = checkApplyGate(actionItem, rawProduct);
+  if (!gate.eligibleToApply) {
+    return { applied: false, blockReason: gate.blockReason };
+  }
+
+  const { currentContent, proposedContent } = gate;
+
+  // 2. Build result
+  const resultContent = mergeProposedContent(currentContent, proposedContent);
+
+  // 3. Shopify write
+  try {
+    await updateProductDescription(store, rawProduct.shopifyProductId, resultContent);
+  } catch (err) {
+    return { applied: false, error: `Shopify write failed: ${err.message}` };
+  }
+
+  // 4a. Persist execution record
+  const patchMode = (!currentContent || currentContent.trim().length === 0)
+    ? 'replace_full_body'
+    : 'insert_after_anchor';
+
+  await prisma.contentExecution.create({
+    data: {
+      storeId:              store.id,
+      productId:            rawProduct.id,
+      issueId:              actionItem.issueId,
+      selectedVariantIndex: 0,
+      patchMode,
+      anchorUsed:           patchMode === 'insert_after_anchor' ? '</p>' : null,
+      matchedBlock:         null,
+      previousContent:      currentContent,
+      newContent:           proposedContent,
+      resultContent,
+      status:               'applied',
+    },
+  });
+
+  // 4b. Update local product
+  await prisma.product.update({
+    where: { id: rawProduct.id },
+    data:  { bodyHtml: resultContent },
+  });
+
+  return {
+    applied:          true,
+    issueId:          actionItem.issueId,
+    productId:        rawProduct.id,
+    shopifyProductId: rawProduct.shopifyProductId,
+    previousContent:  currentContent,
+    appliedContent:   proposedContent,
+  };
+}
+
 module.exports = {
   getProductActions,
   getStoreQueue,
   saveReviewState,
   getReviewStateForProduct,
   getProductReport,
+  buildActionPreview,
+  checkApplyGate,
+  applyContentChange,
 };

@@ -8,6 +8,9 @@ const {
   getStoreQueue,
   saveReviewState,
   getReviewStateForProduct,
+  buildActionPreview,
+  checkApplyGate,
+  applyContentChange,
 } = require('../services/action-center.service');
 
 const {
@@ -152,34 +155,21 @@ router.get('/review-state', async (req, res) => {
 
 // ---------------------------------------------------------------------------
 // POST /action-center/products/:id/apply
-// Draft-safe execution for content_change issues.
+// Real execution for a single CONTENT_CHANGE action item.
+// Calls the apply-gate internally — only proceeds if eligibleToApply === true.
+// Writes proposedContent to Shopify, persists execution record, updates local DB.
 //
-// Body: {
-//   shop:                 string  (required)
-//   issueId:              string  (required)
-//   selectedVariantIndex: number  (optional, default 0)
-//   preview:              boolean (optional, default true)
-// }
+// Body: { shop: string, issueId: string }
 //
-// When preview=true (default):
-//   - Runs gate checks and returns preview object
-//   - Logs a "previewed" ContentExecution row
-//   - Does NOT touch Shopify or the product record
-//
-// When preview=false:
-//   - Same checks + returns same preview object
-//   - Logs an "applied" ContentExecution row
-//   - Still does NOT call Shopify — that step is pending
-//
-// Gate rules (returns 422 if any fail):
-//   1. reviewStatus must be "approved"
-//   2. canAutoApply must be true
-//   3. applyType must be "content_change"
+// Gate conditions (all must pass):
+//   1. applyType === "content_change"
+//   2. canAutoApply === true
+//   3. reviewStatus === "approved"
 // ---------------------------------------------------------------------------
 router.post('/products/:id/apply', async (req, res) => {
   const prisma = req.app.get('prisma');
   try {
-    const { shop, issueId, selectedVariantIndex, preview = true } = req.body;
+    const { shop, issueId } = req.body;
 
     if (!shop)    return res.status(400).json({ error: 'shop is required' });
     if (!issueId) return res.status(400).json({ error: 'issueId is required' });
@@ -187,25 +177,30 @@ router.post('/products/:id/apply', async (req, res) => {
     const store = await prisma.store.findUnique({ where: { shopDomain: shop } });
     if (!store) return res.status(404).json({ error: 'Store not found.' });
 
-    const result = await previewContentExecution(prisma, {
-      storeId:             store.id,
-      productId:           req.params.id,
-      issueId,
-      selectedVariantIndex: typeof selectedVariantIndex === 'number' ? selectedVariantIndex : 0,
-      preview:             preview !== false,
+    const raw = await prisma.product.findFirst({
+      where:   { id: req.params.id, storeId: store.id },
+      include: PRODUCT_INCLUDE,
     });
+    if (!raw) return res.status(404).json({ error: 'Product not found in this store.' });
 
-    // If the gate blocked execution, surface that clearly with 422
-    if (!result.eligibleToApply) {
-      return res.status(422).json(result);
+    const result     = await getProductActions(raw, { prisma, storeId: store.id });
+    const actionItem = result.actions.find(a => a.issueId === issueId);
+
+    if (!actionItem) {
+      return res.status(404).json({ error: `No action found for issueId "${issueId}" on this product.` });
     }
 
-    res.json(result);
+    const applyResult = await applyContentChange(prisma, store, raw, actionItem);
+
+    if (!applyResult.applied) {
+      const status = applyResult.error ? 502 : 422;
+      return res.status(status).json(applyResult);
+    }
+
+    res.json(applyResult);
   } catch (err) {
-    if (err.statusCode === 404) return res.status(404).json({ error: err.message });
-    if (err.statusCode === 400) return res.status(400).json({ error: err.message });
     console.error('[ActionCenter] POST /products/:id/apply error:', err.message);
-    res.status(500).json({ error: 'Internal error during execution preview.' });
+    res.status(500).json({ error: 'Internal error during apply.' });
   }
 });
 
@@ -266,6 +261,91 @@ router.post('/products/:id/rollback', async (req, res) => {
   } catch (err) {
     console.error('[ActionCenter] POST /products/:id/rollback error:', err.message);
     res.status(500).json({ error: 'Internal error during rollback preview.' });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// POST /action-center/products/:id/apply-gate
+// Gate check for a single content_change action. Simulation only — no Shopify
+// write. Returns eligibleToApply + blockReason + current/proposed content.
+//
+// Body: { shop: string, issueId: string }
+//
+// Gate conditions (all must pass):
+//   1. applyType === "content_change"
+//   2. canAutoApply === true
+//   3. reviewStatus === "approved"
+// ---------------------------------------------------------------------------
+router.post('/products/:id/apply-gate', async (req, res) => {
+  const prisma = req.app.get('prisma');
+  try {
+    const { shop, issueId } = req.body;
+
+    if (!shop)    return res.status(400).json({ error: 'shop is required' });
+    if (!issueId) return res.status(400).json({ error: 'issueId is required' });
+
+    const store = await prisma.store.findUnique({ where: { shopDomain: shop } });
+    if (!store) return res.status(404).json({ error: 'Store not found.' });
+
+    const raw = await prisma.product.findFirst({
+      where:   { id: req.params.id, storeId: store.id },
+      include: PRODUCT_INCLUDE,
+    });
+    if (!raw) return res.status(404).json({ error: 'Product not found in this store.' });
+
+    const result     = await getProductActions(raw, { prisma, storeId: store.id });
+    const actionItem = result.actions.find(a => a.issueId === issueId);
+
+    if (!actionItem) {
+      return res.status(404).json({ error: `No action found for issueId "${issueId}" on this product.` });
+    }
+
+    const gateResult = checkApplyGate(actionItem, raw);
+
+    if (!gateResult.eligibleToApply) {
+      return res.status(422).json(gateResult);
+    }
+
+    res.json(gateResult);
+  } catch (err) {
+    console.error('[ActionCenter] POST /products/:id/apply-gate error:', err.message);
+    res.status(500).json({ error: 'Internal error during apply gate check.' });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// GET /action-center/products/:id/preview?shop=
+// Returns action items grouped into autoApplicable / requiresReview.
+// Each item includes all classification fields + a human-readable changeSummary.
+// No fixes are applied. Pure read.
+// ---------------------------------------------------------------------------
+router.get('/products/:id/preview', async (req, res) => {
+  const prisma = req.app.get('prisma');
+  try {
+    const raw = await prisma.product.findUnique({
+      where:   { id: req.params.id },
+      include: PRODUCT_INCLUDE,
+    });
+    if (!raw) return res.status(404).json({ error: 'Product not found.' });
+
+    let storeId = null;
+    if (req.query.shop) {
+      const store = await prisma.store.findUnique({ where: { shopDomain: req.query.shop } });
+      if (store) storeId = store.id;
+    }
+
+    const result  = await getProductActions(raw, { prisma, storeId });
+    const preview = buildActionPreview(result.actions, raw);
+
+    res.json({
+      productId:         result.productId,
+      title:             result.title,
+      optimizationScore: result.optimizationScore,
+      ...preview,
+    });
+  } catch (err) {
+    console.error('[ActionCenter] GET /products/:id/preview error:', err.message);
+    res.status(500).json({ error: 'Internal error generating action preview.' });
   }
 });
 
