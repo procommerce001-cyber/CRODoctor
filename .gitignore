@@ -18,3 +18,5 @@ api/node_modules/@prisma/
 dist/
 build/
 *.log
+.env
+api/.env

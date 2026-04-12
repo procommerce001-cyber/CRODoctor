@@ -29,17 +29,7 @@
 
 const { analyzeProduct } = require('./cro/analyzeProduct');
 const { toCroProduct }   = require('./cro/formatters');
-
-// ---------------------------------------------------------------------------
-// APPLY_TYPE_MAP — mirrors action-center.service.js (single source to be
-// extracted later if both modules grow; kept inline to avoid circular dep)
-// ---------------------------------------------------------------------------
-const APPLY_TYPE_MAP = {
-  CONTENT_CHANGE:  'content_change',
-  THEME_PATCH:     'theme_change',
-  APP_CONFIG:      'manual',
-  MERCHANT_ACTION: 'manual',
-};
+const { APPLY_TYPE_MAP } = require('./cro/constants');
 
 // ---------------------------------------------------------------------------
 // PATCH_MODE_REGISTRY
@@ -314,7 +304,10 @@ function applyPatch(plan, currentContent, proposedContent, issueId) {
     }
 
     case 'replace_matched_block':
-      return currentContent.replace(plan.matchedBlock, wrapped);
+      // Use a replacer function — raw replacement strings interpret `$` as
+      // backreference patterns (e.g. `$&`, `$1`) which would silently corrupt
+      // generated prose content that contains dollar signs.
+      return currentContent.replace(plan.matchedBlock, () => wrapped);
 
     default:
       throw new Error(`Cannot apply unknown patch mode: ${plan.mode}`);

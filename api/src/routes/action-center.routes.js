@@ -16,36 +16,10 @@ const {
   getExecutionHistory,
 } = require('../services/content-execution.service');
 
-// Shared Prisma include — identical to cro.routes.js
-const PRODUCT_INCLUDE = {
-  variants: {
-    orderBy: { createdAt: 'asc' },
-    select: {
-      id: true, shopifyVariantId: true, title: true, sku: true,
-      price: true, compareAtPrice: true, inventoryQuantity: true, availableForSale: true,
-    },
-  },
-  images: {
-    orderBy: { position: 'asc' },
-    select: { id: true, src: true, altText: true, position: true },
-  },
-};
+const { getProductReport } = require('../services/action-center.service');
 
-// ---------------------------------------------------------------------------
-// Helper: resolve store or return 400/404
-// ---------------------------------------------------------------------------
-async function resolveStore(prisma, shop, res) {
-  if (!shop) {
-    res.status(400).json({ error: 'shop query param required' });
-    return null;
-  }
-  const store = await prisma.store.findUnique({ where: { shopDomain: shop } });
-  if (!store) {
-    res.status(404).json({ error: 'Store not found.' });
-    return null;
-  }
-  return store;
-}
+const { PRODUCT_INCLUDE } = require('../lib/product-include');
+const { resolveStore }    = require('../lib/resolve-store');
 
 // ---------------------------------------------------------------------------
 // GET /action-center/products/:id?shop=
@@ -292,6 +266,29 @@ router.post('/products/:id/rollback', async (req, res) => {
   } catch (err) {
     console.error('[ActionCenter] POST /products/:id/rollback error:', err.message);
     res.status(500).json({ error: 'Internal error during rollback preview.' });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// GET /action-center/products/:id/report
+// Business-grade CRO report for a single product.
+// Returns 3–5 strongest issues formatted for a non-technical business owner.
+// No review state merged — pure analytical read.
+// ---------------------------------------------------------------------------
+router.get('/products/:id/report', async (req, res) => {
+  const prisma = req.app.get('prisma');
+  try {
+    const raw = await prisma.product.findUnique({
+      where:   { id: req.params.id },
+      include: PRODUCT_INCLUDE,
+    });
+    if (!raw) return res.status(404).json({ error: 'Product not found.' });
+
+    const report = await getProductReport(raw);
+    res.json(report);
+  } catch (err) {
+    console.error('[ActionCenter] GET /products/:id/report error:', err.message);
+    res.status(500).json({ error: 'Internal error generating CRO report.' });
   }
 });
 

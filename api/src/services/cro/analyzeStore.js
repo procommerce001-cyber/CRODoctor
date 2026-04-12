@@ -24,7 +24,7 @@
 
 const { analyzeProduct }              = require('./analyzeProduct');
 const { scoreStore }                  = require('./scoring');
-const { STORE_MISSING_DATA, IMPACT }  = require('./constants');
+const { STORE_MISSING_DATA }          = require('./constants');
 
 // ---------------------------------------------------------------------------
 // detectPatterns — cross-product observations worth surfacing
@@ -110,7 +110,7 @@ function detectPatterns(products, analysisMap) {
 // ---------------------------------------------------------------------------
 // buildNextBestActions — top 3 concrete actions ranked by ROI
 // ---------------------------------------------------------------------------
-function buildNextBestActions(criticalBlockers, quickWins, revenueOpportunities, systemPatterns) {
+function buildNextBestActions(quickWins, revenueOpportunities, systemPatterns) {
   const actions = [];
 
   // Always surface the all-active-OOS pattern if present
@@ -192,11 +192,7 @@ function analyzeStore(shop, products) {
   for (const p of products) {
     const analysis = analyzeProduct(p);
     analysisMap.set(p.id, analysis);
-    scoredProducts.push({
-      ...analysis,
-      // carry raw product fields needed for pattern detection
-      _raw: p,
-    });
+    scoredProducts.push(analysis);
   }
 
   // Aggregate issues across all products
@@ -229,7 +225,7 @@ function analyzeStore(shop, products) {
   const rawProducts = products; // for pattern detection
   const systemPatterns = detectPatterns(rawProducts, analysisMap);
   const storeScore     = scoreStore(scoredProducts.map(p => ({ status: p.status, optimizationScore: p.optimizationScore })));
-  const nextBestActions = buildNextBestActions(allCritical, allQuickWins, allRevOpp, systemPatterns);
+  const nextBestActions = buildNextBestActions(allQuickWins, allRevOpp, systemPatterns);
 
   return {
     shop,

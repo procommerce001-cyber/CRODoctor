@@ -69,8 +69,9 @@ function runRules(product) {
         priorityBucket:       built.priorityBucket,
         productTypeNotes:     built.productTypeNotes,
       });
-    } catch (_) {
-      // A broken rule must never crash the analysis
+    } catch (err) {
+      // A broken rule must never crash the analysis, but must never be silent either
+      console.error('[CRO] Rule "%s" threw during analysis: %s', rule.id, err.message);
     }
   }
 
@@ -137,8 +138,12 @@ function analyzeProduct(product) {
   const categories  = groupByCategory(issues);
 
   const criticalBlockers     = issues.filter(i => i.severity === 'critical');
-  const quickWins            = issues.filter(i => i.severity === 'medium' || i.severity === 'low');
-  const revenueOpportunities = issues.filter(i => i.severity === 'high');
+  // quickWins: low-effort issues regardless of severity — fast to implement
+  const quickWins            = issues.filter(i => i.effort === 'low');
+  // revenueOpportunities: high-severity issues + any issue with meaningful score impact
+  const revenueOpportunities = issues.filter(i =>
+    i.severity === 'high' || (i.scoreImpact !== null && i.scoreImpact <= -5)
+  );
 
   return {
     productId:         product.id,

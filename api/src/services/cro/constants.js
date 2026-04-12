@@ -13,6 +13,7 @@ const CATEGORIES = {
   EMOTIONAL:        'emotionalSelling',
   AOV:              'aov',
   CONSISTENCY:      'consistency',
+  CONVERSION:       'conversion',   // desire creation, outcome language, emotional engagement
 };
 
 // Severity drives scoring deductions and issue ordering.
@@ -100,6 +101,15 @@ const PRODUCT_MISSING_DATA = [
   { key: 'live_page_layout',     reason: 'Cannot inspect theme layout without a live theme audit' },
 ];
 
+// Shared map from engine implementationType values to Action Center applyType strings.
+// Single source of truth — imported by action-center.service and content-execution.service.
+const APPLY_TYPE_MAP = {
+  CONTENT_CHANGE:  'content_change',
+  THEME_PATCH:     'theme_change',
+  APP_CONFIG:      'manual',
+  MERCHANT_ACTION: 'manual',
+};
+
 module.exports = {
   CATEGORIES,
   SEVERITY,
@@ -108,6 +118,7 @@ module.exports = {
   EFFORT,
   CONFIDENCE,
   IMPLEMENTATION_TYPE,
+  APPLY_TYPE_MAP,
   SCORE_BANDS,
   STORE_MISSING_DATA,
   PRODUCT_MISSING_DATA,

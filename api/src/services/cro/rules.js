@@ -482,7 +482,7 @@ const RULES = [
       const price = parseFloat(String(p.variants?.[0]?.price || 0));
       return {
         userHesitation: `What if it's not what I expected? What if it arrives and looks completely different? If I'm unhappy, am I just stuck with it? I've been burned before buying from stores I don't know.`,
-        psychologicalTrigger: 'loss_aversion — prospect theory states that the pain of a potential loss is 2.5× stronger than the pleasure of an equivalent gain; a $${price.toFixed(0)} purchase from an unknown brand carries the psychological weight of a potential $${(price * 2.5).toFixed(0)} loss',
+        psychologicalTrigger: `loss_aversion — prospect theory states that the pain of a potential loss is 2.5× stronger than the pleasure of an equivalent gain; a $${price.toFixed(0)} purchase from an unknown brand carries the psychological weight of a potential $${(price * 2.5).toFixed(0)} loss`,
         whyItMatters: `Without a stated guarantee, the buyer carries 100% of the financial risk. For a brand they\'ve never purchased from before, that risk is real and rational. A guarantee doesn\'t just protect against returns — it signals that you are confident enough in your product to stand behind it. That confidence is contagious.`,
         exactFix: {
           what: 'Add a guarantee line as the final sentence of the description. Add a 3-icon trust bar directly below the Add to Cart button. Both changes together take under 10 minutes.',

@@ -4,6 +4,7 @@ const cors = require('cors');
 const crypto = require('crypto');
 const { PrismaClient } = require('@prisma/client');
 const { fetchProducts, fetchOrders } = require('./services/shopify.service');
+const { makeRequireAuth }            = require('./lib/auth-middleware');
 const croRouter          = require('./routes/cro.routes');
 const actionCenterRouter = require('./routes/action-center.routes');
 
@@ -114,8 +115,11 @@ function verifyShopifyHmac(query) {
     .update(message)
     .digest('hex');
 
-  // Constant-time comparison to prevent timing attacks
-  return crypto.timingSafeEqual(Buffer.from(digest), Buffer.from(hmac));
+  // timingSafeEqual requires equal-length buffers — mismatched length means bad input, not a throw
+  const digestBuf = Buffer.from(digest);
+  const hmacBuf   = Buffer.from(hmac);
+  if (digestBuf.length !== hmacBuf.length) return false;
+  return crypto.timingSafeEqual(digestBuf, hmacBuf);
 }
 
 /**
@@ -127,10 +131,33 @@ function isValidShopDomain(shop) {
 }
 
 // ---------------------------------------------------------------------------
-// Middleware
+// CORS — restrict to configured frontend origin(s) only
 // ---------------------------------------------------------------------------
-app.use(cors());
+const ALLOWED_ORIGIN = process.env.ALLOWED_ORIGIN || 'http://localhost:5173';
+
+app.use(cors({
+  origin: (origin, callback) => {
+    // Allow same-origin / server-to-server requests (no Origin header)
+    if (!origin) return callback(null, true);
+    if (origin === ALLOWED_ORIGIN) return callback(null, true);
+    callback(new Error(`CORS: origin "${origin}" is not allowed`));
+  },
+  credentials: true,
+}));
+
+// ---------------------------------------------------------------------------
+// Auth middleware
+// Requires a valid Bearer token on all protected routes.
+// Set API_SECRET in .env. Requests without it receive 401.
+// Exempt: /health, /auth/shopify, /auth/shopify/callback
+// ---------------------------------------------------------------------------
+const requireAuth = makeRequireAuth(process.env.API_SECRET);
+
+// ---------------------------------------------------------------------------
+// Middleware — order matters: CORS → JSON → Auth
+// ---------------------------------------------------------------------------
 app.use(express.json());
+app.use(requireAuth);
 
 // ---------------------------------------------------------------------------
 // Existing endpoints — unchanged
@@ -360,19 +387,26 @@ app.get('/auth/shopify/callback', async (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
-// Debug endpoint — remove or gate behind auth before going to production
+// Debug endpoints — non-production only
+// Both endpoints are already protected by requireAuth above.
+// Additionally blocked entirely in NODE_ENV=production.
 // ---------------------------------------------------------------------------
+
+function requireDev(_req, res, next) {
+  if (process.env.NODE_ENV === 'production') {
+    return res.status(404).json({ error: 'Not found.' });
+  }
+  next();
+}
 
 /**
  * GET /debug/shopify-config
  *
- * Returns the exact values this server will use for OAuth so you can compare
- * them character-for-character against the Shopify Dev Dashboard.
+ * Returns the exact values this server will use for OAuth.
  * Does NOT expose the client secret.
- *
- * Remove this endpoint (or protect it) before deploying to production.
+ * Protected by requireAuth + blocked in production.
  */
-app.get('/debug/shopify-config', (req, res) => {
+app.get('/debug/shopify-config', requireDev, (_req, res) => {
   // Build a sample authorize URL using a placeholder shop name so you can
   // inspect the full shape of the URL without triggering a real OAuth flow.
   const sampleShop = 'YOUR-STORE.myshopify.com';
@@ -410,7 +444,7 @@ app.get('/debug/shopify-config', (req, res) => {
 // Debug endpoint
 // ---------------------------------------------------------------------------
 
-app.get('/debug/store', async (req, res) => {
+app.get('/debug/store', requireDev, async (req, res) => {
   const { shop } = req.query;
   if (!shop) return res.status(400).json({ error: 'shop query param required' });
 

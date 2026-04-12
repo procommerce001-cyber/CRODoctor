@@ -149,6 +149,50 @@ function previewUrl(store, draftThemeId) {
   return `https://${store.shopDomain}?preview_theme_id=${draftThemeId}`;
 }
 
+// ---------------------------------------------------------------------------
+// fetchOrderMetrics
+// Fetches all paid, non-cancelled orders from the last `periodDays` days.
+// Returns aggregated revenue, order count, AOV, and currency.
+// Used by the CRO report to replace generic % estimates with real £/$ figures.
+// ---------------------------------------------------------------------------
+
+async function fetchOrderMetrics(store, periodDays = 90) {
+  const since = new Date(Date.now() - periodDays * 24 * 60 * 60 * 1000).toISOString();
+
+  let orders  = [];
+  let nextUrl = `${baseUrl(store.shopDomain)}/orders.json`
+    + `?status=any&financial_status=paid`
+    + `&created_at_min=${encodeURIComponent(since)}`
+    + `&limit=250`
+    + `&fields=id,total_price,currency,cancelled_at`;
+
+  while (nextUrl) {
+    const res = await fetch(nextUrl, { headers: headers(store.accessToken) });
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`Shopify orders API ${res.status}: ${text}`);
+    }
+    const data      = await res.json();
+    orders          = orders.concat(data.orders || []);
+    const link      = res.headers.get('link') || '';
+    const nextMatch = link.match(/<([^>]+)>;\s*rel="next"/);
+    nextUrl         = nextMatch ? nextMatch[1] : null;
+  }
+
+  // Exclude orders that were later cancelled (financial_status=paid but cancelled_at set)
+  const valid   = orders.filter(o => !o.cancelled_at);
+  const revenue = valid.reduce((sum, o) => sum + parseFloat(o.total_price || 0), 0);
+  const count   = valid.length;
+
+  return {
+    periodDays,
+    orderCount:   count,
+    totalRevenue: Math.round(revenue * 100) / 100,
+    aov:          count > 0 ? Math.round((revenue / count) * 100) / 100 : 0,
+    currency:     valid[0]?.currency || orders[0]?.currency || 'USD',
+  };
+}
+
 module.exports = {
   listThemes,
   getPublishedTheme,
@@ -161,4 +205,5 @@ module.exports = {
   updateProductDescription,
   updateImageAltText,
   previewUrl,
+  fetchOrderMetrics,
 };

@@ -3,47 +3,18 @@
 const express   = require('express');
 const router    = express.Router();
 
-const { analyzeProduct } = require('../services/cro/analyzeProduct');
-const { analyzeStore }   = require('../services/cro/analyzeStore');
-const { toCroProduct }   = require('../services/cro/formatters');
-const { RULES }          = require('../services/cro/rules');
-
-// Shared Prisma include — used by all CRO queries
-const PRODUCT_INCLUDE = {
-  variants: {
-    orderBy: { createdAt: 'asc' },
-    select: {
-      id: true, shopifyVariantId: true, title: true, sku: true,
-      price: true, compareAtPrice: true, inventoryQuantity: true, availableForSale: true,
-    },
-  },
-  images: {
-    orderBy: { position: 'asc' },
-    select: { id: true, src: true, altText: true, position: true },
-  },
-};
-
-// ---------------------------------------------------------------------------
-// Helper: resolve store or return 400/404
-// ---------------------------------------------------------------------------
-async function resolveStore(prisma, shop, res) {
-  if (!shop) {
-    res.status(400).json({ error: 'shop query param required' });
-    return null;
-  }
-  const store = await prisma.store.findUnique({ where: { shopDomain: shop } });
-  if (!store) {
-    res.status(404).json({ error: 'Store not found. Run OAuth install first.' });
-    return null;
-  }
-  return store;
-}
+const { analyzeProduct }   = require('../services/cro/analyzeProduct');
+const { analyzeStore }     = require('../services/cro/analyzeStore');
+const { toCroProduct }     = require('../services/cro/formatters');
+const { RULES }            = require('../services/cro/rules');
+const { PRODUCT_INCLUDE }  = require('../lib/product-include');
+const { resolveStore }     = require('../lib/resolve-store');
 
 // ---------------------------------------------------------------------------
 // GET /cro/health
 // Engine status — confirms rules are loaded and scoring is working.
 // ---------------------------------------------------------------------------
-router.get('/health', (req, res) => {
+router.get('/health', (_req, res) => {
   res.json({
     success:     true,
     croEngine:   'ok',
