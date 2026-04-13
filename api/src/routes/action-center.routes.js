@@ -24,6 +24,7 @@ const { getProductReport } = require('../services/action-center.service');
 
 const { PRODUCT_INCLUDE } = require('../lib/product-include');
 const { resolveStore }    = require('../lib/resolve-store');
+const { captureProductMetricsSnapshot, captureExecutionSnapshots } = require('../services/metrics.service');
 
 // ---------------------------------------------------------------------------
 // GET /action-center/products/:id?shop=
@@ -229,6 +230,242 @@ router.post('/batch-apply-safe', async (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
+// POST /action-center/batch-apply-selected
+// Controlled execution: applies ONLY the explicitly listed selectionKeys.
+// Does NOT auto-expand, does NOT group by product, stays strictly action-level.
+//
+// Body: { shop: string, selection: string[] }
+//   selection entries must be "productId::issueId"
+//
+// Safety: max 10 items, sequential execution.
+// ---------------------------------------------------------------------------
+router.post('/batch-apply-selected', async (req, res) => {
+  const prisma = req.app.get('prisma');
+  try {
+    const { shop, selection = [] } = req.body;
+
+    if (!shop)                 return res.status(400).json({ error: 'shop is required' });
+    if (!selection.length)     return res.status(400).json({ error: 'selection must be a non-empty array' });
+    if (selection.length > 10) return res.status(400).json({ error: 'max 10 selectionKeys per request' });
+
+    const invalidKey = selection.find(k => typeof k !== 'string' || k.split('::').length !== 2 || !k.split('::')[0] || !k.split('::')[1]);
+    if (invalidKey !== undefined) return res.status(400).json({ error: `invalid selectionKey format: "${invalidKey}" — expected productId::issueId` });
+
+    const seen = new Set();
+    const duplicate = selection.find(k => seen.size === seen.add(k).size);
+    if (duplicate !== undefined) return res.status(400).json({ error: `duplicate selectionKey: "${duplicate}"` });
+
+    const store = await resolveStore(prisma, shop, res);
+    if (!store) return;
+
+    const results      = [];
+    let appliedCount   = 0;
+    let skippedCount   = 0;
+    let failedCount    = 0;
+
+    for (const key of selection) {
+      const [productId, issueId] = key.split('::');
+
+      // 1. Fetch product (ownership check)
+      const rawProduct = await prisma.product.findFirst({
+        where:   { id: productId, storeId: store.id },
+        include: PRODUCT_INCLUDE,
+      });
+      if (!rawProduct) {
+        results.push({
+          selectionKey: key, productId, issueId,
+          status: 'skipped', reason: 'product not found or does not belong to this shop',
+          executionId: null,
+        });
+        skippedCount++; continue;
+      }
+
+      // 2. Resolve action item
+      const actionResult = await getProductActions(rawProduct, { prisma, storeId: store.id });
+      const actionItem   = actionResult.actions.find(a => a.issueId === issueId);
+      if (!actionItem) {
+        results.push({
+          selectionKey: key, productId, issueId,
+          status: 'skipped', reason: `no action found for issueId "${issueId}" on this product`,
+          executionId: null,
+        });
+        skippedCount++; continue;
+      }
+
+      // 3. Re-fetch for freshest bodyHtml before write
+      const freshProduct = await prisma.product.findFirst({
+        where: { id: productId, storeId: store.id }, include: PRODUCT_INCLUDE,
+      });
+      if (!freshProduct) {
+        results.push({
+          selectionKey: key, productId, issueId,
+          status: 'skipped', reason: 'product vanished during execution',
+          executionId: null,
+        });
+        skippedCount++; continue;
+      }
+
+      // 4. Apply — gate enforced inside applyContentChange
+      const applyResult = await applyContentChange(prisma, store, freshProduct, actionItem);
+
+      if (applyResult.applied) {
+        // Fetch executionId from the record written by applyContentChange
+        const execution = await prisma.contentExecution.findFirst({
+          where:   { productId, issueId, status: 'applied' },
+          orderBy: { createdAt: 'desc' },
+          select:  { id: true },
+        });
+        results.push({
+          selectionKey: key, productId, issueId,
+          status: 'applied', reason: null,
+          executionId: execution?.id ?? null,
+        });
+        appliedCount++;
+      } else if (applyResult.skipped) {
+        results.push({
+          selectionKey: key, productId, issueId,
+          status: 'skipped', reason: applyResult.reason,
+          executionId: null,
+        });
+        skippedCount++;
+      } else {
+        results.push({
+          selectionKey: key, productId, issueId,
+          status: 'failed', reason: applyResult.blockReason || applyResult.error || 'apply blocked',
+          executionId: null,
+        });
+        failedCount++;
+      }
+    }
+
+    res.json({
+      mode:                    'selection_apply',
+      requestedSelectionCount: selection.length,
+      resultCount:             results.length,
+      appliedCount,
+      skippedCount,
+      failedCount,
+      results,
+    });
+  } catch (err) {
+    console.error('[ActionCenter] POST /batch-apply-selected error:', err.message);
+    res.status(500).json({ error: 'Internal error during selection apply.' });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// GET /action-center/review-summary?shop=
+// Decision-ready action view grouped into readyToApply / alreadyApplied / blocked.
+// No filtering — every action appears in exactly one group.
+// Sorted within each group: score ASC (most negative first), then severity.
+// ---------------------------------------------------------------------------
+const SEVERITY_ORDER = { critical: 0, high: 1, medium: 2, low: 3 };
+
+function sortActionItems(items) {
+  return items.sort((a, b) => {
+    const scoreDiff = (a.score ?? 0) - (b.score ?? 0);
+    if (scoreDiff !== 0) return scoreDiff;
+    return (SEVERITY_ORDER[a.severity] ?? 9) - (SEVERITY_ORDER[b.severity] ?? 9);
+  });
+}
+
+router.get('/review-summary', async (req, res) => {
+  const prisma = req.app.get('prisma');
+  try {
+    const store = await resolveStore(prisma, req.query.shop, res);
+    if (!store) return;
+
+    const rawProducts = await prisma.product.findMany({
+      where:   { storeId: store.id },
+      orderBy: { createdAt: 'desc' },
+      take:    50,
+      include: PRODUCT_INCLUDE,
+    });
+
+    // Batch-load all applied executions for this store's products in one query
+    const productIds = rawProducts.map(p => p.id);
+    const appliedRows = await prisma.contentExecution.findMany({
+      where:  { productId: { in: productIds }, status: 'applied' },
+      select: { productId: true, issueId: true },
+    });
+    const appliedSet = new Set(appliedRows.map(r => `${r.productId}:${r.issueId}`));
+
+    const readyToApply   = [];
+    const alreadyApplied = [];
+    const blocked        = [];
+
+    for (const raw of rawProducts) {
+      const actionResult = await getProductActions(raw, { prisma, storeId: store.id });
+
+      for (const action of actionResult.actions) {
+        const eligible =
+          action.applyType       === 'content_change' &&
+          action.canAutoApply    === true             &&
+          action.riskLevel       === 'low'            &&
+          action.reviewStatus    === 'approved'       &&
+          action.proposedContent !== null;
+
+        let reason = null;
+        if (!eligible) {
+          if (action.applyType !== 'content_change')   reason = 'not a content_change action';
+          else if (!action.canAutoApply)               reason = 'canAutoApply is false';
+          else if (action.riskLevel !== 'low')         reason = `riskLevel is ${action.riskLevel}`;
+          else if (action.reviewStatus !== 'approved') reason = `reviewStatus is ${action.reviewStatus}`;
+          else                                         reason = 'no proposedContent';
+        }
+
+        const wasApplied = appliedSet.has(`${raw.id}:${action.issueId}`);
+
+        const inReadyGroup = eligible && !wasApplied;
+
+        const item = {
+          productId:    raw.id,
+          issueId:      action.issueId,
+          selectionKey: `${raw.id}::${action.issueId}`,
+          selectable:   inReadyGroup,
+          severity:     action.severity,
+          score:        action.scoreImpact,
+          riskLevel:    action.riskLevel,
+          reviewStatus: action.reviewStatus,
+          eligible:     inReadyGroup,
+          canAutoApply: action.canAutoApply,
+          wouldApply:   inReadyGroup,
+          reason:       wasApplied ? 'already applied' : reason,
+        };
+
+        if (wasApplied)         alreadyApplied.push(item);
+        else if (inReadyGroup)  readyToApply.push(item);
+        else                    blocked.push(item);
+      }
+    }
+
+    sortActionItems(readyToApply);
+    sortActionItems(alreadyApplied);
+    sortActionItems(blocked);
+
+    res.json({
+      shop: req.query.shop,
+      summary: {
+        requestedProductCount: rawProducts.length,
+        actionCount:           readyToApply.length + alreadyApplied.length + blocked.length,
+        readyToApplyCount:     readyToApply.length,
+        alreadyAppliedCount:   alreadyApplied.length,
+        blockedCount:          blocked.length,
+      },
+      filters: {
+        severity:     ['critical', 'high', 'medium', 'low'],
+        riskLevel:    ['low', 'medium', 'high'],
+        reviewStatus: ['approved', 'pending', 'rejected'],
+      },
+      groups: { readyToApply, alreadyApplied, blocked },
+    });
+  } catch (err) {
+    console.error('[ActionCenter] GET /review-summary error:', err.message);
+    res.status(500).json({ error: 'Internal error generating review summary.' });
+  }
+});
+
+// ---------------------------------------------------------------------------
 // GET /action-center/batch-preview?shop=
 // Control-layer decision view: groups all actions into high_impact / quick_wins
 // / needs_review, scores and sorts each group, marks readyToApply per item.
@@ -395,6 +632,24 @@ router.post('/products/:id/apply', async (req, res) => {
       return res.status(404).json({ error: `No action found for issueId "${issueId}" on this product.` });
     }
 
+    // 1. Explicit gate check — abort before any snapshot if not eligible
+    const gate = checkApplyGate(actionItem, raw);
+    if (!gate.eligibleToApply) {
+      return res.status(422).json({ applied: false, blockReason: gate.blockReason });
+    }
+
+    // 2. Before-snapshot (phase='before') — gate passed, executionId not yet known
+    let beforeCaptured  = false;
+    let beforeSnapshotId = null;
+    try {
+      const beforeSnap = await captureProductMetricsSnapshot(prisma, raw.id, 'before');
+      beforeSnapshotId = beforeSnap.id;
+      beforeCaptured   = true;
+    } catch (snapErr) {
+      console.warn('[ActionCenter] before-snapshot failed (non-fatal):', snapErr.message);
+    }
+
+    // 3. Apply — gate runs again inside applyContentChange (idempotent, safe)
     const applyResult = await applyContentChange(prisma, store, raw, actionItem);
 
     if (!applyResult.applied) {
@@ -402,7 +657,44 @@ router.post('/products/:id/apply', async (req, res) => {
       return res.status(status).json(applyResult);
     }
 
-    res.json(applyResult);
+    // 4. Fetch the executionId written by applyContentChange
+    const execution = await prisma.contentExecution.findFirst({
+      where:   { productId: raw.id, issueId, status: 'applied' },
+      orderBy: { createdAt: 'desc' },
+      select:  { id: true },
+    });
+    const executionId = execution?.id ?? null;
+
+    // 5. Link before-snapshot to execution, then capture after-snapshot (phase='after')
+    let afterCaptured = false;
+    let warning       = undefined;
+    if (executionId) {
+      // Retroactively link the before-snapshot
+      if (beforeSnapshotId) {
+        try {
+          await prisma.productMetricsSnapshot.update({
+            where: { id: beforeSnapshotId },
+            data:  { baselineExecutionId: executionId },
+          });
+        } catch (linkErr) {
+          console.warn('[ActionCenter] before-snapshot link failed (non-fatal):', linkErr.message);
+        }
+      }
+      try {
+        await captureExecutionSnapshots(prisma, raw.id, executionId);
+        afterCaptured = true;
+      } catch (snapErr) {
+        console.warn('[ActionCenter] after-snapshot failed (non-fatal):', snapErr.message);
+        warning = 'apply succeeded but after-snapshot failed';
+      }
+    }
+
+    res.json({
+      ...applyResult,
+      executionId,
+      metricsSnapshots: { beforeCaptured, afterCaptured },
+      ...(warning ? { warning } : {}),
+    });
   } catch (err) {
     console.error('[ActionCenter] POST /products/:id/apply error:', err.message);
     res.status(500).json({ error: 'Internal error during apply.' });

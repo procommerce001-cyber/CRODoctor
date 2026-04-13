@@ -38,10 +38,11 @@ model Product {
   createdAt        DateTime
   updatedAt        DateTime
 
-  store     Store            @relation(fields: [storeId], references: [id])
-  variants  ProductVariant[]
-  images    ProductImage[]
-  lineItems OrderLineItem[]
+  store            Store                    @relation(fields: [storeId], references: [id])
+  variants         ProductVariant[]
+  images           ProductImage[]
+  lineItems        OrderLineItem[]
+  metricsSnapshots ProductMetricsSnapshot[]
 
   @@unique([storeId, shopifyProductId])
 }
@@ -185,6 +186,28 @@ model ContentExecution {
   // Full unique index removed — replaced by a partial unique index in migration
   // (WHERE status = 'applied') so rollback rows can coexist with the applied row
   // while still blocking duplicate applies via P2002.
+}
+
+// ---------------------------------------------------------------------------
+// ProductMetricsSnapshot — one row per product per day.
+// Captures order-derived metrics at a point in time so before/after apply
+// comparisons can be made later. Revenue stored as Decimal for precision.
+// ---------------------------------------------------------------------------
+model ProductMetricsSnapshot {
+  id                       String   @id @default(cuid())
+  productId                String
+  snapshotDate             DateTime
+  orderCount               Int
+  unitsSold                Int
+  revenue                  Decimal
+  latestAppliedExecutionId String?
+  baselineExecutionId      String?   // links this snapshot to a specific apply execution
+  phase                    String   @default("standalone")  // standalone | before | after
+  createdAt                DateTime @default(now())
+
+  product Product @relation(fields: [productId], references: [id])
+
+  @@unique([productId, snapshotDate, phase])
 }
 
 model OrderLineItem {

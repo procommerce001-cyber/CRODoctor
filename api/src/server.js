@@ -7,6 +7,8 @@ const { fetchProducts, fetchOrders } = require('./services/shopify.service');
 const { makeRequireAuth }            = require('./lib/auth-middleware');
 const croRouter          = require('./routes/cro.routes');
 const actionCenterRouter = require('./routes/action-center.routes');
+const metricsRouter      = require('./routes/metrics.routes');
+const dashboardRouter    = require('./routes/dashboard.routes');
 
 const app = express();
 const prisma = new PrismaClient({
@@ -580,6 +582,8 @@ function formatProduct(p) {
 
 app.use('/cro', croRouter);
 app.use('/action-center', actionCenterRouter);
+app.use('/metrics', metricsRouter);
+app.use('/dashboard', dashboardRouter);
 
 // ---------------------------------------------------------------------------
 // Sync endpoints
