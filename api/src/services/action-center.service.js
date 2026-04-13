@@ -131,6 +131,9 @@ function toActionItem(issue) {
     evidence:        issue.evidence      || [],
     recommendedFix:  issue.recommendedFix ?? null,
     generatedFix:    issue.generatedFix   ?? null,
+    // Normalised field — always present regardless of fix source.
+    // Execution layer and UI should read this instead of generatedFix.bestGuess.content directly.
+    proposedContent: issue.generatedFix?.bestGuess?.content ?? null,
 
     // ── Kept for display / backward compat ───────────────────────────────
     title:           issue.title,
@@ -457,17 +460,27 @@ const QUEUE_BUCKETS = {
 // getStoreQueue
 // Runs engine across all products, merges review state, returns queue.
 // ---------------------------------------------------------------------------
+
+// Processes items in serial batches of `concurrency` to limit simultaneous
+// DB queries. Avoids bursting the connection pool when the product list is large.
+async function runBatched(items, fn, concurrency = 5) {
+  const results = [];
+  for (let i = 0; i < items.length; i += concurrency) {
+    const batch = await Promise.all(items.slice(i, i + concurrency).map(fn));
+    results.push(...batch);
+  }
+  return results;
+}
+
 async function getStoreQueue(shop, rawProducts, { prisma, storeId } = {}) {
   const productResults = (
-    await Promise.all(
-      rawProducts.map(async p => {
-        try {
-          return await getProductActions(p, { prisma, storeId });
-        } catch (_) {
-          return null;
-        }
-      })
-    )
+    await runBatched(rawProducts, async p => {
+      try {
+        return await getProductActions(p, { prisma, storeId });
+      } catch (_) {
+        return null;
+      }
+    }, 5)
   ).filter(Boolean);
 
   const allItems = productResults.flatMap(pr =>
@@ -966,6 +979,18 @@ async function applyContentChange(prisma, store, rawProduct, actionItem) {
 
   const { currentContent, proposedContent } = gate;
 
+  // 1b. Idempotency guard — skip if a successful execution already exists for this issue+product
+  const existing = await prisma.contentExecution.findFirst({
+    where: {
+      productId: rawProduct.id,
+      issueId:   actionItem.issueId,
+      status:    'applied',
+    },
+  });
+  if (existing) {
+    return { applied: false, skipped: true, reason: 'already applied' };
+  }
+
   // 2. Build result
   const resultContent = mergeProposedContent(currentContent, proposedContent);
 
@@ -981,21 +1006,28 @@ async function applyContentChange(prisma, store, rawProduct, actionItem) {
     ? 'replace_full_body'
     : 'insert_after_anchor';
 
-  await prisma.contentExecution.create({
-    data: {
-      storeId:              store.id,
-      productId:            rawProduct.id,
-      issueId:              actionItem.issueId,
-      selectedVariantIndex: 0,
-      patchMode,
-      anchorUsed:           patchMode === 'insert_after_anchor' ? '</p>' : null,
-      matchedBlock:         null,
-      previousContent:      currentContent,
-      newContent:           proposedContent,
-      resultContent,
-      status:               'applied',
-    },
-  });
+  try {
+    await prisma.contentExecution.create({
+      data: {
+        storeId:              store.id,
+        productId:            rawProduct.id,
+        issueId:              actionItem.issueId,
+        selectedVariantIndex: 0,
+        patchMode,
+        anchorUsed:           patchMode === 'insert_after_anchor' ? '</p>' : null,
+        matchedBlock:         null,
+        previousContent:      currentContent,
+        newContent:           proposedContent,
+        resultContent,
+        status:               'applied',
+      },
+    });
+  } catch (err) {
+    if (err.code === 'P2002') {
+      return { applied: false, skipped: true, reason: 'already applied' };
+    }
+    throw err;
+  }
 
   // 4b. Update local product
   await prisma.product.update({
@@ -1013,6 +1045,167 @@ async function applyContentChange(prisma, store, rawProduct, actionItem) {
   };
 }
 
+// ---------------------------------------------------------------------------
+// rollbackContentChange
+//
+// Reverses a content_change apply for a single issue.
+// Flow:
+//   1. Find the latest 'applied' ContentExecution for (productId, issueId)
+//   2. Safety check: current bodyHtml must match resultContent (no manual edits)
+//   3. Idempotency: if a 'rolled_back' row already references this execution → skip
+//   4. Write previousContent back to Shopify
+//   5. Update Product.bodyHtml = previousContent
+//   6. Persist a new ContentExecution row with status='rolled_back'
+// ---------------------------------------------------------------------------
+async function rollbackContentChange(prisma, store, rawProduct, issueId) {
+  // 1. Find latest applied execution
+  const execution = await prisma.contentExecution.findFirst({
+    where:   { productId: rawProduct.id, issueId, status: 'applied' },
+    orderBy: { createdAt: 'desc' },
+  });
+
+  if (!execution) {
+    return { success: false, rolledBack: false, reason: 'no applied execution found' };
+  }
+
+  // 2. Idempotency first: if already rolled back, skip before any content checks.
+  // Must come before the safety check because after a successful rollback
+  // bodyHtml is the restored value, which intentionally differs from resultContent.
+  const existingRollback = await prisma.contentExecution.findFirst({
+    where: { referenceExecutionId: execution.id, status: 'rolled_back' },
+  });
+  if (existingRollback) {
+    return {
+      success:     false,
+      rolledBack:  false,
+      skipped:     true,
+      reason:      'already rolled back',
+      executionId: execution.id,
+      timestamp:   existingRollback.createdAt.toISOString(),
+    };
+  }
+
+  // 3. Safety: abort if content has been manually edited since apply
+  const currentBodyHtml = rawProduct.bodyHtml ?? null;
+  if (currentBodyHtml !== execution.resultContent) {
+    return {
+      success:     false,
+      rolledBack:  false,
+      reason:      'content changed since apply — manual edit detected, rollback aborted',
+      executionId: execution.id,
+    };
+  }
+
+  const previousContent = execution.previousContent ?? null;
+
+  // 4. Write previousContent back to Shopify
+  try {
+    await updateProductDescription(store, rawProduct.shopifyProductId, previousContent ?? '');
+  } catch (err) {
+    return { success: false, rolledBack: false, reason: `Shopify write failed: ${err.message}` };
+  }
+
+  // 5. Update local product
+  await prisma.product.update({
+    where: { id: rawProduct.id },
+    data:  { bodyHtml: previousContent },
+  });
+
+  // 6. Persist audit row
+  const rollbackRow = await prisma.contentExecution.create({
+    data: {
+      storeId:              store.id,
+      productId:            rawProduct.id,
+      issueId,
+      patchMode:            'rollback',
+      previousContent:      execution.resultContent,
+      newContent:           previousContent ?? '',
+      resultContent:        previousContent,
+      status:               'rolled_back',
+      referenceExecutionId: execution.id,
+    },
+  });
+
+  return {
+    success:     true,
+    rolledBack:  true,
+    executionId: execution.id,
+    timestamp:   rollbackRow.createdAt.toISOString(),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// buildBatchPreview
+//
+// Control-layer decision view over the product catalog.
+// Groups all auto-applicable and review-required actions into three buckets,
+// scores them deterministically, and marks each item as readyToApply.
+//
+// Groups:
+//   high_impact  — severity=critical  AND canAutoApply=true
+//   quick_wins   — severity=medium|low AND canAutoApply=true
+//   needs_review — canAutoApply=false  OR riskLevel!=low  (everything else)
+//
+// Score: critical=100 | high=80 | medium=50 | low=20  (sorted DESC per group)
+// readyToApply: canAutoApply=true AND reviewStatus=approved AND riskLevel=low
+// ---------------------------------------------------------------------------
+const SEVERITY_SCORE = { critical: 100, high: 80, medium: 50, low: 20 };
+
+function toPreviewItem(item, productId) {
+  return {
+    productId,
+    issueId:      item.issueId,
+    title:        item.title,
+    severity:     item.severity,
+    canAutoApply: item.canAutoApply,
+    riskLevel:    item.riskLevel,
+    reviewStatus: item.reviewStatus,
+    score:        SEVERITY_SCORE[item.severity] ?? 0,
+    readyToApply: item.canAutoApply === true &&
+                  item.reviewStatus === 'approved' &&
+                  item.riskLevel    === 'low',
+  };
+}
+
+async function buildBatchPreview(shop, rawProducts, { prisma, storeId } = {}) {
+  const productResults = (
+    await runBatched(rawProducts, async p => {
+      try { return await getProductActions(p, { prisma, storeId }); }
+      catch (_) { return null; }
+    }, 5)
+  ).filter(Boolean);
+
+  const high_impact  = [];
+  const quick_wins   = [];
+  const needs_review = [];
+
+  for (const pr of productResults) {
+    for (const item of pr.actions) {
+      const s = toPreviewItem(item, pr.productId);
+      if (item.severity === 'critical' && item.canAutoApply) {
+        high_impact.push(s);
+      } else if ((item.severity === 'medium' || item.severity === 'low') && item.canAutoApply) {
+        quick_wins.push(s);
+      } else {
+        needs_review.push(s);
+      }
+    }
+  }
+
+  const byScore = (a, b) => b.score - a.score;
+
+  return {
+    shop,
+    generatedAt:  new Date().toISOString(),
+    totalActions: high_impact.length + quick_wins.length + needs_review.length,
+    groups: {
+      high_impact:  high_impact.sort(byScore),
+      quick_wins:   quick_wins.sort(byScore),
+      needs_review: needs_review.sort(byScore),
+    },
+  };
+}
+
 module.exports = {
   getProductActions,
   getStoreQueue,
@@ -1022,4 +1215,6 @@ module.exports = {
   buildActionPreview,
   checkApplyGate,
   applyContentChange,
+  rollbackContentChange,
+  buildBatchPreview,
 };

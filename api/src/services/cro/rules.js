@@ -293,8 +293,9 @@ const RULES = [
     implementationType: IT.CONTENT_CHANGE,
     check: p => !p.bodyHtml || p.bodyHtml.replace(/<[^>]*>/g, '').trim().length < 50,
     build: p => {
-      const type  = detectProductType(p);
-      const price = parseFloat(String(p.variants?.[0]?.price || 0));
+      const type         = detectProductType(p);
+      const price        = parseFloat(String(p.variants?.[0]?.price || 0));
+      const generatedFix = generateDesireBlock(p);
       return {
         userHesitation: `What does this actually do for me? Why is it better than everything else I could buy? Why should I pay $${price.toFixed(0)} for this specific product from a brand I've never heard of?`,
         psychologicalTrigger: 'information_vacuum — purchase requires justified confidence; a blank page gives the visitor nothing to build confidence with; they default to "I need to research this more" which means they leave and never return',
@@ -334,6 +335,9 @@ const RULES = [
           : type === 'impulse'
           ? 'Impulse: short and punchy. 3 bullets, one outcome sentence, one guarantee line. Do not over-explain — impulse purchases need momentum, not analysis.'
           : 'Functional: be specific. Name the exact problem. Give the mechanism. Prove it works. Buyers of functional products are comparison-shopping — specificity beats competitor vagueness.',
+        // AI-generated opening paragraph — gives the execution layer real content
+        // to inject even when the merchant hasn't written a description yet.
+        generatedFix,
       };
     },
   },

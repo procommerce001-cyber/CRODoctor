@@ -177,9 +177,14 @@ model ContentExecution {
   resultContent        String?
   // previewed | applied | rolled_back | failed
   status               String   @default("previewed")
+  // for rolled_back rows: id of the applied row being reversed
+  referenceExecutionId String?
   createdAt            DateTime @default(now())
 
   store Store @relation(fields: [storeId], references: [id])
+  // Full unique index removed — replaced by a partial unique index in migration
+  // (WHERE status = 'applied') so rollback rows can coexist with the applied row
+  // while still blocking duplicate applies via P2002.
 }
 
 model OrderLineItem {

@@ -9,7 +9,9 @@ const croRouter          = require('./routes/cro.routes');
 const actionCenterRouter = require('./routes/action-center.routes');
 
 const app = express();
-const prisma = new PrismaClient();
+const prisma = new PrismaClient({
+  datasources: { db: { url: process.env.DATABASE_URL + '?connection_limit=10&pool_timeout=10' } },
+});
 
 // Make prisma available to routers via app.get('prisma')
 app.set('prisma', prisma);

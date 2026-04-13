@@ -11,11 +11,12 @@ const {
   buildActionPreview,
   checkApplyGate,
   applyContentChange,
+  rollbackContentChange,
+  buildBatchPreview,
 } = require('../services/action-center.service');
 
 const {
   previewContentExecution,
-  previewRollback,
   getExecutionHistory,
 } = require('../services/content-execution.service');
 
@@ -54,6 +55,35 @@ router.get('/products/:id', async (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
+// GET /action-center/batch-preview?shop=
+// Control-layer decision view: groups all actions into high_impact / quick_wins
+// / needs_review, scores and sorts each group, marks readyToApply per item.
+// ---------------------------------------------------------------------------
+router.get('/batch-preview', async (req, res) => {
+  const prisma = req.app.get('prisma');
+  try {
+    const store = await resolveStore(prisma, req.query.shop, res);
+    if (!store) return;
+
+    const rawProducts = await prisma.product.findMany({
+      where:   { storeId: store.id },
+      orderBy: { createdAt: 'desc' },
+      take:    50,
+      include: PRODUCT_INCLUDE,
+    });
+
+    const result = await buildBatchPreview(req.query.shop, rawProducts, {
+      prisma,
+      storeId: store.id,
+    });
+    res.json(result);
+  } catch (err) {
+    console.error('[ActionCenter] GET /batch-preview error:', err.message);
+    res.status(500).json({ error: 'Internal error during batch preview.' });
+  }
+});
+
+// ---------------------------------------------------------------------------
 // GET /action-center/queue?shop=
 // Returns full store queue with persisted review state merged into every item.
 // ---------------------------------------------------------------------------
@@ -66,6 +96,7 @@ router.get('/queue', async (req, res) => {
     const rawProducts = await prisma.product.findMany({
       where:   { storeId: store.id },
       orderBy: { createdAt: 'desc' },
+      take:    50,                    // cap: avoid full-catalog scan on every request
       include: PRODUCT_INCLUDE,
     });
 
@@ -225,20 +256,20 @@ router.get('/products/:id/executions', async (req, res) => {
 
 // ---------------------------------------------------------------------------
 // POST /action-center/products/:id/rollback
-// Preview-only rollback scaffold. Returns what would be restored.
-// No Shopify write. No "rolled_back" row logged. Safe to call repeatedly.
+// Reverts a product's bodyHtml to its exact state before the last apply.
 //
-// Body: {
-//   shop:        string  (required)
-//   issueId:     string  (required)
-//   executionId: string  (optional — pin to a specific execution row;
-//                         defaults to the most recent "applied" row for issueId)
-// }
+// Body: { shop: string (required), issueId: string (required) }
+//
+// Safety checks (all must pass):
+//   1. A ContentExecution with status='applied' exists for this product+issue
+//   2. Current bodyHtml matches the resultContent stored at apply time
+//      (aborts if a manual edit has been made since)
+//   3. Not already rolled back (idempotent — returns skipped if so)
 // ---------------------------------------------------------------------------
 router.post('/products/:id/rollback', async (req, res) => {
   const prisma = req.app.get('prisma');
   try {
-    const { shop, issueId, executionId } = req.body;
+    const { shop, issueId } = req.body;
 
     if (!shop)    return res.status(400).json({ error: 'shop is required' });
     if (!issueId) return res.status(400).json({ error: 'issueId is required' });
@@ -246,21 +277,23 @@ router.post('/products/:id/rollback', async (req, res) => {
     const store = await prisma.store.findUnique({ where: { shopDomain: shop } });
     if (!store) return res.status(404).json({ error: 'Store not found.' });
 
-    const result = await previewRollback(prisma, {
-      storeId:     store.id,
-      productId:   req.params.id,
-      issueId,
-      executionId: executionId ?? null,
+    const raw = await prisma.product.findFirst({
+      where:   { id: req.params.id, storeId: store.id },
+      include: PRODUCT_INCLUDE,
     });
+    if (!raw) return res.status(404).json({ error: 'Product not found in this store.' });
 
-    if (!result.eligibleToRollback) {
-      return res.status(422).json(result);
+    const result = await rollbackContentChange(prisma, store, raw, issueId);
+
+    if (!result.success) {
+      const status = result.skipped ? 422 : 409;
+      return res.status(status).json(result);
     }
 
     res.json(result);
   } catch (err) {
     console.error('[ActionCenter] POST /products/:id/rollback error:', err.message);
-    res.status(500).json({ error: 'Internal error during rollback preview.' });
+    res.status(500).json({ error: 'Internal error during rollback.' });
   }
 });
 
