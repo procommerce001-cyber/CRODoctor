@@ -55,6 +55,180 @@ router.get('/products/:id', async (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
+// POST /action-center/batch-apply-safe
+// Controlled execution of CONTENT_CHANGE actions for an explicit product list.
+//
+// Eligibility (ALL must be true per action):
+//   applyType === "content_change"
+//   canAutoApply === true
+//   riskLevel === "low"
+//   reviewStatus === "approved"
+//   proposedContent is non-null
+//   not already applied (ContentExecution status="applied" exists → skip)
+//   product belongs to the requested shop
+//
+// Safety constraints:
+//   - productIds capped at 5
+//   - Sequential execution — no concurrent writes
+//   - Stops after 2 accumulated failures
+//   - dryRun=true → no Shopify writes, no DB writes, gate not called
+//   - Does NOT auto-approve; does NOT bypass apply-gate
+//
+// Body: { shop: string, productIds: string[], dryRun?: boolean }
+// ---------------------------------------------------------------------------
+router.post('/batch-apply-safe', async (req, res) => {
+  const prisma = req.app.get('prisma');
+  try {
+    const { shop, productIds = [], dryRun = false } = req.body;
+
+    if (!shop)                return res.status(400).json({ error: 'shop is required' });
+    if (!productIds.length)   return res.status(400).json({ error: 'productIds is required' });
+    if (productIds.length > 5) return res.status(400).json({ error: 'max 5 products per batch' });
+
+    const store = await resolveStore(prisma, shop, res);
+    if (!store) return;
+
+    const results        = [];
+    let   appliedCount   = 0;
+    let   wouldApplyCount = 0;
+    let   skippedCount   = 0;
+    let   failedCount    = 0;
+    let   stoppedEarly   = false;
+    let   failuresSeen   = 0;
+    const MAX_FAILURES   = 2;
+
+    for (const productId of productIds) {
+      if (failuresSeen >= MAX_FAILURES) { stoppedEarly = true; break; }
+
+      // 1. Validate product ownership
+      const rawProduct = await prisma.product.findFirst({
+        where:   { id: productId, storeId: store.id },
+        include: PRODUCT_INCLUDE,
+      });
+
+      if (!rawProduct) {
+        results.push({
+          productId, issueId: null, eligible: false,
+          applied: false, wouldApply: false, skipped: true, failed: false,
+          reason: 'product not found or does not belong to this shop',
+          executionType: null, riskLevel: null,
+        });
+        skippedCount++; continue;
+      }
+
+      // 2. Run CRO engine + merge review state for this product
+      const actionResult    = await getProductActions(rawProduct, { prisma, storeId: store.id });
+      const eligibleActions = actionResult.actions.filter(a =>
+        a.applyType        === 'content_change' &&
+        a.canAutoApply     === true             &&
+        a.riskLevel        === 'low'            &&
+        a.reviewStatus     === 'approved'       &&
+        a.proposedContent  !== null
+      );
+
+      if (!eligibleActions.length) {
+        results.push({
+          productId, issueId: null, eligible: false,
+          applied: false, wouldApply: false, skipped: true, failed: false,
+          reason: 'no eligible content_change actions (check applyType, canAutoApply, riskLevel, reviewStatus)',
+          executionType: null, riskLevel: null,
+        });
+        skippedCount++; continue;
+      }
+
+      // 3. Process each eligible action sequentially
+      for (const actionItem of eligibleActions) {
+        if (failuresSeen >= MAX_FAILURES) { stoppedEarly = true; break; }
+
+        const { issueId, executionType, riskLevel } = actionItem;
+
+        // 3a. Already-applied guard (upfront — avoids unnecessary gate call)
+        const alreadyApplied = await prisma.contentExecution.findFirst({
+          where: { productId, issueId, status: 'applied' },
+        });
+        if (alreadyApplied) {
+          results.push({
+            productId, issueId, eligible: false,
+            applied: false, wouldApply: false, skipped: true, failed: false,
+            reason: 'already applied', executionType, riskLevel,
+          });
+          skippedCount++; continue;
+        }
+
+        // 3b. dryRun — no writes, return what would happen
+        if (dryRun) {
+          results.push({
+            productId, issueId, eligible: true,
+            applied: false, wouldApply: true, skipped: false, failed: false,
+            reason: null, executionType, riskLevel,
+          });
+          wouldApplyCount++; continue;
+        }
+
+        // 3c. Live apply — re-fetch product for fresh bodyHtml before each write
+        //     (a previous action in this batch may have changed it)
+        const freshProduct = await prisma.product.findFirst({
+          where: { id: productId, storeId: store.id }, include: PRODUCT_INCLUDE,
+        });
+        if (!freshProduct) {
+          results.push({
+            productId, issueId, eligible: true,
+            applied: false, wouldApply: false, skipped: true, failed: false,
+            reason: 'product vanished during batch', executionType, riskLevel,
+          });
+          skippedCount++; continue;
+        }
+
+        // Delegate to existing apply logic — gate enforced inside, P2002 guard active
+        const applyResult = await applyContentChange(prisma, store, freshProduct, actionItem);
+
+        if (applyResult.applied) {
+          results.push({
+            productId, issueId, eligible: true,
+            applied: true, wouldApply: false, skipped: false, failed: false,
+            reason: null, executionType, riskLevel,
+          });
+          appliedCount++;
+          failuresSeen = 0;                      // reset on success
+        } else if (applyResult.skipped) {
+          results.push({
+            productId, issueId, eligible: true,
+            applied: false, wouldApply: false, skipped: true, failed: false,
+            reason: applyResult.reason, executionType, riskLevel,
+          });
+          skippedCount++;
+        } else {
+          results.push({
+            productId, issueId, eligible: true,
+            applied: false, wouldApply: false, skipped: false, failed: true,
+            reason: applyResult.blockReason || applyResult.error || 'apply blocked',
+            executionType, riskLevel,
+          });
+          failedCount++;
+          failuresSeen++;
+        }
+      }
+    }
+
+    res.json({
+      shop,
+      dryRun,
+      requestedProductCount: productIds.length,
+      actionCount:           results.length,
+      appliedCount,
+      wouldApplyCount,
+      skippedCount,
+      failedCount,
+      stoppedEarly,
+      results,
+    });
+  } catch (err) {
+    console.error('[ActionCenter] POST /batch-apply-safe error:', err.message);
+    res.status(500).json({ error: 'Internal error during batch apply.' });
+  }
+});
+
+// ---------------------------------------------------------------------------
 // GET /action-center/batch-preview?shop=
 // Control-layer decision view: groups all actions into high_impact / quick_wins
 // / needs_review, scores and sorts each group, marks readyToApply per item.
