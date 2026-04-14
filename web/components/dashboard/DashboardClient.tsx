@@ -4,12 +4,14 @@ import { useState, useCallback } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import type { DashboardPayload, ApplyResponse } from '@/lib/api';
 import { applySelected } from '@/lib/api';
-import StoreOverview          from './StoreOverview';
-import ReadyToApplyList       from './ReadyToApplyList';
-import TopWinsList            from './TopWinsList';
-import RecentActivityList     from './RecentActivityList';
-import ExecutionDetailsPanel  from './ExecutionDetailsPanel';
-import StoreSuggestionsList   from './StoreSuggestionsList';
+import StoreOverview                from './StoreOverview';
+import ReadyToApplyList             from './ReadyToApplyList';
+import TopWinsList                  from './TopWinsList';
+import RecentActivityList           from './RecentActivityList';
+import ExecutionDetailsPanel        from './ExecutionDetailsPanel';
+import StoreSuggestionsList         from './StoreSuggestionsList';
+import DashboardStickySummaryBar    from './DashboardStickySummaryBar';
+import type { FilterValue }         from './StoreSuggestionsList';
 
 const SHOP = process.env.NEXT_PUBLIC_SHOP ?? '';
 
@@ -23,6 +25,8 @@ export default function DashboardClient({ data }: Props) {
   const selectedExecId = searchParams.get('executionId');
 
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [suggestionCounts, setSuggestionCounts] = useState({ open: 0, completed: 0, blocked: 0 });
+  const [activeFilter, setActiveFilter] = useState<FilterValue>('ALL');
   const [isApplying,  setIsApplying]  = useState(false);
   const [applyResult, setApplyResult] = useState<ApplyResponse | null>(null);
   const [applyError,  setApplyError]  = useState<string | null>(null);
@@ -62,6 +66,16 @@ export default function DashboardClient({ data }: Props) {
   };
 
   return (
+    <div>
+      <DashboardStickySummaryBar
+        overview={data.overview}
+        review={data.review}
+        openCount={suggestionCounts.open}
+        completedCount={suggestionCounts.completed}
+        blockedCount={suggestionCounts.blocked}
+        activeFilter={activeFilter}
+        onFilterChange={setActiveFilter}
+      />
     <div style={styles.sections}>
       <StoreOverview overview={data.overview} />
 
@@ -93,6 +107,9 @@ export default function DashboardClient({ data }: Props) {
         onAppliedSelectionKeys={keys =>
           setSelected(prev => { const n = new Set(prev); keys.forEach(k => n.delete(k)); return n; })
         }
+        onSuggestionCounts={setSuggestionCounts}
+        activeFilter={activeFilter}
+        onFilterChange={setActiveFilter}
       />
       <RecentActivityList
         items={data.recentActivity}
@@ -106,6 +123,7 @@ export default function DashboardClient({ data }: Props) {
           onClose={() => router.push('/dashboard')}
         />
       )}
+    </div>
     </div>
   );
 }

@@ -129,6 +129,8 @@ export async function applySelected(shop: string, selection: string[]): Promise<
 // Store CRO suggestions
 // ---------------------------------------------------------------------------
 
+export type SuggestionStatus = 'OPEN' | 'PARTIALLY_APPLIED' | 'FULLY_APPLIED' | 'BLOCKED' | 'NO_CANDIDATES';
+
 export interface StoreSuggestion {
   type:           'scale_winner' | 'mixed_pattern' | 'pause_pattern' | 'insufficient_signal';
   issueId:        string;
@@ -136,6 +138,13 @@ export interface StoreSuggestion {
   neutralCount:   number;
   negativeCount:  number;
   recommendation: string;
+  status?:        SuggestionStatus;
+  candidateSummary?: {
+    candidateCount:      number;
+    readyToApplyCount:   number;
+    alreadyAppliedCount: number;
+    blockedCount:        number;
+  };
 }
 
 export interface StoreSuggestionsPayload {
@@ -195,7 +204,19 @@ export async function fetchSuggestionCandidates(shop: string, issueId: string): 
 
 export async function fetchStoreSuggestions(shop: string): Promise<StoreSuggestionsPayload> {
   const res = await fetch(
-    `${API_BASE}/metrics/store/suggestions?shop=${encodeURIComponent(shop)}`,
+    `${API_BASE}/metrics/store/suggestions-status?shop=${encodeURIComponent(shop)}`,
+    { cache: 'no-store' },
+  );
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error ?? `Request failed: ${res.status}`);
+  }
+  return res.json();
+}
+
+export async function fetchStoreSuggestionsWithStatus(shop: string): Promise<unknown> {
+  const res = await fetch(
+    `${API_BASE}/metrics/store/suggestions-status?shop=${encodeURIComponent(shop)}`,
     { cache: 'no-store' },
   );
   if (!res.ok) {

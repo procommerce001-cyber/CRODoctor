@@ -1,5 +1,8 @@
 'use strict';
 
+const { getProductActions } = require('./action-center.service');
+const { PRODUCT_INCLUDE }   = require('../lib/product-include');
+
 // ---------------------------------------------------------------------------
 // captureProductMetricsSnapshot
 //

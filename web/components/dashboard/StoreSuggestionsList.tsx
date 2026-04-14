@@ -1,8 +1,10 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { fetchStoreSuggestions, fetchSuggestionCandidates, applySelected } from '@/lib/api';
-import type { StoreSuggestion, StoreSuggestionsPayload, SuggestionCandidatesPayload, SuggestionCandidate, ApplyResponse } from '@/lib/api';
+import { fetchStoreSuggestionsWithStatus, fetchSuggestionCandidates, applySelected } from '@/lib/api';
+import type { StoreSuggestion, SuggestionStatus, SuggestionCandidatesPayload, SuggestionCandidate, ApplyResponse } from '@/lib/api';
+
+type SuggestionsWithStatusPayload = { suggestions: StoreSuggestion[] };
 
 const SHOP = process.env.NEXT_PUBLIC_SHOP ?? '';
 
@@ -13,11 +15,70 @@ const TYPE_STYLE: Record<StoreSuggestion['type'], { label: string; color: string
   insufficient_signal: { label: 'Insufficient signal', color: '#374151', bg: '#f9fafb', border: '#e5e7eb' },
 };
 
+const SUGGESTION_STATUS_BADGE: Record<SuggestionStatus, { label: string; color: string }> = {
+  OPEN:               { label: 'Open',               color: '#2563eb' },
+  PARTIALLY_APPLIED:  { label: 'Partially applied',  color: '#d97706' },
+  FULLY_APPLIED:      { label: 'Fully applied',       color: '#15803d' },
+  BLOCKED:            { label: 'Blocked',             color: '#b91c1c' },
+  NO_CANDIDATES:      { label: 'No candidates',       color: '#9ca3af' },
+};
+
 const SEVERITY_COLOR: Record<string, string> = {
   critical: '#b91c1c', high: '#d97706', medium: '#2563eb', low: '#6b7280',
 };
 
 type CandidateStatus = 'OPEN' | 'PARTIALLY_APPLIED' | 'FULLY_APPLIED' | 'BLOCKED' | 'NO_CANDIDATES' | null;
+
+export type FilterValue = 'ALL' | 'OPEN' | 'COMPLETED' | 'BLOCKED' | 'NO_CANDIDATES';
+
+const STATUS_LABEL_MAP: Record<Exclude<FilterValue, 'ALL'>, string> = {
+  OPEN:          'Open',
+  COMPLETED:     'Completed',
+  BLOCKED:       'Blocked',
+  NO_CANDIDATES: 'No candidates',
+};
+
+const UI_GROUPS: { label: string; statuses: (SuggestionStatus)[] }[] = [
+  { label: 'Open',          statuses: ['OPEN', 'PARTIALLY_APPLIED'] },
+  { label: 'Completed',     statuses: ['FULLY_APPLIED'] },
+  { label: 'Blocked',       statuses: ['BLOCKED'] },
+  { label: 'No candidates', statuses: ['NO_CANDIDATES'] },
+];
+
+type GroupedSuggestion = { label: string; items: StoreSuggestion[] };
+
+function groupSuggestions(suggestions: StoreSuggestion[]) {
+  return UI_GROUPS.map(g => ({
+    label: g.label,
+    items: suggestions.filter(s => {
+      const status = s.status ?? 'NO_CANDIDATES';
+      return g.statuses.includes(status);
+    }),
+  })).filter(g => g.items.length > 0);
+}
+
+const GROUP_STATUSES: Record<'open' | 'completed' | 'blocked', SuggestionStatus[]> = {
+  open:      ['OPEN', 'PARTIALLY_APPLIED'],
+  completed: ['FULLY_APPLIED'],
+  blocked:   ['BLOCKED'],
+};
+
+function getSuggestionCounts(grouped: GroupedSuggestion[]): { open: number; completed: number; blocked: number } {
+  const count = (keys: SuggestionStatus[]) =>
+    grouped.filter(g => g.items.some(s => keys.includes(s.status ?? 'NO_CANDIDATES')))
+           .reduce((sum, g) => sum + g.items.filter(s => keys.includes(s.status ?? 'NO_CANDIDATES')).length, 0);
+  return {
+    open:      count(GROUP_STATUSES.open),
+    completed: count(GROUP_STATUSES.completed),
+    blocked:   count(GROUP_STATUSES.blocked),
+  };
+}
+
+function getVisibleGroups(grouped: GroupedSuggestion[], activeFilter: FilterValue): GroupedSuggestion[] {
+  if (activeFilter === 'ALL') return grouped;
+  const label = STATUS_LABEL_MAP[activeFilter];
+  return grouped.filter(g => g.label === label);
+}
 
 function deriveCandidateStatus(cands: SuggestionCandidatesPayload | undefined): CandidateStatus {
   if (!cands) return null;
@@ -49,13 +110,18 @@ const STATUS_BADGE: Record<NonNullable<CandidateStatus>, { color: string }> = {
   NO_CANDIDATES:     { color: '#9ca3af' },
 };
 
+interface SuggestionCounts { open: number; completed: number; blocked: number }
+
 interface Props {
   onSelectMatches:         (keys: string[]) => void;
   onAppliedSelectionKeys:  (keys: string[]) => void;
+  onSuggestionCounts?:     (counts: SuggestionCounts) => void;
+  activeFilter:            FilterValue;
+  onFilterChange:          (f: FilterValue) => void;
 }
 
-export default function StoreSuggestionsList({ onSelectMatches, onAppliedSelectionKeys }: Props) {
-  const [data,    setData]    = useState<StoreSuggestionsPayload | null>(null);
+export default function StoreSuggestionsList({ onSelectMatches, onAppliedSelectionKeys, onSuggestionCounts, activeFilter, onFilterChange }: Props) {
+  const [data,    setData]    = useState<SuggestionsWithStatusPayload | null>(null);
   const [loading, setLoading] = useState(true);
   const [error,   setError]   = useState<string | null>(null);
 
@@ -71,11 +137,16 @@ export default function StoreSuggestionsList({ onSelectMatches, onAppliedSelecti
   const [applyError,    setApplyError]    = useState<Record<string, string>>({});
 
   useEffect(() => {
-    fetchStoreSuggestions(SHOP)
-      .then(setData)
+    fetchStoreSuggestionsWithStatus(SHOP)
+      .then(r => setData(r as SuggestionsWithStatusPayload))
       .catch(err => setError(err instanceof Error ? err.message : 'Failed to load suggestions'))
       .finally(() => setLoading(false));
   }, []);
+
+  useEffect(() => {
+    if (!data || !onSuggestionCounts) return;
+    onSuggestionCounts(getSuggestionCounts(groupSuggestions(data.suggestions)));
+  }, [data]);
 
   const handleViewCandidates = async (issueId: string) => {
     // Toggle off if already expanded
@@ -117,7 +188,7 @@ export default function StoreSuggestionsList({ onSelectMatches, onAppliedSelecti
         .then(fresh => setCandidates(prev => ({ ...prev, [issueId]: fresh })))
         .catch(() => {});
       // Re-fetch suggestions so outcome counts reflect new executions
-      fetchStoreSuggestions(SHOP).then(setData).catch(() => {});
+      fetchStoreSuggestionsWithStatus(SHOP).then(r => setData(r as SuggestionsWithStatusPayload)).catch(() => {});
     } catch (err) {
       setApplyError(prev => ({ ...prev, [issueId]: err instanceof Error ? err.message : 'Apply failed' }));
     } finally {
@@ -135,9 +206,41 @@ export default function StoreSuggestionsList({ onSelectMatches, onAppliedSelecti
         <p style={styles.muted}>No suggestions yet — more measured executions are needed.</p>
       )}
 
-      {data && data.suggestions.length > 0 && (
-        <div style={styles.list}>
-          {data.suggestions.map(s => {
+      {data && data.suggestions.length > 0 && (() => {
+        const grouped = groupSuggestions(data.suggestions);
+        const countFor = (label: string) => grouped.find(g => g.label === label)?.items.length ?? 0;
+        const totalCount = grouped.reduce((sum, g) => sum + g.items.length, 0);
+        const visibleGroups = getVisibleGroups(grouped, activeFilter);
+
+        const CHIPS: { value: FilterValue; label: string; count: number }[] = [
+          { value: 'ALL',           label: 'All',           count: totalCount },
+          { value: 'OPEN',          label: STATUS_LABEL_MAP.OPEN,          count: countFor(STATUS_LABEL_MAP.OPEN) },
+          { value: 'COMPLETED',     label: STATUS_LABEL_MAP.COMPLETED,     count: countFor(STATUS_LABEL_MAP.COMPLETED) },
+          { value: 'BLOCKED',       label: STATUS_LABEL_MAP.BLOCKED,       count: countFor(STATUS_LABEL_MAP.BLOCKED) },
+          { value: 'NO_CANDIDATES', label: STATUS_LABEL_MAP.NO_CANDIDATES, count: countFor(STATUS_LABEL_MAP.NO_CANDIDATES) },
+        ];
+
+        return (
+        <div style={styles.groupsWrapper}>
+          <div style={styles.chips}>
+            {CHIPS.filter(c => c.value === 'ALL' || c.count > 0).map(c => (
+              <button
+                key={c.value}
+                style={{ ...styles.chip, ...(activeFilter === c.value ? styles.chipActive : {}) }}
+                onClick={() => onFilterChange(c.value)}
+              >
+                {c.label} ({c.count})
+              </button>
+            ))}
+          </div>
+          {visibleGroups.length === 0 && (
+            <p style={styles.muted}>No suggestions in this category.</p>
+          )}
+          {visibleGroups.map(group => (
+            <div key={group.label + '-' + group.items.length} style={styles.group}>
+              <h3 style={styles.groupHeading}>{group.label} ({group.items.length})</h3>
+              <div style={styles.list}>
+                {group.items.map(s => {
             const t      = TYPE_STYLE[s.type];
             const isOpen = !!expanded[s.issueId];
             const cands      = candidates[s.issueId];
@@ -154,6 +257,11 @@ export default function StoreSuggestionsList({ onSelectMatches, onAppliedSelecti
                 <div style={styles.cardTop}>
                   <span style={{ ...styles.badge, color: t.color, borderColor: t.border }}>{t.label}</span>
                   <span style={styles.issueId}>{s.issueId}</span>
+                  {s.status && (
+                    <span style={{ ...styles.statusBadge, color: SUGGESTION_STATUS_BADGE[s.status].color }}>
+                      {SUGGESTION_STATUS_BADGE[s.status].label}
+                    </span>
+                  )}
                   {candidateStatus && (
                     <span style={{ ...styles.statusBadge, color: STATUS_BADGE[candidateStatus].color }}>
                       {STATUS_LABEL[candidateStatus]}
@@ -161,6 +269,14 @@ export default function StoreSuggestionsList({ onSelectMatches, onAppliedSelecti
                   )}
                 </div>
                 <p style={styles.recommendation}>{s.recommendation}</p>
+                {s.candidateSummary && (
+                  <div style={styles.candidateCounts}>
+                    <span>Total: {s.candidateSummary.candidateCount}</span>
+                    <span style={{ color: '#15803d' }}>Ready: {s.candidateSummary.readyToApplyCount}</span>
+                    <span style={{ color: '#6b7280' }}>Applied: {s.candidateSummary.alreadyAppliedCount}</span>
+                    <span style={{ color: '#d97706' }}>Blocked: {s.candidateSummary.blockedCount}</span>
+                  </div>
+                )}
                 <div style={styles.cardBottom}>
                   <div style={styles.counts}>
                     <span style={{ ...styles.count, color: '#15803d' }}>✓ {s.successCount}</span>
@@ -264,9 +380,13 @@ export default function StoreSuggestionsList({ onSelectMatches, onAppliedSelecti
                 )}
               </div>
             );
-          })}
+                })}
+              </div>
+            </div>
+          ))}
         </div>
-      )}
+        );
+      })()}
     </section>
   );
 }
@@ -321,6 +441,12 @@ const candStyles: Record<string, React.CSSProperties> = {
 
 const styles: Record<string, React.CSSProperties> = {
   heading:          { fontSize: 16, fontWeight: 600, marginBottom: 12 },
+  groupsWrapper:    { display: 'flex', flexDirection: 'column' as const, gap: 24 },
+  chips:            { display: 'flex', flexWrap: 'wrap' as const, gap: 6 },
+  chip:             { fontSize: 12, fontWeight: 500, padding: '4px 10px', borderRadius: 20, border: '1px solid #d1d5db', background: '#f9fafb', color: '#6b7280', cursor: 'pointer' },
+  chipActive:       { background: '#111827', color: '#fff', borderColor: '#111827', fontWeight: 600 },
+  group:            { display: 'flex', flexDirection: 'column' as const, gap: 8 },
+  groupHeading:     { fontSize: 13, fontWeight: 700, color: '#374151', margin: 0, textTransform: 'uppercase' as const, letterSpacing: '0.05em' },
   muted:            { fontSize: 13, color: '#9ca3af' },
   errorText:        { fontSize: 13, color: '#dc2626' },
   list:             { display: 'flex', flexDirection: 'column', gap: 10 },
@@ -332,6 +458,7 @@ const styles: Record<string, React.CSSProperties> = {
   statusBadge:      { fontSize: 11, fontWeight: 700, marginLeft: 'auto' },
   completedNote:    { fontSize: 13, color: '#15803d', fontStyle: 'italic', margin: 0 },
   recommendation:   { fontSize: 13, color: '#111827', margin: 0, lineHeight: 1.5 },
+  candidateCounts:  { display: 'flex', gap: 14, fontSize: 12, fontWeight: 600, color: '#374151' },
   counts:           { display: 'flex', gap: 12 },
   count:            { fontSize: 12, fontWeight: 600 },
   viewBtn:          { fontSize: 12, padding: '4px 10px', border: '1px solid #d1d5db', borderRadius: 5, background: '#fff', color: '#374151', cursor: 'pointer', flexShrink: 0 },
