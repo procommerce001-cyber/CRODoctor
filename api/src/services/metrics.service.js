@@ -420,7 +420,131 @@ async function getStoreOverview(prisma, shop) {
   };
 }
 
+// ---------------------------------------------------------------------------
+// analyzeExecutionOutcome
+//
+// Rule-based decision engine for one ContentExecution.
+// Delegates entirely to getExecutionResultsSummary — no new data sources.
+// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// getStoreCROSuggestions
+//
+// Aggregates analyzeExecutionOutcome across all applied executions for a store
+// and produces deterministic pattern-level suggestions grouped by issueId.
+// ---------------------------------------------------------------------------
+async function getStoreCROSuggestions(prisma, shop) {
+  const store = await prisma.store.findUnique({
+    where:  { shopDomain: shop },
+    select: { id: true },
+  });
+  if (!store) return { success: false, reason: 'store not found' };
+
+  const executions = await prisma.contentExecution.findMany({
+    where:  { storeId: store.id, status: 'applied' },
+    select: { id: true, issueId: true },
+  });
+
+  // Accumulate per-issueId outcome counts
+  const byIssue = {};   // issueId → { success, neutral, negative }
+  let measuredExecutions  = 0;
+  let successfulExecutions = 0;
+  let neutralExecutions    = 0;
+  let negativeExecutions   = 0;
+
+  for (const { id, issueId } of executions) {
+    const outcome = await analyzeExecutionOutcome(prisma, id);
+    if (outcome.status === 'pending') continue;   // not enough data — skip
+
+    measuredExecutions++;
+    if (!byIssue[issueId]) byIssue[issueId] = { success: 0, neutral: 0, negative: 0 };
+
+    if (outcome.status === 'success')  { byIssue[issueId].success++;  successfulExecutions++; }
+    if (outcome.status === 'neutral')  { byIssue[issueId].neutral++;  neutralExecutions++;    }
+    if (outcome.status === 'negative') { byIssue[issueId].negative++; negativeExecutions++;   }
+  }
+
+  // Apply deterministic rules per issueId
+  const suggestions = Object.entries(byIssue).map(([issueId, counts]) => {
+    const { success, neutral, negative } = counts;
+    let type, recommendation;
+
+    if (success >= 2) {
+      type           = 'scale_winner';
+      recommendation = 'This change pattern is working. Apply this issue type to more similar products.';
+    } else if (success > 0 && negative > 0) {
+      type           = 'mixed_pattern';
+      recommendation = 'This issue type shows mixed outcomes. Apply only to products with similar positioning and test carefully.';
+    } else if (negative >= 2) {
+      type           = 'pause_pattern';
+      recommendation = 'This issue type is underperforming. Pause broad rollout and test a different messaging approach.';
+    } else {
+      type           = 'insufficient_signal';
+      recommendation = 'More measured executions are needed before scaling this pattern.';
+    }
+
+    return { type, issueId, successCount: success, neutralCount: neutral, negativeCount: negative, recommendation };
+  });
+
+  return {
+    success: true,
+    shop,
+    summary: { measuredExecutions, successfulExecutions, neutralExecutions, negativeExecutions },
+    suggestions,
+  };
+}
+
+async function analyzeExecutionOutcome(prisma, executionId) {
+  const result = await getExecutionResultsSummary(prisma, executionId);
+
+  if (!result.success) {
+    return {
+      executionId,
+      status:         'pending',
+      insight:        null,
+      recommendation: 'Wait for more data before making changes',
+    };
+  }
+
+  if (result.status === 'waiting_for_more_data') {
+    return {
+      executionId,
+      status:         'pending',
+      insight:        null,
+      recommendation: 'Wait for more data before making changes',
+    };
+  }
+
+  const rev = result.summary.revenue.changePercent ?? 0;
+
+  if (rev > 10) {
+    return {
+      executionId,
+      status:         'success',
+      insight:        'This change improved performance',
+      recommendation: 'Apply similar structure to other products',
+    };
+  }
+
+  if (rev < -5) {
+    return {
+      executionId,
+      status:         'negative',
+      insight:        'This change hurt performance',
+      recommendation: 'Rollback or test alternative messaging',
+    };
+  }
+
+  return {
+    executionId,
+    status:         'neutral',
+    insight:        'No significant impact detected',
+    recommendation: 'Test a stronger variation (headline / offer / benefits)',
+  };
+}
+
 module.exports = {
+  analyzeExecutionOutcome,
+  getStoreCROSuggestions,
   captureProductMetricsSnapshot,
   compareProductMetrics,
   captureExecutionSnapshots,
