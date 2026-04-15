@@ -2,11 +2,10 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { fetchExecutionDetails, apiHeaders } from '@/lib/api';
+import { fetchExecutionDetails, apiHeaders, API_BASE } from '@/lib/api';
 import type { ExecutionDetails, MetricStat } from '@/lib/api';
 
-const SHOP     = process.env.NEXT_PUBLIC_SHOP ?? '';
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:3000';
+const SHOP = process.env.NEXT_PUBLIC_SHOP ?? '';
 
 interface Props {
   executionId: string;

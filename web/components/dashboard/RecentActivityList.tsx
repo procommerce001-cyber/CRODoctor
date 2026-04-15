@@ -2,11 +2,10 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { apiHeaders } from '@/lib/api';
+import { apiHeaders, API_BASE } from '@/lib/api';
 import type { ActivityItem } from '@/lib/api';
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:3000';
-const SHOP     = process.env.NEXT_PUBLIC_SHOP ?? '';
+const SHOP = process.env.NEXT_PUBLIC_SHOP ?? '';
 
 const STATUS_COLOR: Record<string, string> = {
   applied:       '#16a34a',

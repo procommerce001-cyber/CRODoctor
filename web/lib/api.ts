@@ -1,4 +1,11 @@
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:3001';
+const _apiBase = process.env.NEXT_PUBLIC_API_BASE_URL;
+if (!_apiBase) {
+  throw new Error(
+    '[api.ts] NEXT_PUBLIC_API_BASE_URL is not set. ' +
+    'Copy web/.env.example → web/.env.local and fill in the values.'
+  );
+}
+export const API_BASE = _apiBase;
 
 // Builds the Authorization header from the env token.
 // In production this env var is absent, so no header is injected —
