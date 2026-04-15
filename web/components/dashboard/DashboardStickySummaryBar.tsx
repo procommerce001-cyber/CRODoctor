@@ -74,8 +74,8 @@ function Divider() {
 const styles: Record<string, React.CSSProperties> = {
   bar:          { position: 'sticky', top: 0, zIndex: 20, display: 'flex', alignItems: 'center', gap: 0, padding: '10px 24px', background: '#fff', borderBottom: '1px solid #e5e7eb', flexWrap: 'wrap' as const },
   metric:       { display: 'flex', flexDirection: 'column' as const, alignItems: 'center', padding: '6px 20px', gap: 2, borderRadius: 6, cursor: 'pointer', transition: 'background 0.1s' },
-  metricHover:  { background: '#f8fafc' },
-  metricActive: { background: '#f1f5f9' },
+  metricHover:  { background: '#f1f5f9' },
+  metricActive: { background: '#e2e8f0', outline: '1px solid #cbd5e1' },
   metricValue:  { fontSize: 20, fontWeight: 700, lineHeight: 1 },
   metricLabel:  { fontSize: 11, color: '#9ca3af', fontWeight: 500, textTransform: 'uppercase' as const, letterSpacing: '0.04em' },
   sublabel:     { fontSize: 10, color: '#c4c9d1', fontWeight: 400, textTransform: 'none' as const, letterSpacing: 0 },

@@ -2,9 +2,10 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { apiHeaders } from '@/lib/api';
 import type { ActivityItem } from '@/lib/api';
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:3001';
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:3000';
 const SHOP     = process.env.NEXT_PUBLIC_SHOP ?? '';
 
 const STATUS_COLOR: Record<string, string> = {
@@ -32,7 +33,7 @@ export default function RecentActivityList({ items, selectedExecId, onSelect }: 
     try {
       const res = await fetch(`${API_BASE}/action-center/rollback`, {
         method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: apiHeaders({ 'Content-Type': 'application/json' }),
         body:    JSON.stringify({ executionId, shop: SHOP }),
       });
       if (!res.ok) throw new Error(await res.text());

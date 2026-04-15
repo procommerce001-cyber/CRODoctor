@@ -2,11 +2,11 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { fetchExecutionDetails } from '@/lib/api';
+import { fetchExecutionDetails, apiHeaders } from '@/lib/api';
 import type { ExecutionDetails, MetricStat } from '@/lib/api';
 
 const SHOP     = process.env.NEXT_PUBLIC_SHOP ?? '';
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:3001';
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:3000';
 
 interface Props {
   executionId: string;
@@ -30,7 +30,7 @@ export default function ExecutionDetailsPanel({ executionId, onClose }: Props) {
     try {
       const res = await fetch(`${API_BASE}/action-center/rollback`, {
         method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: apiHeaders({ 'Content-Type': 'application/json' }),
         body:    JSON.stringify({ executionId, shop: SHOP }),
       });
       if (!res.ok) throw new Error(await res.text());

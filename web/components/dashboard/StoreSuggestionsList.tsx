@@ -8,6 +8,59 @@ type SuggestionsWithStatusPayload = { suggestions: StoreSuggestion[] };
 
 const SHOP = process.env.NEXT_PUBLIC_SHOP ?? '';
 
+// ---------------------------------------------------------------------------
+// Dev-only seed data — injected when the store has no real suggestions yet.
+// Matches the StoreSuggestionsPayload shape exactly. Never used in production.
+// ---------------------------------------------------------------------------
+const SEED_SUGGESTIONS_DATA: SuggestionsWithStatusPayload = {
+  suggestions: [
+    {
+      type: 'scale_winner',
+      issueId: 'weak_desire_creation',
+      recommendation:
+        'Products with stronger desire-creation copy showed consistent revenue lift across 3 executions. Scale this pattern to the 2 remaining eligible products.',
+      successCount: 3,
+      neutralCount: 0,
+      negativeCount: 0,
+      status: 'PARTIALLY_APPLIED',
+      candidateSummary: { candidateCount: 3, readyToApplyCount: 2, alreadyAppliedCount: 1, blockedCount: 0 },
+    },
+    {
+      type: 'mixed_pattern',
+      issueId: 'low_urgency_cta',
+      recommendation:
+        'Urgency-focused CTAs improved conversion on one product but showed no impact on another. Review individually before scaling further.',
+      successCount: 1,
+      neutralCount: 1,
+      negativeCount: 0,
+      status: 'OPEN',
+      candidateSummary: { candidateCount: 2, readyToApplyCount: 1, alreadyAppliedCount: 0, blockedCount: 1 },
+    },
+    {
+      type: 'pause_pattern',
+      issueId: 'generic_feature_list',
+      recommendation:
+        'Generic feature-list descriptions correlated with a revenue decline on 2 products. Hold further rollout until copy is revised.',
+      successCount: 0,
+      neutralCount: 0,
+      negativeCount: 2,
+      status: 'BLOCKED',
+      candidateSummary: { candidateCount: 2, readyToApplyCount: 0, alreadyAppliedCount: 0, blockedCount: 2 },
+    },
+    {
+      type: 'insufficient_signal',
+      issueId: 'social_proof_emphasis',
+      recommendation:
+        'Social proof variants have not yet accumulated enough measured executions to draw conclusions. Check back after 7 more orders.',
+      successCount: 0,
+      neutralCount: 0,
+      negativeCount: 0,
+      status: 'NO_CANDIDATES',
+      candidateSummary: { candidateCount: 0, readyToApplyCount: 0, alreadyAppliedCount: 0, blockedCount: 0 },
+    },
+  ],
+};
+
 const TYPE_STYLE: Record<StoreSuggestion['type'], { label: string; color: string; bg: string; border: string }> = {
   scale_winner:        { label: 'Scale winner',        color: '#15803d', bg: '#f0fdf4', border: '#bbf7d0' },
   mixed_pattern:       { label: 'Mixed pattern',       color: '#92400e', bg: '#fffbeb', border: '#fde68a' },
@@ -121,9 +174,10 @@ interface Props {
 }
 
 export default function StoreSuggestionsList({ onSelectMatches, onAppliedSelectionKeys, onSuggestionCounts, activeFilter, onFilterChange }: Props) {
-  const [data,    setData]    = useState<SuggestionsWithStatusPayload | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error,   setError]   = useState<string | null>(null);
+  const [data,     setData]     = useState<SuggestionsWithStatusPayload | null>(null);
+  const [loading,  setLoading]  = useState(true);
+  const [error,    setError]    = useState<string | null>(null);
+  const [isSeeded, setIsSeeded] = useState(false);
 
   // per-issueId: candidate data, loading, error
   const [candidates,      setCandidates]      = useState<Record<string, SuggestionCandidatesPayload>>({});
@@ -138,7 +192,15 @@ export default function StoreSuggestionsList({ onSelectMatches, onAppliedSelecti
 
   useEffect(() => {
     fetchStoreSuggestionsWithStatus(SHOP)
-      .then(r => setData(r as SuggestionsWithStatusPayload))
+      .then(r => {
+        const payload = r as SuggestionsWithStatusPayload;
+        if (process.env.NODE_ENV === 'development' && payload.suggestions.length === 0) {
+          setData(SEED_SUGGESTIONS_DATA);
+          setIsSeeded(true);
+        } else {
+          setData(payload);
+        }
+      })
       .catch(err => setError(err instanceof Error ? err.message : 'Failed to load suggestions'))
       .finally(() => setLoading(false));
   }, []);
@@ -198,7 +260,10 @@ export default function StoreSuggestionsList({ onSelectMatches, onAppliedSelecti
 
   return (
     <section>
-      <h2 style={styles.heading}>Recommended Next Moves</h2>
+      <div style={styles.headingRow}>
+        <h2 style={styles.heading}>Recommended Next Moves</h2>
+        {isSeeded && <span style={styles.demoLabel}>Demo data</span>}
+      </div>
 
       {loading && <p style={styles.muted}>Loading suggestions...</p>}
       {error   && <p style={styles.errorText}>{error}</p>}
@@ -440,7 +505,9 @@ const candStyles: Record<string, React.CSSProperties> = {
 };
 
 const styles: Record<string, React.CSSProperties> = {
-  heading:          { fontSize: 16, fontWeight: 600, marginBottom: 12 },
+  headingRow:       { display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 },
+  heading:          { fontSize: 16, fontWeight: 600, margin: 0 },
+  demoLabel:        { fontSize: 11, fontWeight: 500, color: '#9ca3af', background: '#f3f4f6', border: '1px solid #e5e7eb', borderRadius: 4, padding: '2px 7px', letterSpacing: '0.03em' },
   groupsWrapper:    { display: 'flex', flexDirection: 'column' as const, gap: 24 },
   chips:            { display: 'flex', flexWrap: 'wrap' as const, gap: 6 },
   chip:             { fontSize: 12, fontWeight: 500, padding: '4px 10px', borderRadius: 20, border: '1px solid #d1d5db', background: '#f9fafb', color: '#6b7280', cursor: 'pointer' },
