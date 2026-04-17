@@ -89,22 +89,41 @@ export default function ExecutionDetailsPanel({ executionId, onClose }: Props) {
                 <ContentBlock label="Applied" html={data.appliedContent} />
               </section>
 
-              {/* ── Results ──────────────────────────────────── */}
+              {/* ── Impact Snapshot ──────────────────────────── */}
               <section style={styles.section}>
-                <h3 style={styles.sectionTitle}>Results</h3>
-                {data.resultStatus === 'waiting_for_more_data' && (
-                  <p style={styles.muted}>This execution has not accumulated enough snapshot data yet.</p>
-                )}
+                <h3 style={styles.sectionTitle}>7-Day Impact Snapshot</h3>
+
                 {data.resultStatus === 'measured' && data.summary && (
                   <>
                     {data.insight && <p style={styles.insight}>{data.insight}</p>}
+                    <div style={styles.snapshotHeader}>
+                      <span style={styles.snapshotLabel}>Metric</span>
+                      <span style={styles.snapshotLabel}>Before</span>
+                      <span style={styles.snapshotLabel}>After</span>
+                      <span style={styles.snapshotLabel}>Change</span>
+                    </div>
                     <MetricRow label="Orders"     stat={data.summary.orders} />
                     <MetricRow label="Units sold" stat={data.summary.unitsSold} />
                     <MetricRow label="Revenue"    stat={data.summary.revenue} prefix="$" />
                   </>
                 )}
+
+                {data.resultStatus === 'waiting_for_more_data' && (
+                  <div style={styles.measuringBox}>
+                    <span style={styles.measuringDot} />
+                    <div>
+                      <p style={styles.measuringTitle}>Measuring impact</p>
+                      <p style={styles.measuringBody}>
+                        {data.afterReadyAt
+                          ? `7-day window closes on ${new Date(data.afterReadyAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}. Results will appear here automatically.`
+                          : 'Collecting post-apply order data. Check back in a few days.'}
+                      </p>
+                    </div>
+                  </div>
+                )}
+
                 {!data.resultStatus && (
-                  <p style={styles.muted}>No results data available for this execution.</p>
+                  <p style={styles.muted}>No impact data available for this execution.</p>
                 )}
               </section>
 
@@ -210,9 +229,15 @@ const styles: Record<string, React.CSSProperties> = {
   metricArrow:  { color: '#d1d5db' },
   metricAfter:  { color: '#111827', fontWeight: 600 },
   metricPct:    { fontWeight: 600, fontSize: 12 },
-  muted:          { fontSize: 13, color: '#9ca3af' },
-  errorText:      { fontSize: 13, color: '#dc2626' },
-  rollbackBtn:    { fontSize: 13, padding: '7px 14px', border: '1px solid #d1d5db', borderRadius: 6, background: '#fff', color: '#374151', cursor: 'pointer' },
-  rollbackError:  { fontSize: 12, color: '#dc2626', marginTop: 8 },
-  rollbackSuccess:{ fontSize: 13, color: '#16a34a' },
+  muted:           { fontSize: 13, color: '#9ca3af' },
+  errorText:       { fontSize: 13, color: '#dc2626' },
+  rollbackBtn:     { fontSize: 13, padding: '7px 14px', border: '1px solid #d1d5db', borderRadius: 6, background: '#fff', color: '#374151', cursor: 'pointer' },
+  rollbackError:   { fontSize: 12, color: '#dc2626', marginTop: 8 },
+  rollbackSuccess: { fontSize: 13, color: '#16a34a' },
+  snapshotHeader:  { display: 'flex', gap: 8, marginBottom: 6, paddingBottom: 6, borderBottom: '1px solid #f3f4f6' },
+  snapshotLabel:   { fontSize: 11, fontWeight: 600, textTransform: 'uppercase' as const, color: '#9ca3af', flex: 1 },
+  measuringBox:    { display: 'flex', gap: 10, alignItems: 'flex-start', background: '#fefce8', border: '1px solid #fde68a', borderRadius: 8, padding: '12px 14px' },
+  measuringDot:    { width: 8, height: 8, borderRadius: '50%', background: '#f59e0b', flexShrink: 0, marginTop: 4 },
+  measuringTitle:  { fontSize: 13, fontWeight: 600, color: '#92400e', marginBottom: 2 },
+  measuringBody:   { fontSize: 12, color: '#78350f', lineHeight: 1.5 },
 };

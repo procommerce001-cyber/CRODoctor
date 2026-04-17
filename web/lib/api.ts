@@ -263,6 +263,7 @@ export interface ExecutionDetails {
   createdAt:       string;
   previousContent: string | null;
   appliedContent:  string;
+  afterReadyAt:    string | null;
   resultStatus:    'measured' | 'waiting_for_more_data' | null;
   insight:         string | null;
   summary: {

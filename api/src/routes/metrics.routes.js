@@ -308,6 +308,7 @@ router.get('/executions/:id/details', async (req, res) => {
       select: {
         id: true, productId: true, issueId: true, status: true,
         createdAt: true, previousContent: true, newContent: true,
+        afterReadyAt: true,
       },
     });
     if (!execution) return res.status(404).json({ error: 'Execution not found in this store.' });
@@ -323,6 +324,7 @@ router.get('/executions/:id/details', async (req, res) => {
       createdAt:       execution.createdAt,
       previousContent: execution.previousContent,
       appliedContent:  execution.newContent,
+      afterReadyAt:    execution.afterReadyAt ?? null,
       resultStatus:    result.success ? result.status  : null,
       insight:         result.success ? result.insight : null,
       summary:         result.success ? result.summary : null,

@@ -24,7 +24,7 @@ const { getProductReport } = require('../services/action-center.service');
 
 const { PRODUCT_INCLUDE } = require('../lib/product-include');
 const { resolveStore }    = require('../lib/resolve-store');
-const { captureProductMetricsSnapshot, captureExecutionSnapshots } = require('../services/metrics.service');
+const { captureWindowedBeforeSnapshot } = require('../services/metrics.service');
 
 // ---------------------------------------------------------------------------
 // GET /action-center/products/:id?shop=
@@ -638,18 +638,20 @@ router.post('/products/:id/apply', async (req, res) => {
       return res.status(422).json({ applied: false, blockReason: gate.blockReason });
     }
 
-    // 2. Before-snapshot (phase='before') — gate passed, executionId not yet known
-    let beforeCaptured  = false;
+    // 2. Windowed before-snapshot — captures orders from [today-7d, today).
+    //    Runs before apply so it cannot include the current change's orders.
+    let beforeCaptured   = false;
     let beforeSnapshotId = null;
     try {
-      const beforeSnap = await captureProductMetricsSnapshot(prisma, raw.id, 'before');
-      beforeSnapshotId = beforeSnap.id;
-      beforeCaptured   = true;
+      const beforeSnap = await captureWindowedBeforeSnapshot(prisma, raw.id);
+      beforeSnapshotId  = beforeSnap.id;
+      beforeCaptured    = true;
     } catch (snapErr) {
       console.warn('[ActionCenter] before-snapshot failed (non-fatal):', snapErr.message);
     }
 
     // 3. Apply — gate runs again inside applyContentChange (idempotent, safe)
+    //    applyContentChange also sets afterReadyAt = now + 7d on the execution row.
     const applyResult = await applyContentChange(prisma, store, raw, actionItem);
 
     if (!applyResult.applied) {
@@ -657,43 +659,36 @@ router.post('/products/:id/apply', async (req, res) => {
       return res.status(status).json(applyResult);
     }
 
-    // 4. Fetch the executionId written by applyContentChange
+    // 4. Fetch the executionId + afterReadyAt written by applyContentChange
     const execution = await prisma.contentExecution.findFirst({
       where:   { productId: raw.id, issueId, status: 'applied' },
       orderBy: { createdAt: 'desc' },
-      select:  { id: true },
+      select:  { id: true, afterReadyAt: true },
     });
-    const executionId = execution?.id ?? null;
+    const executionId  = execution?.id       ?? null;
+    const afterReadyAt = execution?.afterReadyAt ?? null;
 
-    // 5. Link before-snapshot to execution, then capture after-snapshot (phase='after')
-    let afterCaptured = false;
-    let warning       = undefined;
-    if (executionId) {
-      // Retroactively link the before-snapshot
-      if (beforeSnapshotId) {
-        try {
-          await prisma.productMetricsSnapshot.update({
-            where: { id: beforeSnapshotId },
-            data:  { baselineExecutionId: executionId },
-          });
-        } catch (linkErr) {
-          console.warn('[ActionCenter] before-snapshot link failed (non-fatal):', linkErr.message);
-        }
-      }
+    // 5. Retroactively link the before-snapshot to the execution
+    //    After-snapshot is NOT captured here — it is captured by the scheduler
+    //    when afterReadyAt has elapsed (7 days from now).
+    if (executionId && beforeSnapshotId) {
       try {
-        await captureExecutionSnapshots(prisma, raw.id, executionId);
-        afterCaptured = true;
-      } catch (snapErr) {
-        console.warn('[ActionCenter] after-snapshot failed (non-fatal):', snapErr.message);
-        warning = 'apply succeeded but after-snapshot failed';
+        await prisma.productMetricsSnapshot.update({
+          where: { id: beforeSnapshotId },
+          data:  { baselineExecutionId: executionId },
+        });
+      } catch (linkErr) {
+        console.warn('[ActionCenter] before-snapshot link failed (non-fatal):', linkErr.message);
       }
     }
 
     res.json({
       ...applyResult,
       executionId,
-      metricsSnapshots: { beforeCaptured, afterCaptured },
-      ...(warning ? { warning } : {}),
+      metricsSnapshots: {
+        beforeCaptured,
+        afterReadyAt,
+      },
     });
   } catch (err) {
     console.error('[ActionCenter] POST /products/:id/apply error:', err.message);

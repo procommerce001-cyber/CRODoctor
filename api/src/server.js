@@ -5,10 +5,12 @@ const crypto = require('crypto');
 const { PrismaClient } = require('@prisma/client');
 const { fetchProducts, fetchOrders } = require('./services/shopify.service');
 const { makeRequireAuth }            = require('./lib/auth-middleware');
-const croRouter          = require('./routes/cro.routes');
-const actionCenterRouter = require('./routes/action-center.routes');
-const metricsRouter      = require('./routes/metrics.routes');
-const dashboardRouter    = require('./routes/dashboard.routes');
+const croRouter            = require('./routes/cro.routes');
+const actionCenterRouter   = require('./routes/action-center.routes');
+const metricsRouter        = require('./routes/metrics.routes');
+const dashboardRouter      = require('./routes/dashboard.routes');
+const decisionEngineRouter = require('./routes/decision-engine.routes');
+const { startImpactWindowScheduler } = require('./scheduler/impact-window.scheduler');
 
 const app = express();
 const prisma = new PrismaClient({
@@ -584,6 +586,7 @@ app.use('/cro', croRouter);
 app.use('/action-center', actionCenterRouter);
 app.use('/metrics', metricsRouter);
 app.use('/dashboard', dashboardRouter);
+app.use('/decision-engine', decisionEngineRouter);
 
 // ---------------------------------------------------------------------------
 // Sync endpoints
@@ -788,6 +791,7 @@ app.post('/sync/orders', async (req, res) => {
 // ---------------------------------------------------------------------------
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
+  startImpactWindowScheduler(prisma);
 });
 
 module.exports = { app, prisma };

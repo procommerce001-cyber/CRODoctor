@@ -1006,6 +1006,10 @@ async function applyContentChange(prisma, store, rawProduct, actionItem) {
     ? 'replace_full_body'
     : 'insert_after_anchor';
 
+  // afterReadyAt: the timestamp at which the 7-day after-window closes and
+  // the after-snapshot can be captured. Exactly 7 days from now.
+  const afterReadyAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+
   try {
     await prisma.contentExecution.create({
       data: {
@@ -1020,6 +1024,7 @@ async function applyContentChange(prisma, store, rawProduct, actionItem) {
         newContent:           proposedContent,
         resultContent,
         status:               'applied',
+        afterReadyAt,
       },
     });
   } catch (err) {

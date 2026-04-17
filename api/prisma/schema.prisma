@@ -180,6 +180,8 @@ model ContentExecution {
   status               String   @default("previewed")
   // for rolled_back rows: id of the applied row being reversed
   referenceExecutionId String?
+  // when the 7-day after-window is complete and the after-snapshot can be captured
+  afterReadyAt         DateTime?
   createdAt            DateTime @default(now())
 
   store Store @relation(fields: [storeId], references: [id])
@@ -203,6 +205,9 @@ model ProductMetricsSnapshot {
   latestAppliedExecutionId String?
   baselineExecutionId      String?   // links this snapshot to a specific apply execution
   phase                    String   @default("standalone")  // standalone | before | after
+  // Defines the measurement window. Null on all-time cumulative snapshots.
+  windowStart              DateTime?
+  windowEnd                DateTime?
   createdAt                DateTime @default(now())
 
   product Product @relation(fields: [productId], references: [id])
