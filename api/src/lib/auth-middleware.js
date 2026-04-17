@@ -14,6 +14,8 @@ const PUBLIC_PATHS = new Set([
   '/health',
   '/auth/shopify',
   '/auth/shopify/callback',
+  '/auth/install',
+  '/auth/callback',
 ]);
 
 function makeRequireAuth(apiSecret) {

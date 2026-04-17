@@ -10,6 +10,7 @@ const actionCenterRouter   = require('./routes/action-center.routes');
 const metricsRouter        = require('./routes/metrics.routes');
 const dashboardRouter      = require('./routes/dashboard.routes');
 const decisionEngineRouter = require('./routes/decision-engine.routes');
+const authRouter           = require('./routes/auth.routes');
 const { startImpactWindowScheduler } = require('./scheduler/impact-window.scheduler');
 
 const app = express();
@@ -582,10 +583,11 @@ function formatProduct(p) {
 // CRO routes (mounted from src/routes/cro.routes.js)
 // ---------------------------------------------------------------------------
 
-app.use('/cro', croRouter);
-app.use('/action-center', actionCenterRouter);
-app.use('/metrics', metricsRouter);
-app.use('/dashboard', dashboardRouter);
+app.use('/auth',            authRouter);
+app.use('/cro',             croRouter);
+app.use('/action-center',   actionCenterRouter);
+app.use('/metrics',         metricsRouter);
+app.use('/dashboard',       dashboardRouter);
 app.use('/decision-engine', decisionEngineRouter);
 
 // ---------------------------------------------------------------------------

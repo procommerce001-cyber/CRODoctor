@@ -7,20 +7,39 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-model Store {
-  id          String    @id @default(cuid())
-  name        String
-  shopDomain  String?   @unique
-  accessToken String?
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+enum SetupStatus {
+  PENDING
+  SYNCING
+  COMPLETED
+}
 
+model Store {
+  id          String      @id @default(cuid())
+  name        String
+  shopDomain  String?     @unique
+  shopUrl     String?
+  accessToken String?
+  setupStatus SetupStatus @default(PENDING)
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  users             User[]
   products          Product[]
   orders            Order[]
   themeSnapshots    ThemeSnapshot[]
   croExecutions     CroExecution[]
   actionItems       ActionItem[]
   contentExecutions ContentExecution[]
+}
+
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  storeId   String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  store Store @relation(fields: [storeId], references: [id])
 }
 
 model Product {

@@ -10,6 +10,8 @@ import { resolve } from 'path';
 const REQUIRED_VARS = [
   'NEXT_PUBLIC_API_BASE_URL',
   'NEXT_PUBLIC_SHOP',
+  'NEXT_PUBLIC_SUPABASE_URL',
+  'NEXT_PUBLIC_SUPABASE_ANON_KEY',
 ];
 
 // ── Load .env.local ───────────────────────────────────────────────

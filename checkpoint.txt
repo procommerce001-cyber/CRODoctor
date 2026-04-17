@@ -1,0 +1,38 @@
+CRO Doctor — Checkpoint (2026-04-17)
+=====================================
+
+WORKING STATE
+The full onboarding and dashboard pipeline is operational: Shopify OAuth flow
+(GET /auth/install → GET /auth/callback) upserts the Store with setupStatus=SYNCING,
+finds-or-creates a User by email, triggers a background product sync +
+captureWindowedBeforeSnapshot for every product, then sets setupStatus=COMPLETED.
+The frontend OnboardingLoading component (/app/onboarding) subscribes to the
+Store table via Supabase Realtime and redirects to /dashboard on COMPLETED.
+The dashboard "Recommended Next Moves" section was broken by a CORS mismatch
+(ALLOWED_ORIGIN defaulted to Vite port 5173; Next.js runs on 3001) — fixed by
+setting ALLOWED_ORIGIN=http://localhost:3001 in api/.env (not committed; set
+manually after each clone).
+
+WHAT WAS BUILT THIS SESSION
+- Prisma: SetupStatus enum (PENDING|SYNCING|COMPLETED), Store.shopUrl,
+  Store.setupStatus, User model (email unique, FK → Store)
+- Migration: 20260417000001_add_oauth_and_status (applied to Supabase)
+- api/src/lib/shopify-oauth.js  — shared OAuth helpers (nonce map, HMAC, domain validator)
+- api/src/routes/auth.routes.js — GET /auth/install + GET /auth/callback (full flow)
+- api/src/lib/auth-middleware.js — /auth/install + /auth/callback added to PUBLIC_PATHS
+- web/lib/supabase.ts            — shared Supabase client with Realtime enabled
+- web/components/auth/OnboardingLoading.tsx — real-time onboarding loading screen
+- web/app/onboarding/page.tsx   — route at /onboarding?storeId=<id>
+- @supabase/supabase-js installed in web/
+
+MANUAL STEPS REQUIRED ON A FRESH CLONE
+1. api/.env: add ALLOWED_ORIGIN=http://localhost:3001
+2. web/.env.local: fill in NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY
+3. Supabase SQL Editor: ALTER PUBLICATION supabase_realtime ADD TABLE "Store";
+4. cd api && npx prisma migrate deploy && npx prisma generate
+
+PREVIOUS SESSION (already on main)
+- 7-day windowed before/after impact snapshots
+- Hourly scheduler (impact-window.scheduler.js) for after-snapshot capture
+- ExecutionDetailsPanel with "Measuring impact" amber banner + before/after table
+- cancelledAt filter removed from all windowed metric queries (gross revenue)
