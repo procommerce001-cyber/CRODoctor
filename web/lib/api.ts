@@ -293,3 +293,74 @@ export async function fetchDashboard(shop: string): Promise<DashboardPayload> {
   if (!res.ok) throw new Error(`Dashboard fetch failed: ${res.status}`);
   return res.json();
 }
+
+// ---------------------------------------------------------------------------
+// Decision Engine — top actions
+// ---------------------------------------------------------------------------
+
+export interface TopAction {
+  rank:                 number;
+  actionKey:            string;
+  productId:            string;
+  productTitle:         string;
+  issueId:              string;
+  severity:             string;
+  opportunityScore:     number;
+  estimatedImpactLabel: string | null;
+  whyNow:               string;
+  recommendedAction:    string;
+  executionStatus:      'pending' | 'completed';
+  executedAt:           string | null;
+}
+
+export async function fetchTopActions(shop: string): Promise<TopAction[]> {
+  const res = await fetch(
+    `${API_BASE}/decision-engine/top-actions?shop=${encodeURIComponent(shop)}`,
+    { cache: 'no-store', headers: apiHeaders() }
+  );
+  if (!res.ok) return [];
+  const data = await res.json();
+  if (!data.success) return [];
+  return (data.topActions as TopAction[]).map(a => ({
+    ...a,
+    actionKey: `${a.productId}::${a.issueId}`,
+  }));
+}
+
+export async function executeAction(shop: string, actionKey: string): Promise<string> {
+  const res = await fetch(
+    `${API_BASE}/decision-engine/actions/execute?shop=${encodeURIComponent(shop)}`,
+    {
+      method:  'POST',
+      headers: apiHeaders({ 'Content-Type': 'application/json' }),
+      body:    JSON.stringify({ actionKey }),
+    }
+  );
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error ?? `Execute failed: ${res.status}`);
+  }
+  const data = await res.json();
+  return data.executionId as string;
+}
+
+export interface ExecutionResult {
+  status:  'measured' | 'waiting_for_more_data';
+  insight: string | null;
+  summary: {
+    revenue:   { before: number; after: number; diff: number; changePercent: number | null };
+    orders:    { before: number; after: number; diff: number; changePercent: number | null };
+    unitsSold: { before: number; after: number; diff: number; changePercent: number | null };
+  } | null;
+}
+
+export async function fetchExecutionResults(shop: string, executionId: string): Promise<ExecutionResult | null> {
+  const res = await fetch(
+    `${API_BASE}/metrics/executions/${encodeURIComponent(executionId)}/results?shop=${encodeURIComponent(shop)}`,
+    { cache: 'no-store', headers: apiHeaders() }
+  );
+  if (!res.ok) return null;
+  const data = await res.json();
+  if (!data.success) return null;
+  return { status: data.status, insight: data.insight, summary: data.summary ?? null };
+}

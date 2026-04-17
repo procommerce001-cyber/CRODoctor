@@ -707,6 +707,36 @@ const DECISION_EFFORT_SCORE   = { low: 20, medium: 10, high: 0 };
 //   all_variants_oos  — requires an inventory/restocking decision, not a conversion fix
 const OPERATIONAL_ISSUE_IDS = new Set(['product_is_draft', 'all_variants_oos']);
 
+// Content-related issue IDs that can produce fast, measurable impact within 24–48h.
+// These are pure copy/content changes that Shopify applies instantly and shoppers see immediately.
+const QUICK_WIN_CONTENT_ISSUE_IDS = new Set([
+  'no_description',
+  'description_too_short',
+  'description_center_aligned',
+  'no_risk_reversal',
+  'no_social_proof',
+  'missing_alt_text',
+]);
+
+// Score multiplier applied on top of the base opportunityScore for quick wins.
+// Small enough not to invert the revenue/severity hierarchy, large enough to
+// surface at least one quick win in the top 2 slots.
+const QUICK_WIN_SCORE_BOOST = 0.12;
+
+// An action is a Quick Win when ALL of:
+//   1. The issue is a pure content change (copy, formatting, proof — no inventory/dev work)
+//   2. canAutoApply = true  → one-click execution, zero friction for the merchant
+//   3. The issue is not blocked (reviewStatus !== 'rejected')
+//   4. The product has measurable activity (revenue > 0) so the fix can show up in metrics fast
+function isQuickWin(action, revenue) {
+  return (
+    QUICK_WIN_CONTENT_ISSUE_IDS.has(action.issueId) &&
+    action.canAutoApply === true &&
+    action.reviewStatus !== 'rejected' &&
+    revenue > 0
+  );
+}
+
 function decisionRevenueScore(revenue) {
   if (revenue > 5000) return 40;
   if (revenue > 500)  return 25;
@@ -752,9 +782,9 @@ function buildRecommendedAction(action) {
 //   signal_only:      label reflects conversion priority, makes no monetary claim
 function buildEstimatedImpactLabel(revenue, severity, rankingMode) {
   if (rankingMode === 'revenue_informed') {
-    if (revenue > 5000 || severity === 'critical') return 'High revenue upside';
-    if (revenue > 500  || severity === 'high')     return 'Medium revenue upside';
-    return 'Low revenue upside';
+    if (revenue > 5000 || severity === 'critical') return 'High revenue opportunity';
+    if (revenue > 500  || severity === 'high')     return 'Medium revenue opportunity';
+    return 'Low revenue opportunity';
   }
   // signal_only — no fake monetary confidence
   if (severity === 'critical' || severity === 'high') return 'High-priority opportunity';
@@ -823,6 +853,13 @@ async function getTopDecisionActions(prisma, shop) {
   });
   const appliedSet = new Set(appliedRows.map(r => `${r.productId}:${r.issueId}`));
 
+  // Completed executions — for executionStatus field in response
+  const completedRows = await prisma.contentExecution.findMany({
+    where:  { productId: { in: productIds }, status: 'completed' },
+    select: { productId: true, issueId: true, createdAt: true },
+  });
+  const completedMap = new Map(completedRows.map(r => [`${r.productId}:${r.issueId}`, r.createdAt]));
+
   const candidates = [];
 
   for (const raw of rawProducts) {
@@ -840,11 +877,14 @@ async function getTopDecisionActions(prisma, shop) {
       // Require a meaningful action path (must have a title and some fix guidance)
       if (!action.title) continue;
 
-      const sScore = DECISION_SEVERITY_SCORE[action.severity] ?? 0;
-      const rScore = decisionRevenueScore(revenue);
-      const eScore = DECISION_EFFORT_SCORE[action.effort]    ?? 0;
-      const rBonus = decisionReadinessBonus(action.canAutoApply, action.reviewStatus);
-      const total  = sScore + rScore + eScore + rBonus;
+      const sScore    = DECISION_SEVERITY_SCORE[action.severity] ?? 0;
+      const rScore    = decisionRevenueScore(revenue);
+      const eScore    = DECISION_EFFORT_SCORE[action.effort]    ?? 0;
+      const rBonus    = decisionReadinessBonus(action.canAutoApply, action.reviewStatus);
+      const baseTotal = sScore + rScore + eScore + rBonus;
+
+      const quickWin  = isQuickWin(action, revenue);
+      const total     = quickWin ? Math.round(baseTotal * (1 + QUICK_WIN_SCORE_BOOST)) : baseTotal;
 
       const readyToApply = action.canAutoApply === true && action.reviewStatus === 'approved';
 
@@ -858,6 +898,10 @@ async function getTopDecisionActions(prisma, shop) {
         issueId:               action.issueId,
         severity:              action.severity,
         revenue:               parseFloat(revenue.toFixed(2)),
+
+        quickWin,
+        expectedTimeToImpact:  quickWin ? '24–48h' : '3–7 days',
+        earlySignalEligible:   quickWin && revenue > 0,
 
         readyToApply,
         whyNow:                buildWhyNow(action, revenue),
@@ -903,10 +947,16 @@ async function getTopDecisionActions(prisma, shop) {
     return Math.abs(b._scoreImpact ?? 0) - Math.abs(a._scoreImpact ?? 0);
   });
 
-  const topActions = candidates.slice(0, 3).map(({ _scoreImpact, ...item }, idx) => ({
-    ...item,
-    rank: idx + 1,
-  }));
+  const topActions = candidates.slice(0, 3).map(({ _scoreImpact, ...item }, idx) => {
+    const key        = `${item.productId}:${item.issueId}`;
+    const executedAt = completedMap.get(key) ?? null;
+    return {
+      ...item,
+      rank:            idx + 1,
+      executionStatus: executedAt ? 'completed' : 'pending',
+      executedAt,
+    };
+  });
 
   return {
     success:       true,
