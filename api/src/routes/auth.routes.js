@@ -6,6 +6,7 @@ const router  = express.Router();
 
 const { fetchProducts }                  = require('../services/shopify.service');
 const { captureWindowedBeforeSnapshot }  = require('../services/metrics.service');
+const { registerWebhooks }               = require('../services/webhook-registration.service');
 const {
   pendingOAuthStates,
   OAUTH_STATE_TTL_MS,
@@ -27,6 +28,11 @@ const REDIRECT_URI  = `${APP_BASE_URL}/auth/callback`;
 async function runInitialSync(prisma, store) {
   const tag = `[Auth:InitialSync] store=${store.shopDomain}`;
   let synced = 0;
+
+  // Register webhooks first — non-fatal if it fails
+  await registerWebhooks(store, APP_BASE_URL).catch(err =>
+    console.error(`${tag} webhook registration failed (non-fatal):`, err.message)
+  );
 
   try {
     console.log(`${tag} starting product sync`);

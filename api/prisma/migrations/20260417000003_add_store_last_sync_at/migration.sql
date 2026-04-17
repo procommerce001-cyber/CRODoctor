@@ -1,0 +1,1 @@
+ALTER TABLE "Store" ADD COLUMN "lastSyncAt" TIMESTAMP(3);

@@ -3,7 +3,7 @@
 const express = require('express');
 const router  = express.Router();
 
-const { analyzeExecutionOutcome, getStoreCROSuggestions, captureProductMetricsSnapshot, compareProductMetrics, captureExecutionSnapshots, compareExecutionMetrics, getExecutionResultsSummary, getStoreResultsSummary, getStoreExecutionFeed, getStoreOverview } = require('../services/metrics.service');
+const { analyzeExecutionOutcome, getStoreCROSuggestions, captureProductMetricsSnapshot, compareProductMetrics, captureExecutionSnapshots, compareExecutionMetrics, getExecutionResultsSummary, getStoreResultsSummary, getStoreExecutionFeed, getStoreOverview, getRevenueDashboard } = require('../services/metrics.service');
 const { resolveStore }      = require('../lib/resolve-store');
 const { getProductActions } = require('../services/action-center.service');
 const { PRODUCT_INCLUDE }   = require('../lib/product-include');
@@ -519,6 +519,29 @@ router.get('/store/overview', async (req, res) => {
   } catch (err) {
     console.error('[Metrics] GET /store/overview error:', err.message);
     res.status(500).json({ error: 'Internal error fetching store overview.' });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// GET /metrics/revenue-dashboard?shop=<shopDomain>
+//
+// Aggregated revenue impact summary for the revenue dashboard UI.
+// Returns empty:true with zero values when no measured data exists yet —
+// the frontend should show an empty-state CTA rather than hiding the section.
+// ---------------------------------------------------------------------------
+router.get('/revenue-dashboard', async (req, res) => {
+  const prisma = req.app.get('prisma');
+  try {
+    if (!req.query.shop) return res.status(400).json({ error: 'shop is required' });
+
+    const result = await getRevenueDashboard(prisma, req.query.shop);
+
+    if (!result.success) return res.status(404).json(result);
+
+    res.json(result);
+  } catch (err) {
+    console.error('[Metrics] GET /revenue-dashboard error:', err.message);
+    res.status(500).json({ error: 'Internal error fetching revenue dashboard.' });
   }
 });
 

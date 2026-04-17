@@ -20,6 +20,8 @@ model Store {
   shopUrl     String?
   accessToken String?
   setupStatus SetupStatus @default(PENDING)
+  isActive    Boolean     @default(true)
+  lastSyncAt  DateTime?
   createdAt   DateTime    @default(now())
   updatedAt   DateTime    @updatedAt
 
@@ -232,6 +234,20 @@ model ProductMetricsSnapshot {
   product Product @relation(fields: [productId], references: [id])
 
   @@unique([productId, snapshotDate, phase])
+}
+
+// ---------------------------------------------------------------------------
+// WebhookEvent — idempotency log for incoming Shopify webhook deliveries.
+// webhookId maps to the X-Shopify-Webhook-Id header (UUID per delivery).
+// The UNIQUE constraint on webhookId makes duplicate-delivery detection a
+// single INSERT: a P2002 on conflict means the event was already processed.
+// ---------------------------------------------------------------------------
+model WebhookEvent {
+  id          String   @id @default(cuid())
+  webhookId   String   @unique
+  topic       String
+  shopDomain  String
+  processedAt DateTime @default(now())
 }
 
 model OrderLineItem {

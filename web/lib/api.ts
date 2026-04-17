@@ -306,11 +306,15 @@ export interface TopAction {
   issueId:              string;
   severity:             string;
   opportunityScore:     number;
-  estimatedImpactLabel: string | null;
-  whyNow:               string;
-  recommendedAction:    string;
-  executionStatus:      'pending' | 'completed';
-  executedAt:           string | null;
+  revenue:               number;
+  estimatedImpactLabel:  string | null;
+  quickWin:              boolean;
+  expectedTimeToImpact:  string;
+  earlySignalEligible:   boolean;
+  whyNow:                string;
+  recommendedAction:     string;
+  executionStatus:       'pending' | 'completed';
+  executedAt:            string | null;
 }
 
 export async function fetchTopActions(shop: string): Promise<TopAction[]> {
@@ -325,6 +329,22 @@ export async function fetchTopActions(shop: string): Promise<TopAction[]> {
     ...a,
     actionKey: `${a.productId}::${a.issueId}`,
   }));
+}
+
+export interface EarlySignal {
+  signal:            'positive' | 'collecting';
+  orderCountChange:  number | null;
+  revenueChange:     number | null;
+  unitsSoldChange:   number | null;
+}
+
+export async function fetchEarlySignal(shop: string, productId: string): Promise<EarlySignal> {
+  const res = await fetch(
+    `${API_BASE}/decision-engine/early-signal?shop=${encodeURIComponent(shop)}&productId=${encodeURIComponent(productId)}`,
+    { cache: 'no-store', headers: apiHeaders() }
+  );
+  if (!res.ok) return { signal: 'collecting', orderCountChange: null, revenueChange: null, unitsSoldChange: null };
+  return res.json();
 }
 
 export async function executeAction(shop: string, actionKey: string): Promise<string> {
@@ -363,4 +383,37 @@ export async function fetchExecutionResults(shop: string, executionId: string): 
   const data = await res.json();
   if (!data.success) return null;
   return { status: data.status, insight: data.insight, summary: data.summary ?? null };
+}
+
+// ---------------------------------------------------------------------------
+// Revenue Dashboard
+// ---------------------------------------------------------------------------
+
+export interface RecentImpact {
+  productTitle: string;
+  revenueDelta: number;
+  ordersDelta:  number;
+  executedAt:   string;
+}
+
+export interface RevenueDashboardData {
+  empty:                boolean;
+  totalRevenueImpact:   number;
+  revenueGrowthPercent: number | null;
+  ordersGrowthPercent:  number | null;
+  aovChangePercent:     number | null;
+  productsImproved:     number;
+  executionsCount:      number;
+  recentImpacts:        RecentImpact[];
+}
+
+export async function fetchRevenueDashboard(shop: string): Promise<RevenueDashboardData | null> {
+  const res = await fetch(
+    `${API_BASE}/metrics/revenue-dashboard?shop=${encodeURIComponent(shop)}`,
+    { cache: 'no-store', headers: apiHeaders() }
+  );
+  if (!res.ok) return null;
+  const data = await res.json();
+  if (!data.success) return null;
+  return data as RevenueDashboardData;
 }

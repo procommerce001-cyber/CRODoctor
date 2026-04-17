@@ -968,6 +968,109 @@ async function getTopDecisionActions(prisma, shop) {
   };
 }
 
+// ---------------------------------------------------------------------------
+// getRevenueDashboard
+//
+// Aggregates measured ContentExecution results into a single store-level
+// revenue impact summary. Delegates all metric comparison to
+// getExecutionResultsSummary — no new data sources or tables.
+//
+// Aggregation rules:
+//   totalRevenueImpact   — sum of positive revenueDiff across measured executions
+//   revenueGrowthPercent — arithmetic mean of revenueChangePercent (all measured)
+//   ordersGrowthPercent  — arithmetic mean of orderCountChangePercent
+//   aovChangePercent     — mean of per-execution (after AOV − before AOV) / before AOV
+//   productsImproved     — distinct productIds where revenueDiff > 0
+//   executionsCount      — total executions with measured (not waiting) status
+//   recentImpacts        — last 5 measured executions with non-zero delta, enriched with product title
+// ---------------------------------------------------------------------------
+async function getRevenueDashboard(prisma, shop) {
+  const store = await prisma.store.findUnique({
+    where:  { shopDomain: shop },
+    select: { id: true },
+  });
+  if (!store) return { success: false, reason: 'store not found' };
+
+  const executions = await prisma.contentExecution.findMany({
+    where:   { storeId: store.id, status: 'applied' },
+    select:  { id: true, productId: true, createdAt: true },
+    orderBy: { createdAt: 'desc' },
+  });
+
+  const empty = {
+    success: true, shop, empty: true,
+    totalRevenueImpact: 0, revenueGrowthPercent: null,
+    ordersGrowthPercent: null, aovChangePercent: null,
+    productsImproved: 0, executionsCount: 0, recentImpacts: [],
+  };
+  if (executions.length === 0) return empty;
+
+  // Batch-load product titles for the recent impacts list
+  const productIds = [...new Set(executions.map(e => e.productId))];
+  const products   = await prisma.product.findMany({
+    where:  { id: { in: productIds } },
+    select: { id: true, title: true },
+  });
+  const titleMap = new Map(products.map(p => [p.id, p.title]));
+
+  let totalRevenueImpact = 0;
+  const revenueChangePcts = [];
+  const ordersChangePcts  = [];
+  const aovChangePcts     = [];
+  const improvedProducts  = new Set();
+  let measuredCount       = 0;
+  const recentImpactsRaw  = [];
+
+  for (const exec of executions) {
+    const result = await getExecutionResultsSummary(prisma, exec.id);
+    if (!result.success || result.status !== 'measured' || !result.summary) continue;
+
+    measuredCount++;
+    const { revenue, orders } = result.summary;
+
+    if (revenue.diff > 0) {
+      totalRevenueImpact += revenue.diff;
+      improvedProducts.add(exec.productId);
+    }
+
+    if (revenue.changePercent !== null) revenueChangePcts.push(revenue.changePercent);
+    if (orders.changePercent  !== null) ordersChangePcts.push(orders.changePercent);
+
+    if (orders.before > 0 && orders.after > 0 && revenue.before > 0) {
+      const aovBefore = revenue.before / orders.before;
+      const aovAfter  = revenue.after  / orders.after;
+      aovChangePcts.push(((aovAfter - aovBefore) / aovBefore) * 100);
+    }
+
+    if (revenue.diff !== 0 || orders.diff !== 0) {
+      recentImpactsRaw.push({
+        productTitle: titleMap.get(exec.productId) ?? 'Unknown product',
+        revenueDelta: parseFloat(revenue.diff.toFixed(2)),
+        ordersDelta:  orders.diff,
+        executedAt:   exec.createdAt,
+      });
+    }
+  }
+
+  if (measuredCount === 0) return empty;
+
+  const avg    = arr => arr.length > 0 ? arr.reduce((s, v) => s + v, 0) / arr.length : null;
+  const r2     = n   => n !== null ? parseFloat(n.toFixed(2)) : null;
+
+  return {
+    success:              true,
+    shop,
+    empty:                false,
+    totalRevenueImpact:   parseFloat(totalRevenueImpact.toFixed(2)),
+    revenueGrowthPercent: r2(avg(revenueChangePcts)),
+    ordersGrowthPercent:  r2(avg(ordersChangePcts)),
+    aovChangePercent:     r2(avg(aovChangePcts)),
+    productsImproved:     improvedProducts.size,
+    executionsCount:      measuredCount,
+    recentImpacts:        recentImpactsRaw.slice(0, 5),
+  };
+}
+
 module.exports = {
   analyzeExecutionOutcome,
   getStoreCROSuggestions,
@@ -982,4 +1085,5 @@ module.exports = {
   getStoreExecutionFeed,
   getStoreOverview,
   getTopDecisionActions,
+  getRevenueDashboard,
 };

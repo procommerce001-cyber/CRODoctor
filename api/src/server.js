@@ -5,6 +5,9 @@ const crypto = require('crypto');
 const { PrismaClient } = require('@prisma/client');
 const { fetchProducts, fetchOrders } = require('./services/shopify.service');
 const { makeRequireAuth }            = require('./lib/auth-middleware');
+const { startImpactWindowScheduler } = require('./scheduler/impact-window.scheduler');
+const { startDeltaSyncScheduler }    = require('./scheduler/delta-sync.scheduler');
+const webhooksRouter       = require('./routes/webhooks.routes');
 const croRouter            = require('./routes/cro.routes');
 const actionCenterRouter   = require('./routes/action-center.routes');
 const metricsRouter        = require('./routes/metrics.routes');
@@ -161,6 +164,10 @@ const requireAuth = makeRequireAuth(process.env.API_SECRET);
 // ---------------------------------------------------------------------------
 // Middleware — order matters: CORS → JSON → Auth
 // ---------------------------------------------------------------------------
+// Webhook router must be mounted before express.json() so the raw Buffer body
+// is intact for Shopify HMAC verification. It handles its own body parsing.
+app.use('/webhooks', webhooksRouter);
+
 app.use(express.json());
 app.use(requireAuth);
 
@@ -790,6 +797,8 @@ app.post('/sync/orders', async (req, res) => {
 // ---------------------------------------------------------------------------
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
+  startImpactWindowScheduler(prisma);
+  startDeltaSyncScheduler(prisma);
 });
 
 module.exports = { app, prisma };

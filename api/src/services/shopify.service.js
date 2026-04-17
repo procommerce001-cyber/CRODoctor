@@ -30,13 +30,15 @@ async function shopifyFetchAll(store, firstUrl) {
   return results;
 }
 
-async function fetchProducts(store) {
-  const url = `https://${store.shopDomain}/admin/api/${SHOPIFY_API_VERSION}/products.json?limit=250`;
+async function fetchProducts(store, updatedAtMin = null) {
+  let url = `https://${store.shopDomain}/admin/api/${SHOPIFY_API_VERSION}/products.json?limit=250`;
+  if (updatedAtMin) url += `&updated_at_min=${encodeURIComponent(updatedAtMin.toISOString())}`;
   return shopifyFetchAll(store, url);
 }
 
-async function fetchOrders(store) {
-  const url = `https://${store.shopDomain}/admin/api/${SHOPIFY_API_VERSION}/orders.json?limit=250&status=any`;
+async function fetchOrders(store, updatedAtMin = null) {
+  let url = `https://${store.shopDomain}/admin/api/${SHOPIFY_API_VERSION}/orders.json?limit=250&status=any`;
+  if (updatedAtMin) url += `&updated_at_min=${encodeURIComponent(updatedAtMin.toISOString())}`;
   return shopifyFetchAll(store, url);
 }
 

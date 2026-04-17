@@ -3,7 +3,7 @@
 const express = require('express');
 const router  = express.Router();
 
-const { getTopDecisionActions }              = require('../services/metrics.service');
+const { getTopDecisionActions, compareProductMetrics } = require('../services/metrics.service');
 const { resolveStore }                       = require('../lib/resolve-store');
 const { getProductActions, applyContentChange } = require('../services/action-center.service');
 const { PRODUCT_INCLUDE }                    = require('../lib/product-include');
@@ -164,6 +164,48 @@ router.post('/actions/execute', async (req, res) => {
   } catch (err) {
     console.error('[DecisionEngine] POST /actions/execute error:', err.message);
     res.status(500).json({ error: 'Internal error executing action.' });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// GET /decision-engine/early-signal?shop=<shopDomain>&productId=<productId>
+//
+// Compares the latest two ProductMetricsSnapshots for a product and returns
+// a simple signal: "positive" if any metric improved, "collecting" otherwise.
+// Designed for quick-win actions within 24h of execution — fires as soon as
+// 2 daily snapshots exist, without waiting for the full 7-day ROI window.
+// ---------------------------------------------------------------------------
+router.get('/early-signal', async (req, res) => {
+  const prisma = req.app.get('prisma');
+  try {
+    const { shop, productId } = req.query;
+    if (!shop)      return res.status(400).json({ error: 'shop is required' });
+    if (!productId) return res.status(400).json({ error: 'productId is required' });
+
+    const store = await resolveStore(prisma, shop, res);
+    if (!store) return;
+
+    const compare = await compareProductMetrics(prisma, productId);
+
+    if (!compare.success) {
+      return res.json({ signal: 'collecting', reason: compare.reason });
+    }
+
+    const { diff } = compare;
+    const positive =
+      (diff.orderCountChangePercent ?? 0) > 0 ||
+      (diff.revenueChangePercent    ?? 0) > 0 ||
+      (diff.unitsSoldChangePercent  ?? 0) > 0;
+
+    res.json({
+      signal:               positive ? 'positive' : 'collecting',
+      orderCountChange:     diff.orderCountChangePercent,
+      revenueChange:        diff.revenueChangePercent,
+      unitsSoldChange:      diff.unitsSoldChangePercent,
+    });
+  } catch (err) {
+    console.error('[DecisionEngine] GET /early-signal error:', err.message);
+    res.status(500).json({ error: 'Internal error fetching early signal.' });
   }
 });
 
