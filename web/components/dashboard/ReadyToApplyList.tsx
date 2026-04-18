@@ -1,13 +1,20 @@
 import { useState } from 'react';
 import type { ReviewItem, ContentPreview } from '@/lib/api';
-import { fetchContentPreview, applySelected } from '@/lib/api';
+import { fetchContentPreview, applySelected, issueLabel, API_BASE, apiHeaders } from '@/lib/api';
+
+const SHOP = process.env.NEXT_PUBLIC_SHOP ?? '';
+
+function stripHtml(html: string | null): string {
+  if (!html) return '';
+  return html.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+}
 
 const SEVERITY_COLOR: Record<string, string> = {
   critical: '#dc2626', high: '#ea580c', medium: '#d97706', low: '#65a30d',
 };
 
 interface PreviewState { loading: boolean; data: ContentPreview | null; error: string | null }
-interface ApplyState   { applying: boolean; applied: boolean; error: string | null }
+interface ApplyState   { applying: boolean; applied: boolean; rollingBack: boolean; error: string | null }
 
 interface Props {
   shop: string;
@@ -30,18 +37,39 @@ export default function ReadyToApplyList({
   async function handleSingleApply(item: ReviewItem, e: React.MouseEvent) {
     e.stopPropagation();
     const key = item.selectionKey;
-    setApplyStates(s => ({ ...s, [key]: { applying: true, applied: false, error: null } }));
+    setApplyStates(s => ({ ...s, [key]: { applying: true, applied: false, rollingBack: false, error: null } }));
     try {
       const result = await applySelected(shop, [key]);
       const row    = result.results[0];
       if (row?.status === 'applied') {
-        setApplyStates(s => ({ ...s, [key]: { applying: false, applied: true, error: null } }));
+        setApplyStates(s => ({ ...s, [key]: { applying: false, applied: true, rollingBack: false, error: null } }));
         setPreviews(p => { const n = { ...p }; delete n[key]; return n; });
       } else {
-        setApplyStates(s => ({ ...s, [key]: { applying: false, applied: false, error: row?.reason ?? 'Apply did not succeed.' } }));
+        setApplyStates(s => ({ ...s, [key]: { applying: false, applied: false, rollingBack: false, error: row?.reason ?? 'Apply did not succeed.' } }));
       }
     } catch (err) {
-      setApplyStates(s => ({ ...s, [key]: { applying: false, applied: false, error: (err as Error).message } }));
+      setApplyStates(s => ({ ...s, [key]: { applying: false, applied: false, rollingBack: false, error: (err as Error).message } }));
+    }
+  }
+
+  async function handleSingleRollback(item: ReviewItem, e: React.MouseEvent) {
+    e.stopPropagation();
+    const key = item.selectionKey;
+    setApplyStates(s => ({ ...s, [key]: { ...s[key], rollingBack: true, error: null } }));
+    try {
+      const res = await fetch(
+        `${API_BASE}/action-center/products/${encodeURIComponent(item.productId)}/rollback`,
+        {
+          method:      'POST',
+          credentials: 'include',
+          headers:     apiHeaders({ 'Content-Type': 'application/json' }),
+          body:        JSON.stringify({ shop: SHOP, issueId: item.issueId }),
+        },
+      );
+      if (!res.ok) throw new Error(await res.text());
+      setApplyStates(s => { const n = { ...s }; delete n[key]; return n; });
+    } catch (err) {
+      setApplyStates(s => ({ ...s, [key]: { ...s[key], rollingBack: false, error: (err as Error).message } }));
     }
   }
 
@@ -122,7 +150,7 @@ export default function ReadyToApplyList({
                     onClick={e => e.stopPropagation()}
                     style={{ cursor: isDisabled ? 'not-allowed' : 'pointer' }}
                   />
-                  <span style={styles.title}>{item.title ?? item.issueId}</span>
+                  <span style={styles.title}>{item.title ?? issueLabel(item.issueId)}</span>
                   <span style={{ ...styles.pill, color: SEVERITY_COLOR[item.severity] ?? '#374151' }}>
                     {item.severity}
                   </span>
@@ -143,8 +171,16 @@ export default function ReadyToApplyList({
                   </div>
                 )}
                 {as?.applied && (
-                  <div style={{ ...styles.previewPanel, background: '#f0fdf4' }}>
-                    <span style={{ color: '#16a34a', fontWeight: 600 }}>✓ Fix applied successfully.</span>
+                  <div style={{ ...styles.previewPanel, background: '#f0fdf4', display: 'flex', alignItems: 'center', gap: 12 }}>
+                    <span style={{ color: '#16a34a', fontWeight: 600, flex: 1 }}>✓ Fix applied successfully.</span>
+                    <button
+                      style={{ ...styles.btnCancel, fontSize: 11, padding: '3px 10px', opacity: as.rollingBack ? 0.5 : 1 }}
+                      onClick={e => handleSingleRollback(item, e)}
+                      disabled={as.rollingBack}
+                    >
+                      {as.rollingBack ? 'Undoing…' : 'Undo'}
+                    </button>
+                    {as.error && <span style={{ color: '#dc2626', fontSize: 11 }}>{as.error}</span>}
                   </div>
                 )}
                 {ps?.data && !as?.applied && (
@@ -156,9 +192,17 @@ export default function ReadyToApplyList({
                     </div>
                     {ps.data.eligibleToApply ? (
                       <>
+                        {ps.data.currentContent && (
+                          <div style={{ ...styles.previewContent, marginBottom: 8 }}>
+                            <div style={styles.previewLabel}>Current description</div>
+                            <div style={{ ...styles.previewText, color: '#6b7280', maxHeight: 72, overflow: 'hidden' }}>
+                              {stripHtml(ps.data.currentContent)}
+                            </div>
+                          </div>
+                        )}
                         <div style={styles.previewContent}>
-                          <div style={styles.previewLabel}>Proposed content</div>
-                          <div style={styles.previewText}>{ps.data.proposedContent}</div>
+                          <div style={{ ...styles.previewLabel, color: '#16a34a' }}>Proposed addition</div>
+                          <div style={{ ...styles.previewText, borderColor: '#bbf7d0', background: '#f0fdf4' }}>{ps.data.proposedContent}</div>
                         </div>
                         <div style={styles.previewActions}>
                           <button

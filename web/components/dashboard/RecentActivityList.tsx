@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { apiHeaders, API_BASE } from '@/lib/api';
+import { apiHeaders, API_BASE, issueLabel } from '@/lib/api';
 import type { ActivityItem } from '@/lib/api';
 
 const SHOP = process.env.NEXT_PUBLIC_SHOP ?? '';
@@ -76,7 +76,7 @@ export default function RecentActivityList({ items, selectedExecId, onSelect }: 
             onClick={() => onSelect?.(item.executionId)}
           >
             <div style={styles.left}>
-              <span style={styles.issueId}>{item.issueId}</span>
+              <span style={styles.issueId}>{issueLabel(item.issueId)}</span>
               {item.insight && <span style={styles.insight}>{item.insight}</span>}
             </div>
             <div style={styles.right}>

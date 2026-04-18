@@ -10,7 +10,7 @@ export const API_BASE = _apiBase;
 const _devToken = process.env.NEXT_PUBLIC_DEV_BEARER_TOKEN;
 
 export function apiHeaders(extra?: Record<string, string>): Record<string, string> {
-  const auth = _devToken ? { Authorization: `Bearer ${_devToken}` } : {};
+  const auth: Record<string, string> = _devToken ? { Authorization: `Bearer ${_devToken}` } : {};
   return { ...auth, ...extra };
 }
 
@@ -385,6 +385,43 @@ export async function fetchExecutionResults(shop: string, executionId: string): 
   const data = await res.json();
   if (!data.success) return null;
   return { status: data.status, insight: data.insight, summary: data.summary ?? null };
+}
+
+// ---------------------------------------------------------------------------
+// Issue labels — human-readable names for every known issueId
+// ---------------------------------------------------------------------------
+
+export const ISSUE_LABELS: Record<string, string> = {
+  weak_desire_creation:        'Weak desire creation',
+  features_before_desire:      'Features listed before desire',
+  no_future_pacing:            'No future pacing',
+  no_sensory_language:         'No sensory language',
+  no_outcome_sentence:         'No outcome sentence',
+  spec_pivot_early:            'Spec pivot too early',
+  no_description:              'No product description',
+  description_too_short:       'Description too short',
+  description_center_aligned:  'Description center-aligned',
+  no_risk_reversal:            'No risk reversal',
+  no_social_proof:             'No social proof',
+  no_urgency:                  'No urgency signals',
+  no_compare_price:            'No compare price',
+  weak_discount:               'Weak discount signal',
+  strong_discount_not_featured:'Discount not featured',
+  no_size_guide:               'Missing size guide',
+  no_images:                   'No product images',
+  few_images:                  'Too few images',
+  missing_alt_text:            'Missing image alt text',
+  no_bundle_pricing:           'No bundle pricing',
+  low_inventory_unused:        'Low inventory signal unused',
+  all_variants_oos:            'All variants out of stock',
+  some_variants_oos:           'Some variants out of stock',
+  product_is_draft:            'Product is in draft',
+};
+
+/** Returns a human-readable label for an issueId, falling back to a
+ *  title-cased version of the raw id (e.g. "new_rule" → "New rule"). */
+export function issueLabel(issueId: string): string {
+  return ISSUE_LABELS[issueId] ?? issueId.replace(/_/g, ' ').replace(/^\w/, c => c.toUpperCase());
 }
 
 // ---------------------------------------------------------------------------
