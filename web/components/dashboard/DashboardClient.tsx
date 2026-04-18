@@ -170,6 +170,7 @@ export default function DashboardClient({ data }: Props) {
         onFilterChange={setActiveFilter}
       />
     <div style={styles.sections}>
+      <RevenueDashboard shop={SHOP} />
       {topActions.length > 0 && (() => {
         const pending     = topActions.filter(a => a.executionStatus === 'pending');
         const revenueRisk = pending.reduce((sum, a) => sum + Math.round(a.revenue / 30), 0);
@@ -233,7 +234,6 @@ export default function DashboardClient({ data }: Props) {
         </div>
       )}
       <StoreOverview overview={data.overview} />
-      <RevenueDashboard shop={SHOP} />
 
       <ReadyToApplyList
         items={data.review.groups.readyToApply}
