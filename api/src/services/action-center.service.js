@@ -19,6 +19,25 @@ const { fetchOrderMetrics, updateProductDescription } = require('./shopify-admin
 const { classifyExecution }   = require('./cro/classifyExecution');
 
 // ---------------------------------------------------------------------------
+// V1_RULE_ALLOWLIST
+//
+// Only these issueIds surface in the v1 merchant-facing action center.
+// All other rules run in the background for scoring but are not shown.
+// To promote a rule to v1, add its id here — no other change required.
+// ---------------------------------------------------------------------------
+const V1_RULE_ALLOWLIST = new Set([
+  'weak_desire_creation',   // primary content rule — full preview/apply path
+  'no_description',         // highest confidence; trivially verifiable
+  'description_too_short',  // objective threshold; clear merchant value
+  'no_risk_reversal',       // high-confidence content gap; reversible
+  'no_social_proof',        // common, detectable; content-only fix
+  'no_urgency',             // detectable gap; clear insertion opportunity
+  'low_inventory_unused',   // high-confidence signal; content addition only
+  'missing_alt_text',       // technical content; objective detection
+  'no_size_guide',          // content addition; clear value
+]);
+
+// ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
 
@@ -374,7 +393,8 @@ async function getProductActions(rawProduct, { prisma, storeId } = {}) {
     return true;
   });
 
-  let actionableItems = deduped.filter(isActionable).map(toActionItem);
+  const v1Issues = deduped.filter(i => V1_RULE_ALLOWLIST.has(i.issueId));
+  let actionableItems = v1Issues.filter(isActionable).map(toActionItem);
 
   // Sort: critical → high → medium → low, effort asc within severity
   const severityOrder = { critical: 0, high: 1, medium: 2, low: 3 };
