@@ -8,6 +8,7 @@ const { makeRequireAuth }            = require('./lib/auth-middleware');
 const { startImpactWindowScheduler } = require('./scheduler/impact-window.scheduler');
 const { startDeltaSyncScheduler }    = require('./scheduler/delta-sync.scheduler');
 const webhooksRouter       = require('./routes/webhooks.routes');
+const authRouter           = require('./routes/auth.routes');
 const croRouter            = require('./routes/cro.routes');
 const actionCenterRouter   = require('./routes/action-center.routes');
 const metricsRouter        = require('./routes/metrics.routes');
@@ -588,6 +589,7 @@ function formatProduct(p) {
 // CRO routes (mounted from src/routes/cro.routes.js)
 // ---------------------------------------------------------------------------
 
+app.use('/auth', authRouter);
 app.use('/cro', croRouter);
 app.use('/action-center', actionCenterRouter);
 app.use('/metrics', metricsRouter);
