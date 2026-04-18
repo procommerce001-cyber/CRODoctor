@@ -1001,7 +1001,7 @@ async function getRevenueDashboard(prisma, shop) {
     success: true, shop, empty: true,
     totalRevenueImpact: 0, revenueGrowthPercent: null,
     ordersGrowthPercent: null, aovChangePercent: null,
-    productsImproved: 0, executionsCount: 0, recentImpacts: [],
+    productsImproved: 0, executionsCount: 0, measuredCount: 0, recentImpacts: [],
   };
   if (executions.length === 0) return empty;
 
@@ -1014,27 +1014,30 @@ async function getRevenueDashboard(prisma, shop) {
   const titleMap = new Map(products.map(p => [p.id, p.title]));
 
   let totalRevenueImpact = 0;
-  const revenueChangePcts = [];
-  const ordersChangePcts  = [];
-  const aovChangePcts     = [];
-  const improvedProducts  = new Set();
-  let measuredCount       = 0;
-  const recentImpactsRaw  = [];
+  const revenueChangePcts  = [];
+  const ordersChangePcts   = [];
+  const unitsSoldChangePcts = [];
+  const aovChangePcts      = [];
+  const improvedProducts   = new Set();
+  let measuredCount        = 0;
+  const recentImpactsRaw   = [];
+  const r2 = n => n !== null && n !== undefined ? parseFloat(n.toFixed(2)) : null;
 
   for (const exec of executions) {
     const result = await getExecutionResultsSummary(prisma, exec.id);
     if (!result.success || result.status !== 'measured' || !result.summary) continue;
 
     measuredCount++;
-    const { revenue, orders } = result.summary;
+    const { revenue, orders, unitsSold } = result.summary;
 
     if (revenue.diff > 0) {
       totalRevenueImpact += revenue.diff;
       improvedProducts.add(exec.productId);
     }
 
-    if (revenue.changePercent !== null) revenueChangePcts.push(revenue.changePercent);
-    if (orders.changePercent  !== null) ordersChangePcts.push(orders.changePercent);
+    if (revenue.changePercent  !== null) revenueChangePcts.push(revenue.changePercent);
+    if (orders.changePercent   !== null) ordersChangePcts.push(orders.changePercent);
+    if (unitsSold.changePercent !== null) unitsSoldChangePcts.push(unitsSold.changePercent);
 
     if (orders.before > 0 && orders.after > 0 && revenue.before > 0) {
       const aovBefore = revenue.before / orders.before;
@@ -1042,32 +1045,45 @@ async function getRevenueDashboard(prisma, shop) {
       aovChangePcts.push(((aovAfter - aovBefore) / aovBefore) * 100);
     }
 
-    if (revenue.diff !== 0 || orders.diff !== 0) {
+    if (revenue.diff !== 0 || orders.diff !== 0 || unitsSold.diff !== 0) {
       recentImpactsRaw.push({
-        productTitle: titleMap.get(exec.productId) ?? 'Unknown product',
-        revenueDelta: parseFloat(revenue.diff.toFixed(2)),
-        ordersDelta:  orders.diff,
-        executedAt:   exec.createdAt,
+        productTitle:  titleMap.get(exec.productId) ?? 'Unknown product',
+        revenueDelta:  parseFloat(revenue.diff.toFixed(2)),
+        ordersDelta:   orders.diff,
+        unitsSoldDelta: unitsSold.diff,
+        executedAt:    exec.createdAt,
+        roi:           parseFloat(revenue.diff.toFixed(2)),
       });
     }
   }
 
   if (measuredCount === 0) return empty;
 
-  const avg    = arr => arr.length > 0 ? arr.reduce((s, v) => s + v, 0) / arr.length : null;
-  const r2     = n   => n !== null ? parseFloat(n.toFixed(2)) : null;
+  const avg = arr => arr.length > 0 ? arr.reduce((s, v) => s + v, 0) / arr.length : null;
+
+  // recentImpacts — chronological (most recent first, capped at 10)
+  const recentImpacts = recentImpactsRaw.slice(0, 10);
+
+  // topWins — same items sorted by revenue delta descending, capped at 5
+  const topWins = [...recentImpactsRaw]
+    .sort((a, b) => b.revenueDelta - a.revenueDelta)
+    .slice(0, 5);
 
   return {
-    success:              true,
+    success:                true,
     shop,
-    empty:                false,
-    totalRevenueImpact:   parseFloat(totalRevenueImpact.toFixed(2)),
-    revenueGrowthPercent: r2(avg(revenueChangePcts)),
-    ordersGrowthPercent:  r2(avg(ordersChangePcts)),
-    aovChangePercent:     r2(avg(aovChangePcts)),
-    productsImproved:     improvedProducts.size,
-    executionsCount:      measuredCount,
-    recentImpacts:        recentImpactsRaw.slice(0, 5),
+    empty:                  false,
+    totalRevenueImpact:     parseFloat(totalRevenueImpact.toFixed(2)),
+    revenueGrowthPercent:   r2(avg(revenueChangePcts)),
+    ordersGrowthPercent:    r2(avg(ordersChangePcts)),
+    unitsSoldGrowthPercent: r2(avg(unitsSoldChangePcts)),
+    aovChangePercent:       r2(avg(aovChangePcts)),
+    productsImproved:       improvedProducts.size,
+    executionsCount:        executions.length,
+    measuredCount:          measuredCount,
+    avgRevenuePerExecution: r2(measuredCount > 0 ? totalRevenueImpact / measuredCount : null),
+    recentImpacts,
+    topWins,
   };
 }
 

@@ -1,96 +1,166 @@
 'use client';
 
-import { useState, useEffect, useRef }             from 'react';
+import { useState, useEffect, useRef } from 'react';
 import type { RevenueDashboardData, RecentImpact } from '@/lib/api';
-import { fetchRevenueDashboard }                   from '@/lib/api';
+import { fetchRevenueDashboard } from '@/lib/api';
 
 interface Props { shop: string }
 
 // ---------------------------------------------------------------------------
 // Formatters
 // ---------------------------------------------------------------------------
-function fmtHeroMoney(n: number) {
-  return `+$${Math.round(n).toLocaleString()}`;
-}
-
-function fmtDeltaMoney(n: number) {
+function fmtMoney(n: number) {
   const abs = Math.round(Math.abs(n));
   return `${n >= 0 ? '+' : '−'}$${abs.toLocaleString()}`;
 }
-
+function fmtHeroMoney(n: number) {
+  const abs = Math.round(Math.abs(n));
+  return `${n >= 0 ? '+' : '−'}$${abs.toLocaleString()}`;
+}
 function fmtPct(n: number | null) {
   if (n === null) return null;
   return `${n >= 0 ? '+' : ''}${Math.round(n)}%`;
 }
-
 function fmtDate(iso: string) {
   return new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 }
 
 // ---------------------------------------------------------------------------
-// useCountUp — animates from 0 to target over `duration` ms (ease-out cubic)
+// useCountUp
 // ---------------------------------------------------------------------------
-function useCountUp(target: number, duration = 1400): number {
+function useCountUp(target: number, duration = 1200): number {
   const [value, setValue] = useState(0);
-
   useEffect(() => {
     if (target === 0) { setValue(0); return; }
     const start = performance.now();
     let raf: number;
-
     const tick = (now: number) => {
       const t = Math.min((now - start) / duration, 1);
-      const eased = 1 - Math.pow(1 - t, 3);   // ease-out cubic
-      setValue(Math.round(target * eased));
+      setValue(Math.round(target * (1 - Math.pow(1 - t, 3))));
       if (t < 1) raf = requestAnimationFrame(tick);
     };
-
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
   }, [target, duration]);
-
   return value;
 }
 
 // ---------------------------------------------------------------------------
-// KpiTile — one supporting metric
+// KPIStrip — compact tile row directly below the hero
 // ---------------------------------------------------------------------------
-function KpiTile({
-  value, label, positive,
-}: {
-  value: string;
-  label: string;
-  positive?: boolean;
-}) {
-  const valueColor = positive === false ? '#dc2626'
-                   : positive === true  ? '#16a34a'
-                   : '#111827';
+function KPIStrip({
+  executionsCount,
+  measuredCount,
+  ordersGrowthPercent,
+  unitsSoldGrowthPercent,
+  avgRevenuePerExecution,
+}: Pick<RevenueDashboardData,
+  'executionsCount' | 'measuredCount' | 'ordersGrowthPercent' | 'unitsSoldGrowthPercent' | 'avgRevenuePerExecution'
+>) {
+  const tiles: Array<{ value: string; label: string; color: string }> = [
+    {
+      value: String(executionsCount),
+      label: 'Changes applied',
+      color: '#111827',
+    },
+    {
+      value: String(measuredCount),
+      label: 'Measured',
+      color: measuredCount > 0 ? '#16a34a' : '#9ca3af',
+    },
+    ...(ordersGrowthPercent !== null ? [{
+      value: fmtPct(ordersGrowthPercent)!,
+      label: 'Orders growth',
+      color: ordersGrowthPercent >= 0 ? '#16a34a' : '#dc2626',
+    }] : []),
+    ...(unitsSoldGrowthPercent !== null ? [{
+      value: fmtPct(unitsSoldGrowthPercent)!,
+      label: 'Units growth',
+      color: unitsSoldGrowthPercent >= 0 ? '#16a34a' : '#dc2626',
+    }] : []),
+    ...(avgRevenuePerExecution !== null && avgRevenuePerExecution > 0 ? [{
+      value: `+$${Math.round(avgRevenuePerExecution).toLocaleString()}`,
+      label: 'Avg revenue / execution',
+      color: '#16a34a',
+    }] : []),
+  ];
+
   return (
-    <div style={s.kpiTile}>
-      <div style={{ ...s.kpiValue, color: valueColor }}>{value}</div>
-      <div style={s.kpiLabel}>{label}</div>
+    <div style={s.kpiStrip}>
+      {tiles.map((tile, i) => (
+        <div
+          key={i}
+          style={{ ...s.kpiTile, borderRight: i < tiles.length - 1 ? '1px solid #f3f4f6' : 'none' }}
+        >
+          <div style={{ ...s.kpiTileVal, color: tile.color }}>{tile.value}</div>
+          <div style={s.kpiTileLbl}>{tile.label}</div>
+        </div>
+      ))}
     </div>
   );
 }
 
 // ---------------------------------------------------------------------------
-// WinRow — one line in Recent wins
+// TopWinRow — ranked card for the top wins section
 // ---------------------------------------------------------------------------
-function WinRow({ item }: { item: RecentImpact }) {
-  const pos = item.revenueDelta >= 0;
+function TopWinRow({ item, rank }: { item: RecentImpact; rank: number }) {
+  const positive = item.revenueDelta >= 0;
   return (
-    <div style={s.winRow}>
-      <span style={s.winProduct}>{item.productTitle}</span>
-      <div style={s.winRight}>
-        <span style={{ ...s.winDelta, color: pos ? '#16a34a' : '#dc2626' }}>
-          {fmtDeltaMoney(item.revenueDelta)}
-        </span>
+    <div style={s.topWinRow}>
+      <div style={s.topWinRank}>#{rank}</div>
+      <div style={s.topWinBody}>
+        <div style={s.topWinProduct}>{item.productTitle}</div>
+        <div style={s.topWinMeta}>
+          {item.ordersDelta !== 0 && (
+            <span style={s.topWinPill}>
+              {item.ordersDelta > 0 ? '+' : ''}{item.ordersDelta} orders
+            </span>
+          )}
+          {item.unitsSoldDelta !== 0 && (
+            <span style={{ ...s.topWinPill, color: '#a78bfa' }}>
+              {item.unitsSoldDelta > 0 ? '+' : ''}{item.unitsSoldDelta} units
+            </span>
+          )}
+          {item.roi > 0 && (
+            <span style={s.topWinRoiBadge}>${Math.round(item.roi)} ROI</span>
+          )}
+        </div>
+      </div>
+      <div style={{ ...s.topWinDelta, color: positive ? '#16a34a' : '#dc2626' }}>
+        {fmtMoney(item.revenueDelta)}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// RecentActivityRow — lightweight chronological row
+// ---------------------------------------------------------------------------
+function RecentActivityRow({ item }: { item: RecentImpact }) {
+  const positive = item.revenueDelta >= 0;
+  return (
+    <div style={s.actRow}>
+      <div style={s.actLeft}>
+        <span style={s.actProduct}>{item.productTitle}</span>
+        <span style={s.actDate}>{fmtDate(item.executedAt)}</span>
+      </div>
+      <div style={s.actRight}>
+        {item.unitsSoldDelta !== 0 && (
+          <span style={s.actUnits}>
+            {item.unitsSoldDelta > 0 ? '+' : ''}{item.unitsSoldDelta} units
+          </span>
+        )}
         {item.ordersDelta !== 0 && (
-          <span style={s.winOrders}>
+          <span style={s.actOrders}>
             {item.ordersDelta > 0 ? '+' : ''}{item.ordersDelta} orders
           </span>
         )}
-        <span style={s.winDate}>{fmtDate(item.executedAt)}</span>
+        {item.roi > 0 && (
+          <span style={s.actRoi}>${Math.round(item.roi)} ROI</span>
+        )}
+        <span style={{ ...s.actDelta, color: positive ? '#16a34a' : '#dc2626' }}>
+          {fmtMoney(item.revenueDelta)}
+        </span>
       </div>
     </div>
   );
@@ -104,126 +174,104 @@ const POLL_MS = 45_000;
 export default function RevenueDashboard({ shop }: Props) {
   const [data,        setData]        = useState<RevenueDashboardData | null>(null);
   const [loading,     setLoading]     = useState(true);
+  const [error,       setError]       = useState(false);
   const [justUpdated, setJustUpdated] = useState(false);
   const prevRevenue                   = useRef<number | null>(null);
 
-  // Initial fetch
   useEffect(() => {
     fetchRevenueDashboard(shop)
       .then(d => { setData(d); if (d) prevRevenue.current = d.totalRevenueImpact; })
-      .catch(() => {})
+      .catch(() => setError(true))
       .finally(() => setLoading(false));
   }, [shop]);
 
-  // Polling — 45 s interval, silent unless value changed
   useEffect(() => {
     const id = setInterval(async () => {
       try {
         const fresh = await fetchRevenueDashboard(shop);
         if (!fresh) return;
-        const changed = fresh.totalRevenueImpact !== prevRevenue.current;
-        if (changed) {
+        if (fresh.totalRevenueImpact !== prevRevenue.current) {
           prevRevenue.current = fresh.totalRevenueImpact;
-          setData(fresh);          // triggers count-up via new target
+          setData(fresh);
           setJustUpdated(true);
           setTimeout(() => setJustUpdated(false), 6_000);
         }
       } catch {}
     }, POLL_MS);
-
     return () => clearInterval(id);
   }, [shop]);
 
-  if (loading) return null;
+  if (loading) return <div style={s.skeleton} />;
 
-  // ── Empty state ────────────────────────────────────────────────────────────
-  if (!data || data.empty) {
+  if (error || !data) {
+    return (
+      <section style={s.wrap}>
+        <div style={s.errorState}>
+          <div style={s.errorHeadline}>Could not load revenue data</div>
+          <div style={s.errorBody}>Check your connection or reload the page</div>
+        </div>
+      </section>
+    );
+  }
+
+  if (data.empty) {
     return (
       <section style={s.wrap}>
         <div style={s.emptyState}>
           <div style={s.emptyIcon}>$</div>
           <div style={s.emptyHeadline}>No revenue impact tracked yet</div>
-          <div style={s.emptyBody}>
-            Apply your first fix to start generating measurable impact
-          </div>
+          <div style={s.emptyBody}>Apply your first fix to start generating measurable impact</div>
         </div>
       </section>
     );
   }
 
   const {
-    totalRevenueImpact, revenueGrowthPercent, ordersGrowthPercent,
-    aovChangePercent, productsImproved, executionsCount, recentImpacts,
+    totalRevenueImpact, ordersGrowthPercent, unitsSoldGrowthPercent,
+    executionsCount, measuredCount, avgRevenuePerExecution, recentImpacts, topWins,
   } = data;
 
-  // ── Count-up animation ────────────────────────────────────────────────────
   const animatedRevenue = useCountUp(totalRevenueImpact);
-
-  // ── Today's activity — derived from recentImpacts, no new API ────────────
-  const todayStr = new Date().toDateString();
-  const todayItems = recentImpacts.filter(
-    i => new Date(i.executedAt).toDateString() === todayStr
-  );
-  const todayRevenue     = todayItems.reduce((sum, i) => sum + i.revenueDelta, 0);
-  const hasActivityToday = todayItems.length > 0;
-
-  // Collect KPIs — only include metrics that have data
-  const kpis: { value: string; label: string; positive?: boolean }[] = [];
-  if (revenueGrowthPercent !== null) kpis.push({ value: fmtPct(revenueGrowthPercent)!, label: 'Conversion uplift',   positive: revenueGrowthPercent >= 0 });
-  if (aovChangePercent     !== null) kpis.push({ value: fmtPct(aovChangePercent)!,     label: 'Avg. order value',   positive: aovChangePercent     >= 0 });
-  if (ordersGrowthPercent  !== null) kpis.push({ value: fmtPct(ordersGrowthPercent)!,  label: 'Orders growth',      positive: ordersGrowthPercent  >= 0 });
-  kpis.push({ value: String(productsImproved), label: `Product${productsImproved === 1 ? '' : 's'} improved` });
 
   return (
     <section style={s.wrap}>
 
-      {/* ── Hero ──────────────────────────────────────────────────────────── */}
+      {/* ── Hero: Revenue impact ─────────────────────────────────────────── */}
       <div style={s.heroSection}>
-        <div style={s.heroEyebrowRow}>
-          <span style={s.heroEyebrow}>Revenue impact</span>
-          {hasActivityToday && (
-            <span style={s.liveDot}>
-              <span style={s.livePulse} />
-              Live
-            </span>
-          )}
-          {justUpdated && (
-            <span style={s.updatedLabel}>Updated just now</span>
-          )}
+        <div style={s.heroEyebrow}>
+          Revenue impact
+          {justUpdated && <span style={s.updatedBadge}>Updated</span>}
         </div>
         <div style={s.heroNumber}>{fmtHeroMoney(animatedRevenue)}</div>
-        <div style={s.heroSubline}>Revenue generated from applied improvements</div>
-        {todayRevenue > 0 && (
-          <div style={s.todayLine}>
-            Today: <strong>{fmtDeltaMoney(todayRevenue)}</strong>
-          </div>
-        )}
-        <div style={s.trustLine}>Based on real changes applied to your store</div>
+        <div style={s.heroSub}>Measured revenue lift from all changes applied to your store</div>
       </div>
 
-      {/* ── KPI grid ──────────────────────────────────────────────────────── */}
-      <div style={s.kpiGrid}>
-        {kpis.map((k, i) => (
-          <KpiTile key={i} value={k.value} label={k.label} positive={k.positive} />
-        ))}
-      </div>
+      {/* ── KPI strip ────────────────────────────────────────────────────── */}
+      <KPIStrip
+        executionsCount={executionsCount}
+        measuredCount={measuredCount}
+        ordersGrowthPercent={ordersGrowthPercent}
+        unitsSoldGrowthPercent={unitsSoldGrowthPercent}
+        avgRevenuePerExecution={avgRevenuePerExecution}
+      />
 
-      {/* ── Recent wins ───────────────────────────────────────────────────── */}
-      {recentImpacts.length > 0 && (
-        <div style={s.winsSection}>
-          <div style={s.winsSectionLabel}>Recent wins</div>
-          <div style={s.winsList}>
-            {recentImpacts.map((item, i) => (
-              <WinRow key={i} item={item} />
-            ))}
-          </div>
+      {/* ── Top wins ─────────────────────────────────────────────────────── */}
+      {topWins.length > 0 && (
+        <div style={s.section}>
+          <div style={s.sectionLabel}>Top wins by revenue</div>
+          {[...topWins]
+            .sort((a, b) => b.revenueDelta - a.revenueDelta)
+            .map((item, i) => <TopWinRow key={i} item={item} rank={i + 1} />)}
         </div>
       )}
 
-      {/* ── Footer ────────────────────────────────────────────────────────── */}
-      <div style={s.footer}>
-        {executionsCount} change{executionsCount === 1 ? '' : 's'} measured
-      </div>
+      {/* ── Recent activity ───────────────────────────────────────────────── */}
+      {recentImpacts.length > 0 && (
+        <div style={s.section}>
+          <div style={s.sectionLabel}>Recent activity</div>
+          {recentImpacts.map((item, i) => <RecentActivityRow key={i} item={item} />)}
+        </div>
+      )}
 
     </section>
   );
@@ -234,7 +282,6 @@ export default function RevenueDashboard({ shop }: Props) {
 // ---------------------------------------------------------------------------
 const s: Record<string, React.CSSProperties> = {
 
-  // Shell
   wrap: {
     background:   '#fff',
     border:       '1px solid #e5e7eb',
@@ -242,106 +289,129 @@ const s: Record<string, React.CSSProperties> = {
     overflow:     'hidden',
   },
 
-  // Hero block — light green wash, full width
-  heroSection: {
-    padding:    '28px 28px 24px',
-    background: '#f0fdf4',
-    borderBottom: '1px solid #dcfce7',
+  skeleton: {
+    background:   '#f9fafb',
+    border:       '1px solid #e5e7eb',
+    borderRadius: 12,
+    minHeight:    220,
   },
-  heroEyebrowRow: {
-    display:       'flex',
-    alignItems:    'center',
-    gap:           10,
-    marginBottom:  10,
+
+  // Hero
+  heroSection: {
+    padding:      '24px 24px 20px',
+    background:   '#f0fdf4',
+    borderBottom: '1px solid #dcfce7',
   },
   heroEyebrow: {
     fontSize:      11,
-    fontWeight:    600,
+    fontWeight:    700,
     letterSpacing: '0.08em',
     textTransform: 'uppercase' as const,
     color:         '#16a34a',
-  },
-  liveDot: {
+    marginBottom:  6,
     display:       'flex',
     alignItems:    'center',
-    gap:           5,
-    fontSize:      10,
-    fontWeight:    700,
-    color:         '#16a34a',
-    letterSpacing: '0.06em',
-    textTransform: 'uppercase' as const,
+    gap:           8,
   },
-  livePulse: {
-    display:      'inline-block',
-    width:        7,
-    height:       7,
-    borderRadius: '50%',
-    background:   '#16a34a',
-    boxShadow:    '0 0 0 2px #bbf7d0',
-    flexShrink:   0,
-  },
-  updatedLabel: {
-    fontSize:   10,
-    fontWeight: 500,
-    color:      '#16a34a',
-    opacity:    0.7,
-  },
-  todayLine: {
-    fontSize:     13,
-    color:        '#166534',
-    marginBottom: 6,
-    marginTop:    4,
+  updatedBadge: {
+    fontSize:     10,
+    background:   '#dcfce7',
+    color:        '#15803d',
+    padding:      '2px 6px',
+    borderRadius: 99,
   },
   heroNumber: {
-    fontSize:      56,
+    fontSize:      48,
     fontWeight:    800,
     color:         '#14532d',
     letterSpacing: '-0.04em',
     lineHeight:    1,
-    marginBottom:  10,
+    marginBottom:  6,
   },
-  heroSubline: {
-    fontSize:   14,
-    fontWeight: 500,
-    color:      '#166534',
-    marginBottom: 6,
-  },
-  trustLine: {
-    fontSize: 11,
-    color:    '#86efac',
+  heroSub: {
+    fontSize: 12,
+    color:    '#166534',
   },
 
-  // KPI row
-  kpiGrid: {
-    display:       'grid',
-    gridTemplateColumns: 'repeat(4, 1fr)',
-    borderBottom:  '1px solid #f3f4f6',
+  // KPI strip
+  kpiStrip: {
+    display:      'flex',
+    borderBottom: '1px solid #f3f4f6',
   },
   kpiTile: {
-    padding:      '20px 20px 18px',
-    borderRight:  '1px solid #f3f4f6',
+    flex:    1,
+    padding: '14px 20px',
   },
-  kpiValue: {
-    fontSize:      28,
+  kpiTileVal: {
+    fontSize:      20,
     fontWeight:    800,
-    letterSpacing: '-0.03em',
+    letterSpacing: '-0.02em',
     lineHeight:    1,
-    marginBottom:  5,
+    marginBottom:  4,
   },
-  kpiLabel: {
-    fontSize:      11,
+  kpiTileLbl: {
+    fontSize:      10,
     color:         '#9ca3af',
     textTransform: 'uppercase' as const,
     letterSpacing: '0.05em',
-    lineHeight:    1.3,
   },
 
-  // Recent wins
-  winsSection: {
-    padding: '20px 24px',
+  // Top win rows
+  topWinRow: {
+    display:    'flex',
+    alignItems: 'center',
+    gap:        12,
+    padding:    '10px 0',
     borderBottom: '1px solid #f9fafb',
   },
-  winsSectionLabel: {
+  topWinRank: {
+    fontSize:   11,
+    fontWeight: 700,
+    color:      '#d1d5db',
+    width:      20,
+    flexShrink: 0,
+  },
+  topWinBody: {
+    flex:     1,
+    minWidth: 0,
+  },
+  topWinProduct: {
+    fontSize:     13,
+    fontWeight:   600,
+    color:        '#111827',
+    overflow:     'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace:   'nowrap' as const,
+    marginBottom: 3,
+  },
+  topWinMeta: {
+    display:  'flex',
+    gap:      6,
+    flexWrap: 'wrap' as const,
+  },
+  topWinPill: {
+    fontSize: 10,
+    color:    '#9ca3af',
+  },
+  topWinRoiBadge: {
+    fontSize:     10,
+    color:        '#16a34a',
+    background:   '#f0fdf4',
+    padding:      '1px 5px',
+    borderRadius: 4,
+  },
+  topWinDelta: {
+    fontSize:   15,
+    fontWeight: 800,
+    flexShrink: 0,
+  },
+
+  // Sections (top wins / recent activity)
+  section: {
+    padding:      '16px 20px',
+    borderBottom: '1px solid #f9fafb',
+  },
+  sectionLabel: {
     fontSize:      10,
     fontWeight:    700,
     color:         '#d1d5db',
@@ -349,48 +419,66 @@ const s: Record<string, React.CSSProperties> = {
     textTransform: 'uppercase' as const,
     marginBottom:  10,
   },
-  winsList: {
-    display:       'flex',
-    flexDirection: 'column' as const,
-    gap:           2,
-  },
-  winRow: {
+
+  // Recent activity rows
+  actRow: {
     display:        'flex',
     justifyContent: 'space-between',
     alignItems:     'center',
-    padding:        '7px 0',
+    padding:        '8px 0',
     borderBottom:   '1px solid #f9fafb',
   },
-  winProduct: {
-    fontSize:     13,
-    color:        '#374151',
-    flex:         1,
-    minWidth:     0,
+  actLeft: {
+    display:    'flex',
+    alignItems: 'baseline',
+    gap:        8,
+    flex:       1,
+    minWidth:   0,
+    marginRight: 12,
+  },
+  actProduct: {
+    fontSize:     12,
+    fontWeight:   500,
+    color:        '#6b7280',
     overflow:     'hidden',
     textOverflow: 'ellipsis',
     whiteSpace:   'nowrap' as const,
   },
-  winRight: {
-    display:    'flex',
-    alignItems: 'center',
-    gap:        10,
+  actDate: {
+    fontSize:  10,
+    color:     '#d1d5db',
     flexShrink: 0,
   },
-  winDelta:  { fontSize: 13, fontWeight: 700 },
-  winOrders: { fontSize: 12, color: '#9ca3af' },
-  winDate:   { fontSize: 11, color: '#d1d5db' },
+  actRight: {
+    display:    'flex',
+    alignItems: 'center',
+    gap:        6,
+    flexShrink: 0,
+  },
+  actDelta:  { fontSize: 12, fontWeight: 600, color: '#374151' },
+  actOrders: { fontSize: 10, color: '#9ca3af' },
+  actUnits:  { fontSize: 10, color: '#c4b5fd' },
+  actRoi:    { fontSize: 10, color: '#86efac', background: '#f0fdf4', padding: '1px 4px', borderRadius: 3 },
 
-  // Footer
-  footer: {
-    padding:   '10px 24px',
-    fontSize:  11,
-    color:     '#e5e7eb',
-    textAlign: 'right' as const,
+  // Error state
+  errorState: {
+    padding:   '36px 28px',
+    textAlign: 'center' as const,
+  },
+  errorHeadline: {
+    fontSize:     14,
+    fontWeight:   600,
+    color:        '#b45309',
+    marginBottom: 4,
+  },
+  errorBody: {
+    fontSize: 12,
+    color:    '#d97706',
   },
 
   // Empty state
   emptyState: {
-    padding:   '40px 28px',
+    padding:   '44px 28px',
     textAlign: 'center' as const,
   },
   emptyIcon: {

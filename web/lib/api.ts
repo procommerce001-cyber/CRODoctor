@@ -389,21 +389,27 @@ export async function fetchExecutionResults(shop: string, executionId: string): 
 // ---------------------------------------------------------------------------
 
 export interface RecentImpact {
-  productTitle: string;
-  revenueDelta: number;
-  ordersDelta:  number;
-  executedAt:   string;
+  productTitle:   string;
+  revenueDelta:   number;
+  ordersDelta:    number;
+  unitsSoldDelta: number;
+  executedAt:     string;
+  roi:            number;
 }
 
 export interface RevenueDashboardData {
-  empty:                boolean;
-  totalRevenueImpact:   number;
-  revenueGrowthPercent: number | null;
-  ordersGrowthPercent:  number | null;
-  aovChangePercent:     number | null;
-  productsImproved:     number;
-  executionsCount:      number;
-  recentImpacts:        RecentImpact[];
+  empty:                  boolean;
+  totalRevenueImpact:     number;
+  revenueGrowthPercent:   number | null;
+  ordersGrowthPercent:    number | null;
+  unitsSoldGrowthPercent: number | null;
+  aovChangePercent:       number | null;
+  productsImproved:       number;
+  executionsCount:        number;
+  measuredCount:          number;
+  avgRevenuePerExecution: number | null;
+  recentImpacts:          RecentImpact[];
+  topWins:                RecentImpact[];
 }
 
 export async function fetchRevenueDashboard(shop: string): Promise<RevenueDashboardData | null> {
