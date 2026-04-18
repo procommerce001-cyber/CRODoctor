@@ -293,20 +293,57 @@ router.get('/callback', async (req, res) => {
     }
   }
 
-  // 6. Respond immediately — client subscribes to Store.setupStatus via Supabase Realtime
-  res.json({
-    success:     true,
-    shop,
-    storeId:     store.id,
-    userId:      user?.id   ?? null,
-    setupStatus: 'SYNCING',
-  });
+  // 6. Create server-side session — must save before responding
+  req.session.storeId    = store.id;
+  req.session.shopDomain = shop;
+  req.session.userId     = user?.id ?? null;
 
-  // 7. Background: sync products → before-snapshots → set setupStatus = COMPLETED
-  setImmediate(() => {
-    runInitialSync(prisma, store).catch(err =>
-      console.error('[Auth] runInitialSync unhandled error:', err.message)
-    );
+  req.session.save(saveErr => {
+    if (saveErr) console.error('[Auth] session save error:', saveErr.message);
+
+    res.json({
+      success:     true,
+      shop,
+      storeId:     store.id,
+      userId:      user?.id ?? null,
+      setupStatus: 'SYNCING',
+    });
+
+    // 7. Background: sync products → before-snapshots → set setupStatus = COMPLETED
+    setImmediate(() => {
+      runInitialSync(prisma, store).catch(err =>
+        console.error('[Auth] runInitialSync unhandled error:', err.message)
+      );
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// POST /auth/logout
+// ---------------------------------------------------------------------------
+router.post('/logout', (req, res) => {
+  req.session.destroy(err => {
+    if (err) {
+      console.error('[Auth] logout error:', err.message);
+      return res.status(500).json({ error: 'Logout failed.' });
+    }
+    res.clearCookie('cro.sid');
+    res.json({ success: true });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// GET /auth/me
+// Returns the current session identity — useful for frontend boot.
+// ---------------------------------------------------------------------------
+router.get('/me', (req, res) => {
+  if (!req.session?.storeId) {
+    return res.status(401).json({ error: 'Not authenticated.' });
+  }
+  res.json({
+    storeId:    req.session.storeId,
+    shopDomain: req.session.shopDomain,
+    userId:     req.session.userId,
   });
 });
 

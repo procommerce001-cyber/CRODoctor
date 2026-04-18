@@ -7,15 +7,12 @@ if (!_apiBase) {
 }
 export const API_BASE = _apiBase;
 
-// Builds the Authorization header from the env token.
-// In production this env var is absent, so no header is injected —
-// production auth is handled by the Shopify session layer instead.
 export function apiHeaders(extra?: Record<string, string>): Record<string, string> {
-  const headers: Record<string, string> = { ...extra };
-  const token = process.env.NEXT_PUBLIC_DEV_BEARER_TOKEN;
-  if (token) headers['Authorization'] = `Bearer ${token}`;
-  return headers;
+  return { ...extra };
 }
+
+// All fetch calls must include credentials so the session cookie is sent.
+export const apiFetchOptions: RequestInit = { credentials: 'include' };
 
 // ---------------------------------------------------------------------------
 // Types — mirror the GET /dashboard/selection response shape exactly
@@ -131,9 +128,10 @@ export interface ApplyResponse {
 
 export async function applySelected(shop: string, selection: string[]): Promise<ApplyResponse> {
   const res = await fetch(`${API_BASE}/action-center/batch-apply-selected`, {
-    method:  'POST',
-    headers: apiHeaders({ 'Content-Type': 'application/json' }),
-    body:    JSON.stringify({ shop, selection }),
+    method:      'POST',
+    credentials: 'include',
+    headers:     apiHeaders({ 'Content-Type': 'application/json' }),
+    body:        JSON.stringify({ shop, selection }),
   });
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
@@ -210,7 +208,7 @@ export interface SuggestionCandidatesPayload {
 export async function fetchSuggestionCandidates(shop: string, issueId: string): Promise<SuggestionCandidatesPayload> {
   const res = await fetch(
     `${API_BASE}/metrics/store/suggestions/${encodeURIComponent(issueId)}/candidates?shop=${encodeURIComponent(shop)}`,
-    { cache: 'no-store', headers: apiHeaders() },
+    { cache: 'no-store', credentials: 'include', headers: apiHeaders() },
   );
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
@@ -222,7 +220,7 @@ export async function fetchSuggestionCandidates(shop: string, issueId: string): 
 export async function fetchStoreSuggestions(shop: string): Promise<StoreSuggestionsPayload> {
   const res = await fetch(
     `${API_BASE}/metrics/store/suggestions-status?shop=${encodeURIComponent(shop)}`,
-    { cache: 'no-store', headers: apiHeaders() },
+    { cache: 'no-store', credentials: 'include', headers: apiHeaders() },
   );
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
@@ -234,7 +232,7 @@ export async function fetchStoreSuggestions(shop: string): Promise<StoreSuggesti
 export async function fetchStoreSuggestionsWithStatus(shop: string): Promise<unknown> {
   const res = await fetch(
     `${API_BASE}/metrics/store/suggestions-status?shop=${encodeURIComponent(shop)}`,
-    { cache: 'no-store', headers: apiHeaders() },
+    { cache: 'no-store', credentials: 'include', headers: apiHeaders() },
   );
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
@@ -276,7 +274,7 @@ export interface ExecutionDetails {
 export async function fetchExecutionDetails(shop: string, executionId: string): Promise<ExecutionDetails> {
   const res = await fetch(
     `${API_BASE}/metrics/executions/${encodeURIComponent(executionId)}/details?shop=${encodeURIComponent(shop)}`,
-    { cache: 'no-store', headers: apiHeaders() },
+    { cache: 'no-store', credentials: 'include', headers: apiHeaders() },
   );
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
@@ -288,7 +286,7 @@ export async function fetchExecutionDetails(shop: string, executionId: string): 
 export async function fetchDashboard(shop: string): Promise<DashboardPayload> {
   const res = await fetch(
     `${API_BASE}/dashboard/selection?shop=${encodeURIComponent(shop)}`,
-    { cache: 'no-store', headers: apiHeaders() }
+    { cache: 'no-store', credentials: 'include', headers: apiHeaders() }
   );
   if (!res.ok) throw new Error(`Dashboard fetch failed: ${res.status}`);
   return res.json();
@@ -320,7 +318,7 @@ export interface TopAction {
 export async function fetchTopActions(shop: string): Promise<TopAction[]> {
   const res = await fetch(
     `${API_BASE}/decision-engine/top-actions?shop=${encodeURIComponent(shop)}`,
-    { cache: 'no-store', headers: apiHeaders() }
+    { cache: 'no-store', credentials: 'include', headers: apiHeaders() }
   );
   if (!res.ok) return [];
   const data = await res.json();
@@ -341,7 +339,7 @@ export interface EarlySignal {
 export async function fetchEarlySignal(shop: string, productId: string): Promise<EarlySignal> {
   const res = await fetch(
     `${API_BASE}/decision-engine/early-signal?shop=${encodeURIComponent(shop)}&productId=${encodeURIComponent(productId)}`,
-    { cache: 'no-store', headers: apiHeaders() }
+    { cache: 'no-store', credentials: 'include', headers: apiHeaders() }
   );
   if (!res.ok) return { signal: 'collecting', orderCountChange: null, revenueChange: null, unitsSoldChange: null };
   return res.json();
@@ -351,9 +349,10 @@ export async function executeAction(shop: string, actionKey: string): Promise<st
   const res = await fetch(
     `${API_BASE}/decision-engine/actions/execute?shop=${encodeURIComponent(shop)}`,
     {
-      method:  'POST',
-      headers: apiHeaders({ 'Content-Type': 'application/json' }),
-      body:    JSON.stringify({ actionKey }),
+      method:      'POST',
+      credentials: 'include',
+      headers:     apiHeaders({ 'Content-Type': 'application/json' }),
+      body:        JSON.stringify({ actionKey }),
     }
   );
   if (!res.ok) {
@@ -377,7 +376,7 @@ export interface ExecutionResult {
 export async function fetchExecutionResults(shop: string, executionId: string): Promise<ExecutionResult | null> {
   const res = await fetch(
     `${API_BASE}/metrics/executions/${encodeURIComponent(executionId)}/results?shop=${encodeURIComponent(shop)}`,
-    { cache: 'no-store', headers: apiHeaders() }
+    { cache: 'no-store', credentials: 'include', headers: apiHeaders() }
   );
   if (!res.ok) return null;
   const data = await res.json();
@@ -410,7 +409,7 @@ export interface RevenueDashboardData {
 export async function fetchRevenueDashboard(shop: string): Promise<RevenueDashboardData | null> {
   const res = await fetch(
     `${API_BASE}/metrics/revenue-dashboard?shop=${encodeURIComponent(shop)}`,
-    { cache: 'no-store', headers: apiHeaders() }
+    { cache: 'no-store', credentials: 'include', headers: apiHeaders() }
   );
   if (!res.ok) return null;
   const data = await res.json();

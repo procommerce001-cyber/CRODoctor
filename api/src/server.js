@@ -2,9 +2,11 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const crypto = require('crypto');
+const session = require('express-session');
+const PgSession = require('connect-pg-simple')(session);
 const { PrismaClient } = require('@prisma/client');
 const { fetchProducts, fetchOrders } = require('./services/shopify.service');
-const { makeRequireAuth }            = require('./lib/auth-middleware');
+const { requireSession }             = require('./lib/auth-middleware');
 const { startImpactWindowScheduler } = require('./scheduler/impact-window.scheduler');
 const { startDeltaSyncScheduler }    = require('./scheduler/delta-sync.scheduler');
 const webhooksRouter       = require('./routes/webhooks.routes');
@@ -24,64 +26,8 @@ const prisma = new PrismaClient({
 app.set('prisma', prisma);
 const PORT = process.env.PORT || 3000;
 
-// ---------------------------------------------------------------------------
-// Shopify OAuth config — sourced from environment, never hardcoded
-// ---------------------------------------------------------------------------
-const SHOPIFY_CLIENT_ID     = process.env.SHOPIFY_CLIENT_ID;
-const SHOPIFY_CLIENT_SECRET = process.env.SHOPIFY_CLIENT_SECRET;
-const SHOPIFY_SCOPES        = process.env.SHOPIFY_SCOPES || 'read_products';
+const APP_BASE_URL = (process.env.APP_BASE_URL || '').replace(/\/$/, '');
 
-// APP_BASE_URL is the publicly reachable root of this server (e.g. your ngrok
-// tunnel URL).  The redirect URI is always derived from it so the host in the
-// OAuth request and the host registered in the Shopify App Dashboard are
-// guaranteed to match.
-// Strip any accidental trailing slash once, at load time.
-const APP_BASE_URL         = (process.env.APP_BASE_URL || '').replace(/\/$/, '');
-const SHOPIFY_REDIRECT_URI = `${APP_BASE_URL}/auth/shopify/callback`;
-
-// ---------------------------------------------------------------------------
-// Startup strict validation
-// ---------------------------------------------------------------------------
-
-// Hard-stop: localhost can never satisfy Shopify's host-matching requirement.
-if (APP_BASE_URL && /localhost|127\.0\.0\.1/.test(APP_BASE_URL)) {
-  console.error('FATAL: APP_BASE_URL must be a public URL (ngrok). "localhost" is not allowed by Shopify.');
-  process.exit(1);
-}
-
-// Derive the host portion for comparison checks.
-let _appHost = '';
-try {
-  _appHost = APP_BASE_URL ? new URL(APP_BASE_URL).host : '';
-} catch {
-  console.error('FATAL: APP_BASE_URL is not a valid URL:', APP_BASE_URL);
-  process.exit(1);
-}
-
-const _redirectHost = SHOPIFY_REDIRECT_URI
-  ? new URL(SHOPIFY_REDIRECT_URI).host
-  : '';
-
-const _hostMatch     = _appHost && _redirectHost && _appHost === _redirectHost;
-const _isHttps       = APP_BASE_URL.startsWith('https://');
-const _noTrailingSlash = !APP_BASE_URL.endsWith('/');
-
-console.log('');
-console.log('=== SHOPIFY DEBUG ===');
-console.log('APP_BASE_URL  :', APP_BASE_URL  || '(NOT SET — server will not work)');
-console.log('redirect_uri  :', SHOPIFY_REDIRECT_URI || '(EMPTY)');
-console.log('authorize_url : https://<shop>/admin/oauth/authorize?client_id=...&redirect_uri=' + encodeURIComponent(SHOPIFY_REDIRECT_URI));
-console.log('');
-console.log('MATCH STATUS:');
-console.log('  APP_BASE_URL vs redirect_uri host    :', _hostMatch   ? 'OK' : 'FAIL — hosts differ');
-console.log('  Protocol is https                    :', _isHttps     ? 'OK' : 'FAIL — must be https://');
-console.log('  No trailing slash in APP_BASE_URL    :', _noTrailingSlash ? 'OK' : 'FAIL — remove trailing /');
-console.log('');
-console.log('Paste these EXACTLY into Shopify Dev Dashboard:');
-console.log('  App URL                  :', APP_BASE_URL        || '(NOT SET)');
-console.log('  Allowed redirection URL  :', SHOPIFY_REDIRECT_URI || '(EMPTY)');
-console.log('=====================');
-console.log('');
 
 // ---------------------------------------------------------------------------
 // Safe store serializer — never expose the access token to API clients
@@ -97,47 +43,6 @@ function safeStore(store) {
   };
 }
 
-// In-memory nonce store — good enough for a single-process MVP.
-// Replace with Redis / DB sessions before running multiple server instances.
-const pendingOAuthStates = new Map(); // state -> { shop, expiresAt }
-const OAUTH_STATE_TTL_MS = 10 * 60 * 1000; // 10 minutes
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-/**
- * Verify the HMAC signature that Shopify appends to OAuth callback URLs.
- * Shopify docs: https://shopify.dev/docs/apps/build/authentication-authorization/oauth/implement-oauth
- */
-function verifyShopifyHmac(query) {
-  const { hmac, ...rest } = query;
-  if (!hmac) return false;
-
-  const message = Object.keys(rest)
-    .sort()
-    .map(k => `${k}=${rest[k]}`)
-    .join('&');
-
-  const digest = crypto
-    .createHmac('sha256', SHOPIFY_CLIENT_SECRET)
-    .update(message)
-    .digest('hex');
-
-  // timingSafeEqual requires equal-length buffers — mismatched length means bad input, not a throw
-  const digestBuf = Buffer.from(digest);
-  const hmacBuf   = Buffer.from(hmac);
-  if (digestBuf.length !== hmacBuf.length) return false;
-  return crypto.timingSafeEqual(digestBuf, hmacBuf);
-}
-
-/**
- * Validate that the shop hostname looks like a real myshopify.com domain.
- * This prevents open-redirect and SSRF attacks.
- */
-function isValidShopDomain(shop) {
-  return /^[a-zA-Z0-9][a-zA-Z0-9\-]*\.myshopify\.com$/.test(shop);
-}
 
 // ---------------------------------------------------------------------------
 // CORS — restrict to configured frontend origin(s) only
@@ -155,22 +60,32 @@ app.use(cors({
 }));
 
 // ---------------------------------------------------------------------------
-// Auth middleware
-// Requires a valid Bearer token on all protected routes.
-// Set API_SECRET in .env. Requests without it receive 401.
-// Exempt: /health, /auth/shopify, /auth/shopify/callback
-// ---------------------------------------------------------------------------
-const requireAuth = makeRequireAuth(process.env.API_SECRET);
-
-// ---------------------------------------------------------------------------
-// Middleware — order matters: CORS → JSON → Auth
+// Middleware — order matters: CORS → Session → JSON → Auth
 // ---------------------------------------------------------------------------
 // Webhook router must be mounted before express.json() so the raw Buffer body
 // is intact for Shopify HMAC verification. It handles its own body parsing.
 app.use('/webhooks', webhooksRouter);
 
+app.use(session({
+  store: new PgSession({
+    conString: process.env.DATABASE_URL,
+    tableName: 'session',
+    pruneSessionInterval: 60 * 60, // prune expired sessions every hour
+  }),
+  name:   'cro.sid',
+  secret: process.env.SESSION_SECRET || 'dev-fallback-secret',
+  resave: false,
+  saveUninitialized: false,
+  cookie: {
+    httpOnly: true,
+    secure:   process.env.NODE_ENV === 'production',
+    sameSite: 'lax',
+    maxAge:   7 * 24 * 60 * 60 * 1000, // 7 days
+  },
+}));
+
 app.use(express.json());
-app.use(requireAuth);
+app.use(requireSession);
 
 // ---------------------------------------------------------------------------
 // Existing endpoints — unchanged
@@ -245,164 +160,7 @@ app.post('/connect-shopify', async (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
-// Shopify OAuth endpoints (new)
-// ---------------------------------------------------------------------------
-
-/**
- * Step 1 — Initiate OAuth.
- * Usage: redirect the merchant's browser to GET /auth/shopify?shop=yourstore.myshopify.com
- */
-app.get('/auth/shopify', (req, res) => {
-  if (!SHOPIFY_CLIENT_ID || !SHOPIFY_CLIENT_SECRET) {
-    return res.status(503).json({
-      error: 'SHOPIFY_CLIENT_ID and SHOPIFY_CLIENT_SECRET are not configured on this server.'
-    });
-  }
-
-  const { shop } = req.query;
-
-  if (!shop || !isValidShopDomain(shop)) {
-    return res.status(400).json({ error: 'Missing or invalid shop parameter (must be *.myshopify.com)' });
-  }
-
-  // Generate a cryptographically random state nonce to prevent CSRF
-  const state = crypto.randomBytes(16).toString('hex');
-  pendingOAuthStates.set(state, {
-    shop,
-    expiresAt: Date.now() + OAUTH_STATE_TTL_MS
-  });
-
-  const authUrl = new URL(`https://${shop}/admin/oauth/authorize`);
-  authUrl.searchParams.set('client_id', SHOPIFY_CLIENT_ID);
-  authUrl.searchParams.set('scope', SHOPIFY_SCOPES);
-  authUrl.searchParams.set('redirect_uri', SHOPIFY_REDIRECT_URI);
-  authUrl.searchParams.set('state', state);
-
-  // Per-request strict debug — print exactly what is being sent to Shopify.
-  const reqHost = req.headers.host || '(unknown)';
-  const tunnelMismatch = _appHost && reqHost !== _appHost;
-
-  console.log('');
-  console.log('=== SHOPIFY DEBUG ===');
-  console.log('APP_BASE_URL  :', APP_BASE_URL);
-  console.log('redirect_uri  :', SHOPIFY_REDIRECT_URI);
-  console.log('authorize_url :', authUrl.toString());
-  console.log('');
-  console.log('Incoming request host :', reqHost);
-  console.log('APP_BASE_URL host     :', _appHost);
-  if (tunnelMismatch) {
-    console.warn('WARNING: request host differs from APP_BASE_URL host.');
-    console.warn('  → Your ngrok URL likely changed. Update APP_BASE_URL in .env,');
-    console.warn('    update Shopify dashboard, then restart the server.');
-  }
-  console.log('');
-  console.log('MATCH STATUS:');
-  console.log('  APP_BASE_URL vs redirect_uri:', _hostMatch ? 'OK' : 'FAIL');
-  console.log('  Request host vs APP_BASE_URL:', tunnelMismatch ? `MISMATCH (req=${reqHost} app=${_appHost})` : 'OK');
-  console.log('=====================');
-  console.log('');
-
-  res.redirect(authUrl.toString());
-});
-
-/**
- * Step 2 — OAuth callback.
- * Shopify redirects here with ?code=...&hmac=...&shop=...&state=...
- * We verify the HMAC, exchange the code for a permanent access token, and save it.
- */
-app.get('/auth/shopify/callback', async (req, res) => {
-  if (!SHOPIFY_CLIENT_ID || !SHOPIFY_CLIENT_SECRET) {
-    return res.status(503).json({
-      error: 'Shopify credentials are not configured on this server.'
-    });
-  }
-
-  const { shop, code, state } = req.query;
-
-  // 1. Validate shop domain
-  if (!shop || !isValidShopDomain(shop)) {
-    return res.status(400).json({ error: 'Invalid or missing shop parameter.' });
-  }
-
-  // 2. Validate state nonce (CSRF protection)
-  const pending = pendingOAuthStates.get(state);
-  if (!pending) {
-    return res.status(403).json({ error: 'Invalid or expired state parameter.' });
-  }
-  if (pending.shop !== shop) {
-    return res.status(403).json({ error: 'State/shop mismatch.' });
-  }
-  if (Date.now() > pending.expiresAt) {
-    pendingOAuthStates.delete(state);
-    return res.status(403).json({ error: 'OAuth state has expired. Please restart the install flow.' });
-  }
-  pendingOAuthStates.delete(state); // one-time use
-
-  // 3. Verify HMAC signature from Shopify
-  if (!verifyShopifyHmac(req.query)) {
-    return res.status(403).json({ error: 'HMAC verification failed.' });
-  }
-
-  // 4. Exchange authorization code for permanent access token
-  let accessToken;
-  try {
-    const tokenRes = await fetch(`https://${shop}/admin/oauth/access_token`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        client_id:     SHOPIFY_CLIENT_ID,
-        client_secret: SHOPIFY_CLIENT_SECRET,
-        code
-      })
-    });
-
-    if (!tokenRes.ok) {
-      const text = await tokenRes.text();
-      console.error('Shopify token exchange failed:', tokenRes.status, text);
-      return res.status(502).json({ error: 'Token exchange with Shopify failed.', details: text });
-    }
-
-    const tokenData = await tokenRes.json();
-    accessToken = tokenData.access_token;
-
-    if (!accessToken) {
-      return res.status(502).json({ error: 'Shopify returned no access_token.' });
-    }
-  } catch (err) {
-    console.error('TOKEN EXCHANGE ERROR:', err);
-    return res.status(500).json({ error: err.message });
-  }
-
-  // 5. Fetch shop info and persist the store + token
-  try {
-    const shopifyRes = await fetch(`https://${shop}/admin/api/2023-10/shop.json`, {
-      headers: { 'X-Shopify-Access-Token': accessToken }
-    });
-
-    if (!shopifyRes.ok) {
-      const text = await shopifyRes.text();
-      return res.status(502).json({ error: 'Failed to fetch shop info after auth.', details: text });
-    }
-
-    const { shop: shopData } = await shopifyRes.json();
-
-    const store = await prisma.store.upsert({
-      where: { shopDomain: shop },
-      update: { name: shopData.name, accessToken },
-      create: { name: shopData.name, shopDomain: shop, accessToken }
-    });
-
-    res.json({ message: 'Shop connected successfully via OAuth.', store: safeStore(store) });
-  } catch (err) {
-    console.error('POST-AUTH STORE SAVE ERROR:', err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// ---------------------------------------------------------------------------
 // Debug endpoints — non-production only
-// Both endpoints are already protected by requireAuth above.
-// Additionally blocked entirely in NODE_ENV=production.
 // ---------------------------------------------------------------------------
 
 function requireDev(_req, res, next) {
@@ -412,50 +170,6 @@ function requireDev(_req, res, next) {
   next();
 }
 
-/**
- * GET /debug/shopify-config
- *
- * Returns the exact values this server will use for OAuth.
- * Does NOT expose the client secret.
- * Protected by requireAuth + blocked in production.
- */
-app.get('/debug/shopify-config', requireDev, (_req, res) => {
-  // Build a sample authorize URL using a placeholder shop name so you can
-  // inspect the full shape of the URL without triggering a real OAuth flow.
-  const sampleShop = 'YOUR-STORE.myshopify.com';
-  const sampleUrl  = new URL(`https://${sampleShop}/admin/oauth/authorize`);
-  sampleUrl.searchParams.set('client_id',    SHOPIFY_CLIENT_ID  || '(NOT SET)');
-  sampleUrl.searchParams.set('scope',        SHOPIFY_SCOPES);
-  sampleUrl.searchParams.set('redirect_uri', SHOPIFY_REDIRECT_URI);
-  sampleUrl.searchParams.set('state',        'SAMPLE_STATE_NONCE');
-
-  res.json({
-    APP_BASE_URL:        APP_BASE_URL        || null,
-    redirect_uri:        SHOPIFY_REDIRECT_URI || null,
-    scopes:              SHOPIFY_SCOPES,
-    client_id_prefix:    SHOPIFY_CLIENT_ID   ? `${SHOPIFY_CLIENT_ID.slice(0, 6)}…` : null,
-    full_authorize_url:  sampleUrl.toString(),
-    dashboard_must_match: {
-      app_url:              APP_BASE_URL        || '(NOT SET)',
-      allowed_redirect_url: SHOPIFY_REDIRECT_URI || '(EMPTY)',
-    },
-    warnings: [
-      ...(!APP_BASE_URL          ? ['APP_BASE_URL is not set']         : []),
-      ...(!SHOPIFY_CLIENT_ID     ? ['SHOPIFY_CLIENT_ID is not set']    : []),
-      ...(!SHOPIFY_CLIENT_SECRET ? ['SHOPIFY_CLIENT_SECRET is not set']: []),
-      ...(APP_BASE_URL && APP_BASE_URL.includes('localhost')
-        ? ['APP_BASE_URL contains "localhost" — Shopify requires a public URL'] : []),
-      ...(APP_BASE_URL && APP_BASE_URL.endsWith('/')
-        ? ['APP_BASE_URL has a trailing slash — this will cause a double-slash in redirect_uri'] : []),
-      ...(APP_BASE_URL && APP_BASE_URL.startsWith('http://')
-        ? ['APP_BASE_URL uses http:// — Shopify requires https://'] : []),
-    ],
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Debug endpoint
-// ---------------------------------------------------------------------------
 
 app.get('/debug/store', requireDev, async (req, res) => {
   const { shop } = req.query;
