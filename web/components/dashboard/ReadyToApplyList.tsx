@@ -119,7 +119,7 @@ export default function ReadyToApplyList({
 
       {/* Table */}
       {items.length === 0 ? (
-        <p style={styles.empty}>No actions ready to apply.</p>
+        <p style={styles.empty}>No approved fixes queued. Open a product, review its suggested actions, and approve one to see it here.</p>
       ) : (
         <div style={styles.table}>
           <div style={styles.headerRow}>

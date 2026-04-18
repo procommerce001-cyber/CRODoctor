@@ -76,6 +76,7 @@ export default function RecentActivityList({ items, selectedExecId, onSelect }: 
             onClick={() => onSelect?.(item.executionId)}
           >
             <div style={styles.left}>
+              {item.productTitle && <span style={styles.productTitle}>{item.productTitle}</span>}
               <span style={styles.issueId}>{issueLabel(item.issueId)}</span>
               {item.insight && <span style={styles.insight}>{item.insight}</span>}
             </div>
@@ -117,6 +118,7 @@ const styles: Record<string, React.CSSProperties> = {
   rowSelected: { background: '#eff6ff', borderLeft: '3px solid #2563eb' },
   left:        { display: 'flex', flexDirection: 'column', gap: 3, flex: 1 },
   right:       { display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4, flexShrink: 0 },
+  productTitle:{ fontSize: 12, color: '#6b7280', marginBottom: 1 },
   issueId:     { fontSize: 13, fontWeight: 600, color: '#111827' },
   insight:     { fontSize: 12, color: '#6b7280' },
   statusBadge: { fontSize: 11, fontWeight: 600, textTransform: 'uppercase' as const },

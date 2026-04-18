@@ -504,6 +504,14 @@ async function getStoreExecutionFeed(prisma, shop) {
     select:  { id: true, productId: true, issueId: true, status: true, createdAt: true },
   });
 
+  // Batch-load product titles in one query
+  const productIds = [...new Set(executions.map(e => e.productId))];
+  const products   = await prisma.product.findMany({
+    where:  { id: { in: productIds } },
+    select: { id: true, title: true },
+  });
+  const titleMap = new Map(products.map(p => [p.id, p.title]));
+
   const items = [];
 
   for (const exec of executions) {
@@ -516,6 +524,7 @@ async function getStoreExecutionFeed(prisma, shop) {
     items.push({
       executionId:            exec.id,
       productId:              exec.productId,
+      productTitle:           titleMap.get(exec.productId) ?? null,
       issueId:                exec.issueId,
       status:                 exec.status,
       createdAt:              exec.createdAt,

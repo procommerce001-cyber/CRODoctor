@@ -83,6 +83,7 @@ export interface TopWin {
 export interface ActivityItem {
   executionId: string;
   productId: string;
+  productTitle: string | null;
   issueId: string;
   status: string;
   createdAt: string;
