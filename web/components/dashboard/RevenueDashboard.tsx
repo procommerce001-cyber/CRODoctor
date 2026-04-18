@@ -201,6 +201,8 @@ export default function RevenueDashboard({ shop }: Props) {
     return () => clearInterval(id);
   }, [shop]);
 
+  const animatedRevenue = useCountUp(data?.totalRevenueImpact ?? 0);
+
   if (loading) return <div style={s.skeleton} />;
 
   if (error || !data) {
@@ -230,8 +232,6 @@ export default function RevenueDashboard({ shop }: Props) {
     totalRevenueImpact, ordersGrowthPercent, unitsSoldGrowthPercent,
     executionsCount, measuredCount, avgRevenuePerExecution, recentImpacts, topWins,
   } = data;
-
-  const animatedRevenue = useCountUp(totalRevenueImpact);
 
   return (
     <section style={s.wrap}>

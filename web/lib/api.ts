@@ -7,8 +7,11 @@ if (!_apiBase) {
 }
 export const API_BASE = _apiBase;
 
+const _devToken = process.env.NEXT_PUBLIC_DEV_BEARER_TOKEN;
+
 export function apiHeaders(extra?: Record<string, string>): Record<string, string> {
-  return { ...extra };
+  const auth = _devToken ? { Authorization: `Bearer ${_devToken}` } : {};
+  return { ...auth, ...extra };
 }
 
 // All fetch calls must include credentials so the session cookie is sent.
