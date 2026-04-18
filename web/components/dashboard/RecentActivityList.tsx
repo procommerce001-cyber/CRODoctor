@@ -25,16 +25,21 @@ export default function RecentActivityList({ items, selectedExecId, onSelect }: 
   const [rollbackError,   setRollbackError]   = useState<Record<string, string>>({});
   const [rollbackSuccess, setRollbackSuccess] = useState<Record<string, boolean>>({});
 
-  const handleRollback = async (executionId: string) => {
+  const handleRollback = async (item: ActivityItem) => {
+    const { executionId, productId, issueId } = item;
     setIsRollingBack(prev  => ({ ...prev,  [executionId]: true }));
     setRollbackError(prev  => ({ ...prev,  [executionId]: '' }));
     setRollbackSuccess(prev => ({ ...prev, [executionId]: false }));
     try {
-      const res = await fetch(`${API_BASE}/action-center/rollback`, {
-        method:  'POST',
-        headers: apiHeaders({ 'Content-Type': 'application/json' }),
-        body:    JSON.stringify({ executionId, shop: SHOP }),
-      });
+      const res = await fetch(
+        `${API_BASE}/action-center/products/${encodeURIComponent(productId)}/rollback`,
+        {
+          method:      'POST',
+          credentials: 'include',
+          headers:     apiHeaders({ 'Content-Type': 'application/json' }),
+          body:        JSON.stringify({ shop: SHOP, issueId }),
+        },
+      );
       if (!res.ok) throw new Error(await res.text());
       setRollbackError(prev  => ({ ...prev,  [executionId]: '' }));
       setRollbackSuccess(prev => ({ ...prev, [executionId]: true }));
@@ -84,7 +89,7 @@ export default function RecentActivityList({ items, selectedExecId, onSelect }: 
                   <button
                     style={styles.rollbackBtn}
                     disabled={isRollingBack[item.executionId] || !!rollbackSuccess[item.executionId]}
-                    onClick={(e) => { e.stopPropagation(); handleRollback(item.executionId); }}
+                    onClick={(e) => { e.stopPropagation(); handleRollback(item); }}
                   >
                     {isRollingBack[item.executionId] ? 'Rolling back...' : rollbackSuccess[item.executionId] ? 'Rolled back' : 'Rollback'}
                   </button>

@@ -236,6 +236,7 @@ export default function DashboardClient({ data }: Props) {
       <StoreOverview overview={data.overview} />
 
       <ReadyToApplyList
+        shop={SHOP}
         items={data.review.groups.readyToApply}
         selected={selected}
         isApplying={isApplying}

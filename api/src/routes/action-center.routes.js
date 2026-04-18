@@ -305,7 +305,16 @@ router.post('/batch-apply-selected', async (req, res) => {
         skippedCount++; continue;
       }
 
-      // 4. Apply — gate enforced inside applyContentChange
+      // 4. Before-snapshot — must run before apply so it cannot include post-apply orders
+      let beforeSnapshotId = null;
+      try {
+        const beforeSnap = await captureWindowedBeforeSnapshot(prisma, productId);
+        beforeSnapshotId  = beforeSnap.id;
+      } catch (snapErr) {
+        console.warn('[ActionCenter] batch-apply-selected before-snapshot failed (non-fatal):', snapErr.message);
+      }
+
+      // 5. Apply — gate enforced inside applyContentChange
       const applyResult = await applyContentChange(prisma, store, freshProduct, actionItem);
 
       if (applyResult.applied) {
@@ -315,6 +324,17 @@ router.post('/batch-apply-selected', async (req, res) => {
           orderBy: { createdAt: 'desc' },
           select:  { id: true },
         });
+        // Link before-snapshot to this execution so after-window delta is accurate
+        if (execution?.id && beforeSnapshotId) {
+          try {
+            await prisma.productMetricsSnapshot.update({
+              where: { id: beforeSnapshotId },
+              data:  { baselineExecutionId: execution.id },
+            });
+          } catch (linkErr) {
+            console.warn('[ActionCenter] batch-apply-selected snapshot link failed (non-fatal):', linkErr.message);
+          }
+        }
         results.push({
           selectionKey: key, productId, issueId,
           status: 'applied', reason: null,
@@ -804,6 +824,42 @@ router.post('/products/:id/apply-gate', async (req, res) => {
   } catch (err) {
     console.error('[ActionCenter] POST /products/:id/apply-gate error:', err.message);
     res.status(500).json({ error: 'Internal error during apply gate check.' });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// POST /action-center/products/:id/content-preview
+// Dry-run preview of a single content_change execution.
+// Calls previewContentExecution(preview=true) — no Shopify write, no apply.
+// Logs a "previewed" audit row (service-level behaviour, not a live apply).
+//
+// Body: { shop: string, issueId: string, selectedVariantIndex?: number }
+// ---------------------------------------------------------------------------
+router.post('/products/:id/content-preview', async (req, res) => {
+  const prisma = req.app.get('prisma');
+  try {
+    const { shop, issueId, selectedVariantIndex } = req.body;
+
+    if (!shop)    return res.status(400).json({ error: 'shop is required' });
+    if (!issueId) return res.status(400).json({ error: 'issueId is required' });
+
+    const store = await prisma.store.findUnique({ where: { shopDomain: shop } });
+    if (!store) return res.status(404).json({ error: 'Store not found.' });
+
+    const result = await previewContentExecution(prisma, {
+      storeId:              store.id,
+      productId:            req.params.id,
+      issueId,
+      selectedVariantIndex: typeof selectedVariantIndex === 'number' ? selectedVariantIndex : 0,
+      preview:              true,
+    });
+
+    res.json(result);
+  } catch (err) {
+    const status = err.statusCode ?? 500;
+    if (status !== 500) return res.status(status).json({ error: err.message });
+    console.error('[ActionCenter] POST /products/:id/content-preview error:', err.message);
+    res.status(500).json({ error: 'Internal error during content preview.' });
   }
 });
 

@@ -23,15 +23,20 @@ export default function ExecutionDetailsPanel({ executionId, onClose }: Props) {
   const [rollbackSuccess, setRollbackSuccess] = useState(false);
 
   const handleRollback = async () => {
+    if (!data) return;
     setIsRollingBack(true);
     setRollbackError(null);
     setRollbackSuccess(false);
     try {
-      const res = await fetch(`${API_BASE}/action-center/rollback`, {
-        method:  'POST',
-        headers: apiHeaders({ 'Content-Type': 'application/json' }),
-        body:    JSON.stringify({ executionId, shop: SHOP }),
-      });
+      const res = await fetch(
+        `${API_BASE}/action-center/products/${encodeURIComponent(data.productId)}/rollback`,
+        {
+          method:      'POST',
+          credentials: 'include',
+          headers:     apiHeaders({ 'Content-Type': 'application/json' }),
+          body:        JSON.stringify({ shop: SHOP, issueId: data.issueId }),
+        },
+      );
       if (!res.ok) throw new Error(await res.text());
       setRollbackSuccess(true);
       router.refresh();

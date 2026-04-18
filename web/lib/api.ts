@@ -388,6 +388,47 @@ export async function fetchExecutionResults(shop: string, executionId: string): 
 }
 
 // ---------------------------------------------------------------------------
+// Content preview
+// ---------------------------------------------------------------------------
+
+export interface ContentPreview {
+  productId:           string;
+  issueId:             string;
+  currentContent:      string | null;
+  proposedContent:     string | null;
+  selectedVariantIndex: number;
+  patchMode:           string | null;
+  anchorUsed:          string | null;
+  patchSafety:         string | null;
+  failureRisk:         string | null;
+  diffSummary:         { operation: string; currentWords: number; proposedWords: number; note: string } | null;
+  eligibleToApply:     boolean;
+  blockReason:         string | null;
+}
+
+export async function fetchContentPreview(
+  shop: string,
+  productId: string,
+  issueId: string,
+  selectedVariantIndex = 0,
+): Promise<ContentPreview> {
+  const res = await fetch(
+    `${API_BASE}/action-center/products/${encodeURIComponent(productId)}/content-preview`,
+    {
+      method:      'POST',
+      credentials: 'include',
+      headers:     apiHeaders({ 'Content-Type': 'application/json' }),
+      body:        JSON.stringify({ shop, issueId, selectedVariantIndex }),
+    },
+  );
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error ?? `Preview failed: ${res.status}`);
+  }
+  return res.json();
+}
+
+// ---------------------------------------------------------------------------
 // Revenue Dashboard
 // ---------------------------------------------------------------------------
 
