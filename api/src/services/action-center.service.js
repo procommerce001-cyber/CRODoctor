@@ -17,6 +17,7 @@ const { toCroProduct }        = require('./cro/formatters');
 const { APPLY_TYPE_MAP }      = require('./cro/constants');
 const { fetchOrderMetrics, updateProductDescription } = require('./shopify-admin.service');
 const { classifyExecution }   = require('./cro/classifyExecution');
+const { buildResultContent }  = require('./content-execution.service');
 
 // ---------------------------------------------------------------------------
 // V1_RULE_ALLOWLIST
@@ -1012,8 +1013,14 @@ async function applyContentChange(prisma, store, rawProduct, actionItem) {
     return { applied: false, skipped: true, reason: 'already applied' };
   }
 
-  // 2. Build result
-  const resultContent = mergeProposedContent(currentContent, proposedContent);
+  // 2. Build result using the same PATCH_MODE_REGISTRY pipeline as preview,
+  //    so apply always produces exactly what the merchant previewed.
+  let resultContent;
+  try {
+    resultContent = buildResultContent(actionItem.issueId, currentContent, proposedContent);
+  } catch (err) {
+    return { applied: false, error: `Patch failed: ${err.message}` };
+  }
 
   // 3. Shopify write
   try {

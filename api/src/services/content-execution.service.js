@@ -923,8 +923,36 @@ async function getExecutionHistory(prisma, storeId, productId) {
   return { productId, storeId, total: rows.length, executions: rows };
 }
 
+// ---------------------------------------------------------------------------
+// buildResultContent
+//
+// Computes the full merged bodyHtml for a content_change apply using the same
+// PATCH_MODE_REGISTRY pipeline as preview. Called by applyContentChange so
+// that preview and apply always produce identical output.
+//
+// Returns the merged HTML string, or throws with a descriptive message when no
+// safe patch mode is available (caller should abort the apply and surface the
+// error rather than falling back to a destructive merge).
+// ---------------------------------------------------------------------------
+function buildResultContent(issueId, currentContent, proposedContent) {
+  const plan = detectPatchMode(issueId, currentContent, null);
+  if (!plan.mode) {
+    const err = new Error(plan.error || 'No viable patch mode for this issue.');
+    err.patchError = true;
+    throw err;
+  }
+  const validation = validatePatch(plan, currentContent, proposedContent);
+  if (!validation.valid) {
+    const err = new Error(validation.error || 'Patch validation failed.');
+    err.patchError = true;
+    throw err;
+  }
+  return applyPatch(plan, currentContent, proposedContent, issueId);
+}
+
 module.exports = {
   previewContentExecution,
   previewRollback,
   getExecutionHistory,
+  buildResultContent,
 };
