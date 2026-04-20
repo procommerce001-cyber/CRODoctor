@@ -46,6 +46,14 @@ const { APPLY_TYPE_MAP } = require('./cro/constants');
 // AnchorResult: { found: bool, position?: number, anchorText?: string, preview?: string }
 // ---------------------------------------------------------------------------
 const PATCH_MODE_REGISTRY = {
+  no_description: {
+    field: 'bodyHtml',
+    preferredModes: ['replace_full_body'],
+    wrapContent(text) {
+      return `<p>${text}</p>`;
+    },
+  },
+
   weak_desire_creation: {
     field: 'bodyHtml',
 
@@ -103,6 +111,154 @@ const PATCH_MODE_REGISTRY = {
             };
           }
         }
+      }
+
+      return { found: false };
+    },
+
+    wrapContent(text) {
+      return `<p>${text}</p>`;
+    },
+  },
+
+  no_risk_reversal: {
+    field: 'bodyHtml',
+    // Additive-only. No replace_full_body — adds reassurance, never overwrites description.
+    // No anchor found → detectPatchMode returns null → eligibleToApply: false (graceful block).
+    preferredModes: ['insert_after_anchor'],
+
+    findAnchor(html) {
+      if (!html) return { found: false };
+
+      // Append guarantee after the last closing block element.
+      const blockTags = ['</p>', '</ul>', '</ol>', '</div>', '</h6>', '</h5>', '</h4>', '</h3>', '</h2>', '</h1>', '</blockquote>'];
+      let lastPos = -1;
+      let lastTag = null;
+
+      for (const tag of blockTags) {
+        const idx = html.lastIndexOf(tag);
+        if (idx > lastPos) { lastPos = idx; lastTag = tag; }
+      }
+
+      if (lastPos !== -1) {
+        const pos = lastPos + lastTag.length;
+        return {
+          found:      true,
+          position:   pos,
+          anchorText: lastTag,
+          preview:    html.slice(Math.max(0, lastPos - 80), pos),
+        };
+      }
+
+      return { found: false };
+    },
+
+    wrapContent(text) {
+      return `<p>${text}</p>`;
+    },
+  },
+
+  no_trust_bullets: {
+    field: 'bodyHtml',
+    // Additive-only. Appends a short <ul> reassurance block after the last block element.
+    // No anchor found → eligibleToApply: false (graceful block, same as no_risk_reversal).
+    preferredModes: ['insert_after_anchor'],
+
+    findAnchor(html) {
+      if (!html) return { found: false };
+
+      const blockTags = ['</p>', '</ul>', '</ol>', '</div>', '</h6>', '</h5>', '</h4>', '</h3>', '</h2>', '</h1>', '</blockquote>'];
+      let lastPos = -1;
+      let lastTag = null;
+
+      for (const tag of blockTags) {
+        const idx = html.lastIndexOf(tag);
+        if (idx > lastPos) { lastPos = idx; lastTag = tag; }
+      }
+
+      if (lastPos !== -1) {
+        const pos = lastPos + lastTag.length;
+        return {
+          found:      true,
+          position:   pos,
+          anchorText: lastTag,
+          preview:    html.slice(Math.max(0, lastPos - 80), pos),
+        };
+      }
+
+      return { found: false };
+    },
+
+    // generatedFix.bestGuess.content is already a <ul> — pass through as-is.
+    wrapContent(text) {
+      return text;
+    },
+  },
+
+  no_size_guide: {
+    field: 'bodyHtml',
+    // Additive-only. Appends size-guide block after the last block element.
+    // No anchor found → eligibleToApply: false (graceful block).
+    preferredModes: ['insert_after_anchor'],
+
+    findAnchor(html) {
+      if (!html) return { found: false };
+
+      const blockTags = ['</p>', '</ul>', '</ol>', '</div>', '</h6>', '</h5>', '</h4>', '</h3>', '</h2>', '</h1>', '</blockquote>'];
+      let lastPos = -1;
+      let lastTag = null;
+
+      for (const tag of blockTags) {
+        const idx = html.lastIndexOf(tag);
+        if (idx > lastPos) { lastPos = idx; lastTag = tag; }
+      }
+
+      if (lastPos !== -1) {
+        const pos = lastPos + lastTag.length;
+        return {
+          found:      true,
+          position:   pos,
+          anchorText: lastTag,
+          preview:    html.slice(Math.max(0, lastPos - 80), pos),
+        };
+      }
+
+      return { found: false };
+    },
+
+    // generatedFix.bestGuess.content is already structured HTML — pass through as-is.
+    wrapContent(text) {
+      return text;
+    },
+  },
+
+  description_too_short: {
+    field: 'bodyHtml',
+    // Append-only. Never fires replace_full_body — description_too_short requires
+    // existing content (check gates on bodyHtml present + < 200 text chars).
+    preferredModes: ['insert_after_anchor'],
+
+    findAnchor(html) {
+      if (!html) return { found: false };
+
+      // Append expansion block after the last closing block element.
+      const blockTags = ['</p>', '</ul>', '</ol>', '</div>', '</h6>', '</h5>', '</h4>', '</h3>', '</h2>', '</h1>', '</blockquote>'];
+      let lastPos = -1;
+      let lastTag = null;
+
+      for (const tag of blockTags) {
+        const idx = html.lastIndexOf(tag);
+        if (idx > lastPos) { lastPos = idx; lastTag = tag; }
+      }
+
+      if (lastPos !== -1) {
+        const pos = lastPos + lastTag.length;
+        return {
+          found:      true,
+          position:   pos,
+          anchorText: lastTag,
+          preview:    html.slice(Math.max(0, lastPos - 80), pos),
+        };
       }
 
       return { found: false };
@@ -613,7 +769,11 @@ async function previewContentExecution(prisma, {
     note: plan.mode === 'replace_full_body'
       ? 'Full description will be written (was empty or trivially short).'
       : plan.mode === 'insert_after_anchor'
-      ? `Desire block will be inserted after anchor "${plan.anchorUsed}". Existing content preserved.`
+      ? issueId === 'no_trust_bullets'
+        ? `Reassurance block will be appended after "${plan.anchorUsed}". Existing content preserved.`
+        : issueId === 'no_size_guide'
+        ? `Size guide block will be appended after "${plan.anchorUsed}". Existing content preserved.`
+        : `Content block will be inserted after anchor "${plan.anchorUsed}". Existing content preserved.`
       : `Previously applied block will be replaced with the new variant in-place.`,
   };
 

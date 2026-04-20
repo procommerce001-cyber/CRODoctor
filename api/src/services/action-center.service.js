@@ -30,6 +30,7 @@ const V1_RULE_ALLOWLIST = new Set([
   'no_description',         // highest confidence; trivially verifiable
   'description_too_short',  // objective threshold; clear merchant value
   'no_risk_reversal',       // high-confidence content gap; reversible
+  'no_trust_bullets',       // additive reassurance block; merchant-safe; content_change only
   'no_social_proof',        // common, detectable; content-only fix
   'no_urgency',             // detectable gap; clear insertion opportunity
   'low_inventory_unused',   // high-confidence signal; content addition only

@@ -76,6 +76,146 @@ function detectProductType(p) {
   return 'functional';
 }
 
+// ---------------------------------------------------------------------------
+// generateTrustBlock — deterministic guarantee copy for no_risk_reversal
+// Returns { bestGuess: { content }, variants: [{ content }, { content }] }
+//
+// ---------------------------------------------------------------------------
+function generateTrustBlock(product) {
+  const type = detectProductType(product);
+
+  // Neutral reassurance only — no invented refund/guarantee policies.
+  // Claims must be safe for any merchant regardless of their actual returns policy.
+  const a = type === 'health'
+    ? `Questions before you order? Our support team is here to help — reach us any time and we'll get back to you fast. Checkout is fully secured and your order is handled with care.`
+    : type === 'fashion'
+    ? `Not sure about sizing? Get in touch before you order and we'll help you find the right fit. Checkout is fully secured and every order is packed and dispatched with care.`
+    : `Shop with confidence — checkout is fully secured, orders are dispatched promptly, and our support team is available if you need anything before or after your purchase.`;
+
+  const b = type === 'health'
+    ? `Our team is on hand for any questions — before or after you order. Secure checkout, prompt dispatch, and real human support if you need it.`
+    : `Secure checkout. Prompt dispatch. Friendly support if anything comes up — just get in touch and we'll take care of it.`;
+
+  return {
+    bestGuess: { content: a },
+    variants:  [{ content: a }, { content: b }],
+  };
+}
+
+// ---------------------------------------------------------------------------
+// generateTrustBullets — short reassurance bullet list for no_trust_bullets
+//
+// Grounds bullets in product context only (bodyHtml + product type + vendor).
+// Never invents policies. Signals detected → grounded bullets used.
+// Nothing detected → safe neutral fallback only.
+// Returns { bestGuess: { content }, variants: [{ content }, { content }] }
+// ---------------------------------------------------------------------------
+function generateTrustBullets(product) {
+  const type   = detectProductType(product);
+  const html   = product.bodyHtml || '';
+  const plain  = html.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').toLowerCase();
+  const vendor = (product.vendor || '').trim();
+
+  // Detect signals already present in merchant copy — never invent.
+  const mentionsDispatch = /dispatch|ship|deliver|postage/i.test(plain);
+  const mentionsSupport  = /support|contact|question|get in touch|reach us/i.test(plain);
+
+  // Bullet 1 — secure checkout (always safe; no policy invented)
+  const bullet1 = 'Checkout is fully secured — your payment details are protected.';
+
+  // Bullet 2 — dispatch/handling; only ground claim if merchant already mentions it
+  const bullet2 = mentionsDispatch
+    ? 'Orders are carefully packed and dispatched — check our shipping info for details.'
+    : 'Every order is handled with care from the moment you place it.';
+
+  // Bullet 3 — support; use vendor name if available
+  const bullet3 = mentionsSupport
+    ? 'Questions before or after your order? Our support team is here to help.'
+    : vendor
+    ? `Questions? Get in touch with the ${vendor} team — we\'re happy to help.`
+    : 'Questions? Get in touch before you order and we\'ll help.';
+
+  // Bullet 4 — type-specific guidance only when grounded in product context
+  const bullet4 =
+    type === 'fashion'  ? 'Not sure about sizing? Message us and we\'ll help you find the right fit.' :
+    type === 'health'   ? 'Not sure if this is right for you? Our team can help before you order.' :
+    null;
+
+  const items = [bullet1, bullet2, bullet3, ...(bullet4 ? [bullet4] : [])]
+    .map(b => `<li>${b}</li>`)
+    .join('');
+
+  const full    = `<ul>${items}</ul>`;
+  const concise = `<ul>${[bullet1, bullet3].map(b => `<li>${b}</li>`).join('')}</ul>`;
+
+  return {
+    bestGuess: { content: full },
+    variants:  [{ content: full }, { content: concise }],
+  };
+}
+
+// ---------------------------------------------------------------------------
+// generateSizeGuideBlock — safe additive size-guidance block for no_size_guide
+//
+// Grounds content only in available variant size values and product context.
+// Never invents cm/inch measurements. Falls back to safe generic guidance.
+// Returns { bestGuess: { content }, variants: [{ content }, { content }] }
+// ---------------------------------------------------------------------------
+function generateSizeGuideBlock(product) {
+  const SIZE_LABELS = ['xs', 's', 'm', 'l', 'xl', 'xxl', '2xl', '3xl', 'small', 'medium', 'large', 'x-large'];
+
+  const isSizePart = t => SIZE_LABELS.includes(t) || /^(size\s*)?\d{1,2}(\.\d)?$/.test(t);
+  const sizeValues = product.variants
+    .map(v => {
+      // Extract the size part from compound titles like "S / Red" or "Black / M"
+      const part = (v.title || '').split(' / ').find(p => isSizePart(p.trim().toLowerCase()));
+      return part ? part.trim() : null;
+    })
+    .filter(Boolean)
+    .filter((v, i, a) => a.indexOf(v) === i); // deduplicate
+
+  const isRing = sizeValues.some(v => /^\d/.test(v));
+  const vendor = (product.vendor || '').trim();
+
+  const sizeListItem = sizeValues.length > 0
+    ? `<li>Available sizes: ${sizeValues.join(', ')}.</li>`
+    : '';
+
+  const contactBullet = vendor
+    ? `<li>Not sure about your size? Get in touch with the ${vendor} team before you order — we\'re happy to help.</li>`
+    : '<li>Not sure about your size? Get in touch before you order and we\'ll help you choose the right fit.</li>';
+
+  let full;
+  if (isRing) {
+    full = [
+      '<p><strong>Find Your Size</strong></p>',
+      '<ul>',
+      sizeListItem,
+      '<li>To measure your ring size: wrap a thin strip of paper around your finger, mark where it meets, and measure the length in millimetres.</li>',
+      '<li>Between sizes? Size up for comfort.</li>',
+      contactBullet,
+      '</ul>',
+    ].filter(Boolean).join('\n');
+  } else {
+    full = [
+      '<p><strong>Size Guide</strong></p>',
+      '<ul>',
+      sizeListItem,
+      '<li>For the best fit, measure your chest or waist and compare to the available sizes before ordering.</li>',
+      '<li>Between sizes? Size up for a more comfortable fit.</li>',
+      contactBullet,
+      '</ul>',
+    ].filter(Boolean).join('\n');
+  }
+
+  const concise = ['<ul>', sizeListItem, contactBullet, '</ul>'].filter(Boolean).join('\n');
+
+  return {
+    bestGuess: { content: full },
+    variants:  [{ content: full }, { content: concise }],
+  };
+}
+
 const RULES = [
 
   // ══════════════════════════════════════════════════════════════════════════
@@ -219,25 +359,26 @@ const RULES = [
     confidence: CF.HIGH,
     implementationType: IT.CONTENT_CHANGE,
     check: p => {
-      const hasSizeVariants = p.variants.some(v => {
-        const t = (v.title || '').toLowerCase();
-        if (['xs', 's', 'm', 'l', 'xl', 'xxl', '2xl', '3xl', 'small', 'medium', 'large', 'x-large'].includes(t)) return true;
-        if (/^(size\s*)?\d{1,2}(\.\d)?$/.test(t)) return true;
-        return false;
-      });
+      const SIZE_LABELS = ['xs', 's', 'm', 'l', 'xl', 'xxl', '2xl', '3xl', 'small', 'medium', 'large', 'x-large'];
+      const isSizePart = t => SIZE_LABELS.includes(t) || /^(size\s*)?\d{1,2}(\.\d)?$/.test(t);
+      const hasSizeVariants = p.variants.some(v =>
+        (v.title || '').split(' / ').some(part => isSizePart(part.trim().toLowerCase()))
+      );
       if (!hasSizeVariants) return false;
       if (!p.bodyHtml) return true;
       const t = p.bodyHtml.toLowerCase();
       return !['size guide', 'size chart', 'sizing', 'how to measure', 'measurement'].some(w => t.includes(w));
     },
     build: p => {
+      const _SZ = ['xs', 's', 'm', 'l', 'xl', 'xxl', '2xl', '3xl', 'small', 'medium', 'large', 'x-large'];
+      const _isSz = t => _SZ.includes(t) || /^(size\s*)?\d{1,2}(\.\d)?$/.test(t);
       const sizeVariants = p.variants
-        .filter(v => {
-          const t = (v.title || '').toLowerCase();
-          return ['xs', 's', 'm', 'l', 'xl', 'xxl', '2xl', '3xl', 'small', 'medium', 'large', 'x-large'].includes(t)
-            || /^(size\s*)?\d{1,2}(\.\d)?$/.test(t);
+        .map(v => {
+          const part = (v.title || '').split(' / ').find(p => _isSz(p.trim().toLowerCase()));
+          return part ? part.trim() : null;
         })
-        .map(v => v.title);
+        .filter(Boolean)
+        .filter((v, i, a) => a.indexOf(v) === i);
       const type = detectProductType(p);
       const isRing = sizeVariants.some(v => /^\d/.test(v));
       return {
@@ -274,6 +415,7 @@ const RULES = [
           : isRing
           ? 'Wearable/ring: offer a physical ring sizer as a free add-on. The commitment to order a sizer is a micro-conversion that makes the main purchase 3× more likely.'
           : 'Functional/health: frame sizing as performance — "the right size ensures maximum effectiveness." This elevates sizing from inconvenience to feature.',
+        generatedFix: generateSizeGuideBlock(p),
       };
     },
   },
@@ -383,6 +525,7 @@ const RULES = [
           : type === 'impulse'
           ? 'Impulse: 200 words is fine if structured correctly. Focus on 3 punchy benefit bullets, not long paragraphs. Impulse buyers want to move fast — dense copy kills momentum.'
           : 'Default: 300 words minimum. Focus on benefit language, not feature language.',
+        generatedFix: generateDesireBlock(p),
       };
     },
   },
@@ -516,6 +659,59 @@ const RULES = [
           : type === 'fashion'
           ? 'Fashion: focus on fit and easy returns. "Free size exchange if it doesn\'t fit" is the specific fear being addressed — generalised guarantees are less powerful for fashion.'
           : 'Functional/impulse: a simple 30-day return policy stated plainly is sufficient. Keep it short and place it close to the ATC button.',
+        generatedFix: generateTrustBlock(p),
+      };
+    },
+  },
+
+  {
+    id:                 'no_trust_bullets',
+    title:              'No reassurance block — buyer has no quick-scan trust signals near the buy decision',
+    category:           C.TRUST,
+    severity:           S.MEDIUM,
+    impact:             [I.CONVERSION, I.TRUST],
+    effort:             E.LOW,
+    confidence:         CF.HIGH,
+    implementationType: IT.CONTENT_CHANGE,
+
+    check(p) {
+      if (!p.bodyHtml) return false; // no_description covers the empty case
+      const plain = p.bodyHtml.replace(/<[^>]*>/g, ' ').toLowerCase();
+      if (plain.trim().length < 50) return false;
+      // Already has a trust block if ≥2 of these signals appear
+      const signals = ['secure checkout', 'fully secured', 'safe checkout', 'dispatched', 'support team', 'get in touch', 'checkout is'];
+      return signals.filter(s => plain.includes(s)).length < 2;
+    },
+
+    build(p) {
+      const type = detectProductType(p);
+      return {
+        userHesitation: `I'm almost ready to buy but I don't know anything about how this store operates. What happens if something goes wrong? Is checkout safe? How do I contact them?`,
+        psychologicalTrigger: 'trust_gap — in the absence of reassurance signals, the brain defaults to worst-case assumptions; 3 short bullets resolve the most common pre-purchase anxieties in under 5 seconds',
+        whyItMatters: 'A buyer who reaches the bottom of the description has already done the hard work of evaluating the product. Three short reassurance bullets — checkout security, order handling, and support access — address the residual friction that stops "interested" from becoming "purchased."',
+        exactFix: {
+          what:      'Add a short 3–4 bullet reassurance block at the end of the product description.',
+          placement: 'End of product description — after all product information, before the closing tag.',
+          uiElement: 'Bulleted list (ul/li) — 3–4 short items covering checkout security, order handling, and support access.',
+          microcopy: [],
+          type:       'copy',
+          difficulty: 'easy',
+        },
+        businessImpact: {
+          metric:    'cvr',
+          magnitude: 'medium',
+          fixType:   'quick_win',
+          reasoning: 'Trust bullets are the lowest-effort, highest-certainty trust improvement available on any PDP. They cost nothing to add and address real pre-purchase anxiety with no risk of negative side effects.',
+        },
+        priorityBucket: '2h',
+        productTypeNotes: type === 'high_ticket'
+          ? 'High-ticket: support availability is the most important bullet — at this price point buyers want to know there is a real human they can reach.'
+          : type === 'health'
+          ? 'Health: a "not sure if this is right for you?" support bullet is especially effective — it acknowledges uncertainty without undermining the product.'
+          : type === 'fashion'
+          ? 'Fashion: include a sizing-help bullet — fit uncertainty is the #1 reason fashion shoppers abandon.'
+          : 'Functional/impulse: three bullets (secure checkout, careful dispatch, support) are sufficient. Keep them short.',
+        generatedFix: generateTrustBullets(p),
       };
     },
   },
