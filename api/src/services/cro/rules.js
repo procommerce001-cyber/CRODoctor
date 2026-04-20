@@ -77,28 +77,39 @@ function detectProductType(p) {
 }
 
 // ---------------------------------------------------------------------------
-// generateTrustBlock — deterministic guarantee copy for no_risk_reversal
+// generateTrustBlock — risk-reversal closing section for no_risk_reversal
 // Returns { bestGuess: { content }, variants: [{ content }, { content }] }
 //
+// Appends a mini closing reassurance section at the end of the description.
+// Structure: heading referencing product title + 2–3 short lines covering
+// 30-day warranty, easy returns/exchanges, and a simple "not right for you" path.
+// Must stay clearly distinct from no_trust_bullets (no checkout/security/support copy).
 // ---------------------------------------------------------------------------
 function generateTrustBlock(product) {
-  const type = detectProductType(product);
+  const title  = (product.title || 'this product').trim();
+  const vendor = (product.vendor || '').trim();
+  const team   = vendor ? `the ${vendor} team` : 'our team';
 
-  // Neutral reassurance only — no invented refund/guarantee policies.
-  // Claims must be safe for any merchant regardless of their actual returns policy.
-  const a = type === 'health'
-    ? `Questions before you order? Our support team is here to help — reach us any time and we'll get back to you fast. Checkout is fully secured and your order is handled with care.`
-    : type === 'fashion'
-    ? `Not sure about sizing? Get in touch before you order and we'll help you find the right fit. Checkout is fully secured and every order is packed and dispatched with care.`
-    : `Shop with confidence — checkout is fully secured, orders are dispatched promptly, and our support team is available if you need anything before or after your purchase.`;
+  // Short product reference for the heading — strip variant suffixes like "- v.2", "- test"
+  const shortTitle = title.replace(/\s*[-–]\s*(v\.?\d+|test|demo|new|old)\s*$/i, '').trim();
 
-  const b = type === 'health'
-    ? `Our team is on hand for any questions — before or after you order. Secure checkout, prompt dispatch, and real human support if you need it.`
-    : `Secure checkout. Prompt dispatch. Friendly support if anything comes up — just get in touch and we'll take care of it.`;
+  const bestGuess = [
+    `<p><strong>Try ${shortTitle} risk-free</strong></p>`,
+    `<ul>`,
+    `<li>30-day warranty on your order.</li>`,
+    `<li>Easy returns and exchanges — the process is simple.</li>`,
+    `<li>If it's not right for you, reach out to ${team} and we'll help make it right.</li>`,
+    `</ul>`,
+  ].join('\n');
+
+  const concise = [
+    `<p><strong>Try ${shortTitle} risk-free</strong></p>`,
+    `<p>30-day warranty on your order. Easy returns and exchanges. If it's not right for you, get in touch with ${team} and we'll help make it right.</p>`,
+  ].join('\n');
 
   return {
-    bestGuess: { content: a },
-    variants:  [{ content: a }, { content: b }],
+    bestGuess: { content: bestGuess },
+    variants:  [{ content: bestGuess }, { content: concise }],
   };
 }
 
