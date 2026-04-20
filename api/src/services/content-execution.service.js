@@ -153,8 +153,10 @@ const PATCH_MODE_REGISTRY = {
       return { found: false };
     },
 
+    // Generator emits full HTML (<p><strong>…</strong></p>\n<ul>…</ul>) — pass through as-is.
+    // Wrapping in <p> would create <p><p>…</p></p> which browsers auto-correct to <p></p><p>…
     wrapContent(text) {
-      return `<p>${text}</p>`;
+      return text;
     },
   },
 

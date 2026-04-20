@@ -1001,7 +1001,9 @@ async function applyContentChange(prisma, store, rawProduct, actionItem) {
 
   const { currentContent, proposedContent } = gate;
 
-  // 1b. Idempotency guard — skip if a successful execution already exists for this issue+product
+  // 1b. Idempotency guard — skip if an active applied execution exists for this issue+product.
+  // "Active" means applied and NOT subsequently rolled back. A rolled_back row referencing the
+  // applied row means the apply has been undone and re-apply is legitimate.
   const existing = await prisma.contentExecution.findFirst({
     where: {
       productId: rawProduct.id,
@@ -1010,7 +1012,12 @@ async function applyContentChange(prisma, store, rawProduct, actionItem) {
     },
   });
   if (existing) {
-    return { applied: false, skipped: true, reason: 'already applied' };
+    const wasRolledBack = await prisma.contentExecution.findFirst({
+      where: { referenceExecutionId: existing.id, status: 'rolled_back' },
+    });
+    if (!wasRolledBack) {
+      return { applied: false, skipped: true, reason: 'already applied' };
+    }
   }
 
   // 2. Build result using the same PATCH_MODE_REGISTRY pipeline as preview,
