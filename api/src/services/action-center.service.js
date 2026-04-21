@@ -1151,20 +1151,29 @@ async function rollbackContentChange(prisma, store, rawProduct, issueId) {
     data:  { bodyHtml: previousContent },
   });
 
-  // 6. Persist audit row
-  const rollbackRow = await prisma.contentExecution.create({
-    data: {
-      storeId:              store.id,
-      productId:            rawProduct.id,
-      issueId,
-      patchMode:            'rollback',
-      previousContent:      execution.resultContent,
-      newContent:           previousContent ?? '',
-      resultContent:        previousContent,
-      status:               'rolled_back',
-      referenceExecutionId: execution.id,
-    },
-  });
+  // 6. Persist audit row + clear the partial unique index on the original applied row.
+  // The index is (productId, issueId) WHERE status='applied'. Updating the original row
+  // to 'superseded' removes it from that index so re-apply can succeed without manual cleanup.
+  // History stays intact: the audit row's referenceExecutionId links back to the original.
+  const [rollbackRow] = await prisma.$transaction([
+    prisma.contentExecution.create({
+      data: {
+        storeId:              store.id,
+        productId:            rawProduct.id,
+        issueId,
+        patchMode:            'rollback',
+        previousContent:      execution.resultContent,
+        newContent:           previousContent ?? '',
+        resultContent:        previousContent,
+        status:               'rolled_back',
+        referenceExecutionId: execution.id,
+      },
+    }),
+    prisma.contentExecution.update({
+      where: { id: execution.id },
+      data:  { status: 'superseded' },
+    }),
+  ]);
 
   return {
     success:     true,
