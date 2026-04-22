@@ -90,30 +90,29 @@ function generateTrustBlock(product) {
   const vendor = (product.vendor || '').trim();
   const team   = vendor ? `the ${vendor} team` : 'our team';
   const type   = detectProductType(product);
-  const price  = parseFloat(String(product.variants?.[0]?.price || 0));
 
   // Strip variant suffixes like "- v.2", "- test"
   const shortTitle = title.replace(/\s*[-–]\s*(v\.?\d+|test|demo|new|old)\s*$/i, '').trim();
 
-  // Heading — speaks to the buyer's specific post-purchase fear, not a generic phrase
+  // Heading — speaks to the buyer's specific post-purchase fear, not a generic phrase.
+  // No policy claims — emotional framing only.
   const heading =
-    type === 'health'      ? `Not the result you were hoping for? We'll make it right.` :
-    type === 'fashion'     ? `Wrong size, or just not what you expected? We've got you.` :
-    type === 'high_ticket' ? `Try ${shortTitle} for ${price >= 150 ? '60' : '30'} days — return it if it's not what you needed.` :
-    `Not what you expected? We'll make it right.`;
+    type === 'health'      ? `Not the result you were hoping for? Get in touch — we'll help.` :
+    type === 'fashion'     ? `Not the right fit, or not what you expected? Let us know.` :
+    type === 'high_ticket' ? `Not what you needed from ${shortTitle}? Reach out to ${team}.` :
+    `Not what you expected? We're here — just reach out.`;
 
-  // Bullet 1 — outcome-level guarantee, type-aware
-  const guaranteeDays = (type === 'high_ticket' && price >= 150) ? 60 : 30;
+  // Bullet 1 — outcome-aware post-purchase path. No hardcoded days, no refund/exchange promises.
   const b1 =
-    type === 'health'  ? `${guaranteeDays}-day returns — if you don't see the difference you were looking for, get in touch and we'll refund you.` :
-    type === 'fashion' ? `Free size exchange — if the fit isn't right, we'll swap it for the correct size.` :
-    `${guaranteeDays}-day returns — if it's not right for any reason, send it back.`;
+    type === 'health'  ? `If you're not seeing the improvement you expected, get in touch with ${team} — we want to hear from you.` :
+    type === 'fashion' ? `If the size or fit isn't right for you, reach out to ${team} — we'll help you find the best option.` :
+    `If it's not right for you for any reason, just reach out to ${team} — we'll help figure out the next step.`;
 
-  // Bullet 2 — frictionless process
-  const b2 = `Returns and exchanges are straightforward — no complicated process, no back-and-forth.`;
+  // Bullet 2 — availability and responsiveness (no process/policy claim)
+  const b2 = `Getting in touch is easy and we respond quickly — before or after your order.`;
 
-  // Bullet 3 — human support before AND after (not checkout security — that belongs elsewhere)
-  const b3 = `Not sure before you order? Reach out to ${team} — we're happy to help you decide.`;
+  // Bullet 3 — pre-purchase confidence (distinct from bullet 2: decision support, not complaint handling)
+  const b3 = `Not sure if ${shortTitle} is right for your situation? Ask ${team} before you buy.`;
 
   const bestGuess = [
     `<p><strong>${heading}</strong></p>`,
@@ -158,8 +157,11 @@ function generateTrustBullets(product) {
     ? `Questions before you buy? The ${vendor} team is here to help — just get in touch.`
     : `Questions before you buy? Get in touch and we\'ll help you decide.`;
 
-  // Bullet 3 — brief post-purchase safety signal (no_risk_reversal covers this in depth — keep short)
-  const bullet3 = `Not happy when it arrives? Returns are simple — we\'ll take care of it.`;
+  // Bullet 3 — brief post-purchase safety signal (no_risk_reversal covers this in depth — keep short).
+  // No operational promise; soft "reach out and we'll help" framing only.
+  const bullet3 = vendor
+    ? `Not happy when it arrives? Get in touch with the ${vendor} team — we\'ll help make it right.`
+    : `Not happy when it arrives? Get in touch — we\'re here to help.`;
 
   // Bullet 4 — type-specific hesitation addressed
   const bullet4 =
