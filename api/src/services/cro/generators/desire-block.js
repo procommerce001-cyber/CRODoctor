@@ -96,6 +96,8 @@ function extractSignals(product) {
     profile = 'sleep';
   else if (/(gym|workout|training|lift|run|sport|athlete)/i.test(corpus))
     profile = 'fitness';
+  else if (/(organiz|rotat|storag|countertop|kitchen.*tower|tower.*kitchen|tray|caddy|rack|drain|unclog|clog|bamboo|declutter)/i.test(corpus))
+    profile = 'home';
 
   return { setting, pain, timeOfDay, onset, profile };
 }
@@ -151,6 +153,16 @@ const FRAGMENTS = {
       (_s) => `Recovery used to be the part between training that you just waited out.`,
       (_s) => `You put in the same work. The next day you wake up ready, not waiting to feel ready.`,
     ],
+    home: [
+      (s) => s.setting === 'kitchen'
+        ? `You open a cupboard and something has to move for something else to come out. You've reorganised this more than once.`
+        : `There's a version of this space that's clear and easy to move around in. Getting it to stay that way is the problem.`,
+      (_s) => `The counter gets tidied. A few days later, it looks the same as before.`,
+      (_s) => `You work around the same small problem every day until you stop registering it as a problem. That's when it starts costing you the most.`,
+      (s) => s.pain === 'clutter'
+        ? `The clutter isn't dramatic. It's just always slightly in the way — finding things, moving things, working around things.`
+        : `There's a version of this room where things are easy to find and surfaces stay clear. You've just never quite made it stick.`,
+    ],
     generic: [
       (s) => s.setting
         ? `${s.setting === 'desk' ? 'At your desk.' : s.setting === 'sofa' ? 'On the sofa.' : 'At home.'} The small thing you've been working around — it's just gone.`
@@ -200,6 +212,14 @@ const FRAGMENTS = {
       (_s) => `Recovery is the part of training that gets ignored because it doesn't feel like training.`,
       (_s) => `You've plateaued. Not because the training programme is wrong, but because the recovery hasn't caught up.`,
     ],
+    home: [
+      (_s) => `You've reorganised. Bought the storage solution. Within a week it settles back into the same state.`,
+      (s) => s.pain === 'clutter'
+        ? `Clutter isn't a single event. It comes back unless the space is actually designed to prevent it.`
+        : null,
+      (_s) => `The fix works for a few days. Then it has to be redone. That's the real cost — not the mess itself, but the repetition.`,
+      (_s) => null,
+    ],
     generic: [
       (s) => s.pain
         ? `${s.pain.charAt(0).toUpperCase() + s.pain.slice(1)} — you've learned to work around it, which isn't the same as solving it.`
@@ -247,6 +267,14 @@ const FRAGMENTS = {
       (_s) => `Recovery isn't passive anymore. It's something that's happening.`,
       (_s) => `The soreness arrives smaller. Departs faster.`,
     ],
+    home: [
+      (s) => s.onset
+        ? `${s.onset.charAt(0).toUpperCase() + s.onset.slice(1)} — the space works differently.`
+        : `You set it up once. The space starts working the way you always wanted it to.`,
+      (_s) => `Everything that didn't have a clear place now does. You didn't renovate anything.`,
+      (_s) => `The friction disappears. Not because you cleaned — because the space is finally set up right.`,
+      (_s) => `One small addition. The problem that was always slightly in the background — gone.`,
+    ],
     generic: [
       (s) => s.onset ? `${s.onset.charAt(0).toUpperCase() + s.onset.slice(1)}, the thing you were managing simply isn't there anymore.` : `At some point in the first few days, the adjustment disappears.`,
       (_s) => `The background noise — the management, the compensation, the workaround — goes quiet.`,
@@ -291,6 +319,14 @@ const FRAGMENTS = {
       (_s) => `The consistency that was breaking down — because two recovery days were becoming three — returns.`,
       (_s) => `You stop rationing your effort because you're not sure how long you'll pay for it.`,
       (_s) => `The progress that was stalling unstalls.`,
+    ],
+    home: [
+      (s) => s.setting === 'kitchen'
+        ? `The counter stays clear. The cupboard makes sense. You walk in and don't immediately start rearranging.`
+        : `The space works the way you always wanted it to. It just took the right thing in the right place.`,
+      (_s) => `You stop thinking about the space. That's when you know it's actually working.`,
+      (_s) => `You find what you need without moving something else first. Small — but it adds up.`,
+      (_s) => `The room feels different. Not because of anything dramatic. Because it finally works.`,
     ],
     generic: [
       (_s) => `The thing that was in the background isn't there anymore. Something else gets to be there instead.`,
@@ -338,6 +374,12 @@ const FRAGMENTS = {
       (_s) => null,
       (_s) => `The ceiling moves when the floor gets more solid.`,
       (_s) => `Results are just consistent inputs. This makes the inputs more consistent.`,
+    ],
+    home: [
+      (_s) => `The right thing in the right place changes how a room feels to be in.`,
+      (_s) => null,
+      (_s) => `Small changes to how a space is set up compound. This is one of those.`,
+      (_s) => `One upgrade that makes everything around it feel more considered.`,
     ],
     generic: [
       (_s) => `The right purchase doesn't announce itself. It just makes everything around it slightly easier.`,
