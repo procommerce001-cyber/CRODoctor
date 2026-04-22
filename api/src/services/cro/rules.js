@@ -89,22 +89,44 @@ function generateTrustBlock(product) {
   const title  = (product.title || 'this product').trim();
   const vendor = (product.vendor || '').trim();
   const team   = vendor ? `the ${vendor} team` : 'our team';
+  const type   = detectProductType(product);
+  const price  = parseFloat(String(product.variants?.[0]?.price || 0));
 
-  // Short product reference for the heading — strip variant suffixes like "- v.2", "- test"
+  // Strip variant suffixes like "- v.2", "- test"
   const shortTitle = title.replace(/\s*[-–]\s*(v\.?\d+|test|demo|new|old)\s*$/i, '').trim();
 
+  // Heading — speaks to the buyer's specific post-purchase fear, not a generic phrase
+  const heading =
+    type === 'health'      ? `Not the result you were hoping for? We'll make it right.` :
+    type === 'fashion'     ? `Wrong size, or just not what you expected? We've got you.` :
+    type === 'high_ticket' ? `Try ${shortTitle} for ${price >= 150 ? '60' : '30'} days — return it if it's not what you needed.` :
+    `Not what you expected? We'll make it right.`;
+
+  // Bullet 1 — outcome-level guarantee, type-aware
+  const guaranteeDays = (type === 'high_ticket' && price >= 150) ? 60 : 30;
+  const b1 =
+    type === 'health'  ? `${guaranteeDays}-day returns — if you don't see the difference you were looking for, get in touch and we'll refund you.` :
+    type === 'fashion' ? `Free size exchange — if the fit isn't right, we'll swap it for the correct size.` :
+    `${guaranteeDays}-day returns — if it's not right for any reason, send it back.`;
+
+  // Bullet 2 — frictionless process
+  const b2 = `Returns and exchanges are straightforward — no complicated process, no back-and-forth.`;
+
+  // Bullet 3 — human support before AND after (not checkout security — that belongs elsewhere)
+  const b3 = `Not sure before you order? Reach out to ${team} — we're happy to help you decide.`;
+
   const bestGuess = [
-    `<p><strong>Try ${shortTitle} risk-free</strong></p>`,
+    `<p><strong>${heading}</strong></p>`,
     `<ul>`,
-    `<li>30-day warranty on your order.</li>`,
-    `<li>Easy returns and exchanges — the process is simple.</li>`,
-    `<li>If it's not right for you, reach out to ${team} and we'll help make it right.</li>`,
+    `<li>${b1}</li>`,
+    `<li>${b2}</li>`,
+    `<li>${b3}</li>`,
     `</ul>`,
   ].join('\n');
 
   const concise = [
-    `<p><strong>Try ${shortTitle} risk-free</strong></p>`,
-    `<p>30-day warranty on your order. Easy returns and exchanges. If it's not right for you, get in touch with ${team} and we'll help make it right.</p>`,
+    `<p><strong>${heading}</strong></p>`,
+    `<p>${b1} ${b2}</p>`,
   ].join('\n');
 
   return {
@@ -116,48 +138,49 @@ function generateTrustBlock(product) {
 // ---------------------------------------------------------------------------
 // generateTrustBullets — short reassurance bullet list for no_trust_bullets
 //
-// Grounds bullets in product context only (bodyHtml + product type + vendor).
-// Never invents policies. Signals detected → grounded bullets used.
-// Nothing detected → safe neutral fallback only.
+// PDP-level trust signals only — addresses buyer hesitation at the moment of
+// deciding, not paying. Checkout security is handled by Shopify's native badges
+// and belongs on the checkout page, not here.
+// Grounds bullets in product context (type + vendor). Never invents policies.
 // Returns { bestGuess: { content }, variants: [{ content }, { content }] }
 // ---------------------------------------------------------------------------
 function generateTrustBullets(product) {
   const type   = detectProductType(product);
-  const html   = product.bodyHtml || '';
-  const plain  = html.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').toLowerCase();
   const vendor = (product.vendor || '').trim();
+  const price  = parseFloat(String(product.variants?.[0]?.price || 0));
 
-  // Detect signals already present in merchant copy — never invent.
-  const mentionsDispatch = /dispatch|ship|deliver|postage/i.test(plain);
-  const mentionsSupport  = /support|contact|question|get in touch|reach us/i.test(plain);
+  // Bullet 1 — handling/quality confidence (PDP-relevant; replaces checkout security,
+  // which Shopify shows natively and is checkout-page language, not description language)
+  const bullet1 = 'Every order is carefully packed and quality-checked before it leaves.';
 
-  // Bullet 1 — secure checkout (always safe; no policy invented)
-  const bullet1 = 'Checkout is fully secured — your payment details are protected.';
+  // Bullet 2 — pre-purchase support access (personalised where possible)
+  const bullet2 = vendor
+    ? `Questions before you buy? The ${vendor} team is here to help — just get in touch.`
+    : `Questions before you buy? Get in touch and we\'ll help you decide.`;
 
-  // Bullet 2 — dispatch/handling; only ground claim if merchant already mentions it
-  const bullet2 = mentionsDispatch
-    ? 'Orders are carefully packed and dispatched — check our shipping info for details.'
-    : 'Every order is handled with care from the moment you place it.';
+  // Bullet 3 — brief post-purchase safety signal (no_risk_reversal covers this in depth — keep short)
+  const bullet3 = `Not happy when it arrives? Returns are simple — we\'ll take care of it.`;
 
-  // Bullet 3 — support; use vendor name if available
-  const bullet3 = mentionsSupport
-    ? 'Questions before or after your order? Our support team is here to help.'
-    : vendor
-    ? `Questions? Get in touch with the ${vendor} team — we\'re happy to help.`
-    : 'Questions? Get in touch before you order and we\'ll help.';
-
-  // Bullet 4 — type-specific guidance only when grounded in product context
+  // Bullet 4 — type-specific hesitation addressed
   const bullet4 =
-    type === 'fashion'  ? 'Not sure about sizing? Message us and we\'ll help you find the right fit.' :
-    type === 'health'   ? 'Not sure if this is right for you? Our team can help before you order.' :
-    null;
+    type === 'fashion'      ? `Not sure about sizing? Message us before you order — we\'ll find your fit.` :
+    type === 'health'       ? `Not sure if this is right for your situation? Ask us first — we\'ll be honest with you.` :
+    type === 'high_ticket'  ? (price > 0
+      ? `Spending $${Math.round(price)} is a real decision — we\'re available to walk you through it before you commit.`
+      : `This is a considered purchase — we\'re available to answer every question before you commit.`)
+    : null;
 
   const items = [bullet1, bullet2, bullet3, ...(bullet4 ? [bullet4] : [])]
     .map(b => `<li>${b}</li>`)
     .join('');
 
+  // Concise: handling confidence + best type-specific signal (or support if no type match)
+  const conciseItems = [bullet1, bullet4 ?? bullet2]
+    .map(b => `<li>${b}</li>`)
+    .join('');
+
   const full    = `<ul>${items}</ul>`;
-  const concise = `<ul>${[bullet1, bullet3].map(b => `<li>${b}</li>`).join('')}</ul>`;
+  const concise = `<ul>${conciseItems}</ul>`;
 
   return {
     bestGuess: { content: full },

@@ -109,6 +109,7 @@ function extractSignals(product) {
 
 const FRAGMENTS = {
 
+  // anchor — establishes the specific moment before the product enters the story
   anchor: {
     thermal: [
       (s) => s.setting === 'desk'
@@ -151,10 +152,14 @@ const FRAGMENTS = {
       (_s) => `You put in the same work. The next day you wake up ready, not waiting to feel ready.`,
     ],
     generic: [
-      (s) => s.setting ? `${s.setting === 'desk' ? 'At your desk.' : s.setting === 'sofa' ? 'On the sofa.' : 'At home.'} The friction that's usually there — isn't.` : `At some point in the day. The friction that's usually there — isn't.`,
-      (s) => s.pain ? `You stop working around ${s.pain}. That's the part that compounds.` : `You stop working around it. That's the part that compounds.`,
-      (_s) => `There are days where everything in your routine just runs without resistance. This is how you get more of those.`,
-      (_s) => `The difference isn't dramatic. It's just the absence of something you'd stopped noticing you were carrying.`,
+      (s) => s.setting
+        ? `${s.setting === 'desk' ? 'At your desk.' : s.setting === 'sofa' ? 'On the sofa.' : 'At home.'} The small thing you've been working around — it's just gone.`
+        : `There's a version of the day where the thing you've been managing is no longer something you have to manage.`,
+      (s) => s.pain
+        ? `You stop working around ${s.pain}. Not dramatically — it just stops being a factor.`
+        : `You stop adjusting. Stop compensating. Stop making the small daily trade-offs that add up to more than they should.`,
+      (_s) => `The result isn't always the thing you expected — it's the thing you stopped noticing you were missing.`,
+      (_s) => `Some purchases change the shape of a day. Not loudly. Just consistently.`,
     ],
   },
 
@@ -196,10 +201,12 @@ const FRAGMENTS = {
       (_s) => `You've plateaued. Not because the training programme is wrong, but because the recovery hasn't caught up.`,
     ],
     generic: [
-      (s) => s.pain ? `${s.pain.charAt(0).toUpperCase() + s.pain.slice(1)} — you've learned to work around it, which isn't the same as solving it.` : null,
-      (_s) => null,
+      (s) => s.pain
+        ? `${s.pain.charAt(0).toUpperCase() + s.pain.slice(1)} — you've learned to work around it, which isn't the same as solving it.`
+        : `The workaround has been in place long enough that it stopped feeling like a workaround.`,
+      (_s) => `You've adapted your routine to accommodate something that shouldn't need accommodating.`,
       (_s) => `The friction has been present long enough that you've stopped categorising it as friction.`,
-      (_s) => null,
+      (_s) => `It costs more than you notice — not in money, but in the small adjustments that become invisible habit.`,
     ],
   },
 
@@ -241,10 +248,10 @@ const FRAGMENTS = {
       (_s) => `The soreness arrives smaller. Departs faster.`,
     ],
     generic: [
-      (s) => s.onset ? `${s.onset.charAt(0).toUpperCase() + s.onset.slice(1)}, the friction is gone.` : `At some point, the friction is just gone.`,
-      (_s) => `The thing that was taking up background processing — the adjustment, the management, the workaround — stops.`,
-      (_s) => `It works the first time you use it. Then it keeps working.`,
-      (_s) => `You stop noticing it the way you stop noticing a good chair — which is the point.`,
+      (s) => s.onset ? `${s.onset.charAt(0).toUpperCase() + s.onset.slice(1)}, the thing you were managing simply isn't there anymore.` : `At some point in the first few days, the adjustment disappears.`,
+      (_s) => `The background noise — the management, the compensation, the workaround — goes quiet.`,
+      (_s) => `It works the first time. And then it just keeps working.`,
+      (_s) => `You stop noticing it the way you stop noticing a good chair — which is exactly the point.`,
     ],
   },
 
@@ -286,10 +293,12 @@ const FRAGMENTS = {
       (_s) => `The progress that was stalling unstalls.`,
     ],
     generic: [
-      (_s) => `The thing that was in the background isn't there anymore. Something else is.`,
-      (_s) => `You get more of the day back. Quietly. Without doing anything different.`,
-      (_s) => `The workaround disappears. You forget you ever needed one.`,
-      (s) => s.pain ? `The ${s.pain} — you remember it was a thing, and then you don't.` : `You notice the absence of something you'd stopped noticing.`,
+      (_s) => `The thing that was in the background isn't there anymore. Something else gets to be there instead.`,
+      (_s) => `You get more of the day back — not dramatically, just consistently.`,
+      (_s) => `The workaround disappears. After a while, you forget what you were working around.`,
+      (s) => s.pain
+        ? `The ${s.pain} — you remember it was a thing, and then you don't think about it again.`
+        : `You notice the absence of something you'd stopped noticing was costing you anything.`,
     ],
   },
 
@@ -331,10 +340,10 @@ const FRAGMENTS = {
       (_s) => `Results are just consistent inputs. This makes the inputs more consistent.`,
     ],
     generic: [
-      (_s) => null,
-      (_s) => `Small fixes compound.`,
-      (_s) => `Removing friction is the quietest kind of upgrade.`,
-      (_s) => null,
+      (_s) => `The right purchase doesn't announce itself. It just makes everything around it slightly easier.`,
+      (_s) => `Small frictions compound. So does removing them.`,
+      (_s) => `Removing friction is the quietest kind of upgrade — you only notice it when you've made one.`,
+      (_s) => `It's not a dramatic change. It's the kind that quietly makes everything else work a little better.`,
     ],
   },
 };
