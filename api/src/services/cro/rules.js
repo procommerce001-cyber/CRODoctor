@@ -94,38 +94,40 @@ function generateTrustBlock(product) {
   // Strip variant suffixes like "- v.2", "- test"
   const shortTitle = title.replace(/\s*[-–]\s*(v\.?\d+|test|demo|new|old)\s*$/i, '').trim();
 
-  // Heading — speaks to the buyer's specific post-purchase fear, not a generic phrase.
-  // No policy claims — emotional framing only.
+  // Post-purchase reassurance only. No pre-purchase framing — that belongs in no_trust_bullets.
+  // No invented policies, no hardcoded return windows.
+
+  // Heading — buyer's specific post-purchase fear, stated plainly
   const heading =
-    type === 'health'      ? `Not the result you were hoping for? Get in touch — we'll help.` :
-    type === 'fashion'     ? `Not the right fit, or not what you expected? Let us know.` :
-    type === 'high_ticket' ? `Not what you needed from ${shortTitle}? Reach out to ${team}.` :
-    `Not what you expected? We're here — just reach out.`;
+    type === 'health'      ? `Not seeing the improvement you expected? We want to hear from you.` :
+    type === 'fashion'     ? `Not the right fit? Reach out — we'll help you sort it.` :
+    type === 'high_ticket' ? `Not what you expected from ${shortTitle}? Reach out to ${team}.` :
+    `Not what you expected? Reach out — we'll help make it right.`;
 
-  // Bullet 1 — outcome-aware post-purchase path. No hardcoded days, no refund/exchange promises.
+  // Bullet 1 — brand accountability, type-aware. "We care how this lands for you."
   const b1 =
-    type === 'health'  ? `If you're not seeing the improvement you expected, get in touch with ${team} — we want to hear from you.` :
-    type === 'fashion' ? `If the size or fit isn't right for you, reach out to ${team} — we'll help you find the best option.` :
-    `If it's not right for you for any reason, just reach out to ${team} — we'll help figure out the next step.`;
+    type === 'health'  ? `If you're not seeing the improvement you expected, get in touch with ${team} — we want to understand what happened and help.` :
+    type === 'fashion' ? `If the fit or size isn't right, reach out to ${team} — we'll help you find the right path forward.` :
+    `If it's not what you hoped for, just reach out to ${team} — we'll work out the right next step together.`;
 
-  // Bullet 2 — availability and responsiveness (no process/policy claim)
-  const b2 = `Getting in touch is easy and we respond quickly — before or after your order.`;
-
-  // Bullet 3 — pre-purchase confidence (distinct from bullet 2: decision support, not complaint handling)
-  const b3 = `Not sure if ${shortTitle} is right for your situation? Ask ${team} before you buy.`;
+  // Bullet 2 — brand takes ownership of the outcome, not just the transaction.
+  // Distinct from b1: b1 = "here's the path", b2 = "here's the brand character behind it."
+  const b2 =
+    type === 'health'      ? `We want this product to work for you. If it doesn't, we want to know — we'll do our best to help.` :
+    type === 'high_ticket' ? `A purchase at this level should feel right. If something's off, reach out — we take that seriously.` :
+    `We take every order seriously. If something isn't right, getting in touch is easy — we'll do our best to sort it.`;
 
   const bestGuess = [
     `<p><strong>${heading}</strong></p>`,
     `<ul>`,
     `<li>${b1}</li>`,
     `<li>${b2}</li>`,
-    `<li>${b3}</li>`,
     `</ul>`,
   ].join('\n');
 
   const concise = [
     `<p><strong>${heading}</strong></p>`,
-    `<p>${b1} ${b2}</p>`,
+    `<p>${b1}</p>`,
   ].join('\n');
 
   return {
@@ -148,36 +150,38 @@ function generateTrustBullets(product) {
   const vendor = (product.vendor || '').trim();
   const price  = parseFloat(String(product.variants?.[0]?.price || 0));
 
-  // Bullet 1 — handling/quality confidence (PDP-relevant; replaces checkout security,
-  // which Shopify shows natively and is checkout-page language, not description language)
-  const bullet1 = 'Every order is carefully packed and quality-checked before it leaves.';
+  // Pre-purchase reassurance only. No post-purchase framing — that belongs in no_risk_reversal.
+  // Role: "This is a real brand that knows this product and is genuinely here to help you decide."
 
-  // Bullet 2 — pre-purchase support access (personalised where possible)
+  // Bullet 1 — product confidence. Brand character signal, not an operational claim.
+  // Says: "we know this product and we stand behind it."
+  const bullet1 =
+    type === 'health'      ? `We know this product well — if it\'s not the right fit for your situation, we\'ll tell you honestly before you order.` :
+    type === 'fashion'     ? `Every piece we stock is something we\'d genuinely recommend — and we\'re here to help with sizing before you commit.` :
+    type === 'high_ticket' ? `We only carry products we\'d back at this price point. If you have questions before committing, ask us — we\'ll give you a straight answer.` :
+    `We\'re selective about what we stock — and happy to answer any questions before you order.`;
+
+  // Bullet 2 — pre-purchase support, personalised to brand + product name
+  const shortTitle = (product.title || '').replace(/\s*[-–]\s*(v\.?\d+|test|demo|new|old)\s*$/i, '').trim();
   const bullet2 = vendor
-    ? `Questions before you buy? The ${vendor} team is here to help — just get in touch.`
-    : `Questions before you buy? Get in touch and we\'ll help you decide.`;
+    ? `Questions about ${shortTitle}? The ${vendor} team is here — get in touch before you buy.`
+    : `Questions before you order? Get in touch — we\'ll give you a straight answer.`;
 
-  // Bullet 3 — brief post-purchase safety signal (no_risk_reversal covers this in depth — keep short).
-  // No operational promise; soft "reach out and we'll help" framing only.
-  const bullet3 = vendor
-    ? `Not happy when it arrives? Get in touch with the ${vendor} team — we\'ll help make it right.`
-    : `Not happy when it arrives? Get in touch — we\'re here to help.`;
-
-  // Bullet 4 — type-specific hesitation addressed
-  const bullet4 =
-    type === 'fashion'      ? `Not sure about sizing? Message us before you order — we\'ll find your fit.` :
-    type === 'health'       ? `Not sure if this is right for your situation? Ask us first — we\'ll be honest with you.` :
-    type === 'high_ticket'  ? (price > 0
-      ? `Spending $${Math.round(price)} is a real decision — we\'re available to walk you through it before you commit.`
+  // Bullet 3 — type-specific hesitation resolved (pre-purchase only)
+  const bullet3 =
+    type === 'fashion'     ? `Not sure about sizing? Message us before you order and we\'ll help you get the right fit.` :
+    type === 'health'      ? `Not sure if this addresses your specific situation? Ask us first — we\'ll be honest.` :
+    type === 'high_ticket' ? (price > 0
+      ? `A $${Math.round(price)} purchase deserves proper consideration — we\'re available to walk you through it.`
       : `This is a considered purchase — we\'re available to answer every question before you commit.`)
     : null;
 
-  const items = [bullet1, bullet2, bullet3, ...(bullet4 ? [bullet4] : [])]
+  const items = [bullet1, bullet2, ...(bullet3 ? [bullet3] : [])]
     .map(b => `<li>${b}</li>`)
     .join('');
 
-  // Concise: handling confidence + best type-specific signal (or support if no type match)
-  const conciseItems = [bullet1, bullet4 ?? bullet2]
+  // Concise: product confidence + best type-specific (or support if no type match)
+  const conciseItems = [bullet1, bullet3 ?? bullet2]
     .map(b => `<li>${b}</li>`)
     .join('');
 
