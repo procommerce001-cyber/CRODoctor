@@ -45,7 +45,7 @@ function extractSignals(product) {
   const text = raw.toLowerCase();
 
   let setting = null;
-  if (/(office|desk|work from home|wfh|working)/i.test(text))         setting = 'desk';
+  if (/(office|desk|work from home|wfh)/i.test(text))                 setting = 'desk';
   else if (/(sofa|couch|lounge|living room)/i.test(text))             setting = 'sofa';
   else if (/(bedroom|bed|sleep|night)/i.test(text))                   setting = 'bedroom';
   else if (/(gym|workout|training|exercise)/i.test(text))             setting = 'gym';
@@ -59,7 +59,7 @@ function extractSignals(product) {
     [/(back pain|lower back|back ache)/,                       'back pain'],
     [/(neck pain|neck ache|neck tension)/,                     'neck pain'],
     [/(poor posture|slouch|hunching)/,                         'bad posture'],
-    [/(tired|fatigue|exhausted|drained)/,                      'fatigue'],
+    [/(fatigue|exhausted|drained)/,                            'fatigue'],
     [/(dry skin|dull skin|rough skin)/,                        'dry skin'],
     [/(dead phone|low battery|running out of battery)/,        'dead battery'],
     [/(muscle (pain|soreness|ache)|sore muscles)/,             'muscle soreness'],
@@ -86,7 +86,7 @@ function extractSignals(product) {
   const corpus = text + (product.title || '').toLowerCase();
   if (/(warm|heat|cold feet|cold legs|thermal|leg warmer|foot warmer)/i.test(corpus))
     profile = 'thermal';
-  else if (/(back|posture|spine|neck|shoulder|muscle|relief|recovery|corrector|support)/i.test(corpus))
+  else if (/(\bback\b|posture|spine|neck|shoulder|muscle|relief|recovery|corrector|support)/i.test(corpus))
     profile = 'pain_relief';
   else if (/(skin|serum|moistur|glow|radiant|complexion|beauty|collagen)/i.test(corpus))
     profile = 'beauty';
