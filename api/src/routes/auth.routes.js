@@ -16,7 +16,7 @@ const {
 
 const CLIENT_ID     = process.env.SHOPIFY_CLIENT_ID;
 const CLIENT_SECRET = process.env.SHOPIFY_CLIENT_SECRET;
-const SCOPES        = process.env.SHOPIFY_SCOPES || 'read_products,read_orders';
+const SCOPES        = process.env.SHOPIFY_SCOPES || 'read_products,write_products,read_orders,read_analytics';
 const APP_BASE_URL  = (process.env.APP_BASE_URL || '').replace(/\/$/, '');
 const REDIRECT_URI  = `${APP_BASE_URL}/auth/callback`;
 

@@ -1,7 +1,8 @@
 'use strict';
 
-const { getProductActions } = require('./action-center.service');
-const { PRODUCT_INCLUDE }   = require('../lib/product-include');
+const { getProductActions }           = require('./action-center.service');
+const { PRODUCT_INCLUDE }             = require('../lib/product-include');
+const { fetchWindowedStoreAnalytics } = require('./shopify-admin.service');
 
 // ---------------------------------------------------------------------------
 // captureProductMetricsSnapshot
@@ -73,7 +74,7 @@ async function captureProductMetricsSnapshot(prisma, productId, phase = 'standal
 async function captureWindowedBeforeSnapshot(prisma, productId, windowDays = 7) {
   const product = await prisma.product.findUnique({
     where:  { id: productId },
-    select: { id: true },
+    select: { id: true, storeId: true },
   });
   if (!product) throw new Error(`Product not found: ${productId}`);
 
@@ -99,6 +100,26 @@ async function captureWindowedBeforeSnapshot(prisma, productId, windowDays = 7) 
     0
   );
 
+  // Store-level totals for the same window — used later to compute store AOV before/after.
+  // Queries Order directly so product attribution is not required.
+  const storeAgg = await prisma.order.aggregate({
+    where:  { storeId: product.storeId, createdAt: { gte: windowStart, lt: windowEnd } },
+    _count: { id: true },
+    _sum:   { totalPrice: true },
+  });
+  const storeOrderCount = storeAgg._count.id                        ?? 0;
+  const storeRevenue    = parseFloat(storeAgg._sum.totalPrice ?? 0);
+
+  // Store-wide sessions from Shopify Analytics. Null when read_analytics scope is absent or
+  // Shopify Analytics returns an error — never blocks snapshot capture.
+  const storeObj = await prisma.store.findUnique({
+    where:  { id: product.storeId },
+    select: { shopDomain: true, accessToken: true },
+  });
+  const { sessions: storeSessions } = storeObj
+    ? await fetchWindowedStoreAnalytics(storeObj, windowStart, windowEnd)
+    : { sessions: null };
+
   const latestExecution = await prisma.contentExecution.findFirst({
     where:   { productId, status: 'applied' },
     orderBy: { createdAt: 'desc' },
@@ -113,12 +134,14 @@ async function captureWindowedBeforeSnapshot(prisma, productId, windowDays = 7) 
     update: {
       orderCount, unitsSold, revenue,
       windowStart, windowEnd,
+      storeRevenue, storeOrderCount, storeSessions,
       latestAppliedExecutionId: latestExecution?.id ?? null,
     },
     create: {
       productId, snapshotDate, phase: 'before',
       orderCount, unitsSold, revenue,
       windowStart, windowEnd,
+      storeRevenue, storeOrderCount, storeSessions,
       latestAppliedExecutionId: latestExecution?.id ?? null,
     },
   });
@@ -139,7 +162,7 @@ async function captureWindowedBeforeSnapshot(prisma, productId, windowDays = 7) 
 async function captureWindowedAfterSnapshot(prisma, productId, executionId, applyDate) {
   const product = await prisma.product.findUnique({
     where:  { id: productId },
-    select: { id: true },
+    select: { id: true, storeId: true },
   });
   if (!product) throw new Error(`Product not found: ${productId}`);
 
@@ -167,23 +190,65 @@ async function captureWindowedAfterSnapshot(prisma, productId, executionId, appl
     0
   );
 
+  const storeAgg = await prisma.order.aggregate({
+    where:  { storeId: product.storeId, createdAt: { gte: windowStart, lt: windowEnd } },
+    _count: { id: true },
+    _sum:   { totalPrice: true },
+  });
+  const storeOrderCount = storeAgg._count.id                        ?? 0;
+  const storeRevenue    = parseFloat(storeAgg._sum.totalPrice ?? 0);
+
+  const storeObj = await prisma.store.findUnique({
+    where:  { id: product.storeId },
+    select: { shopDomain: true, accessToken: true },
+  });
+  const { sessions: storeSessions } = storeObj
+    ? await fetchWindowedStoreAnalytics(storeObj, windowStart, windowEnd)
+    : { sessions: null };
+
   const snapshotDate = new Date();
   snapshotDate.setUTCHours(0, 0, 0, 0);
 
-  return prisma.productMetricsSnapshot.upsert({
+  const afterSnapshot = await prisma.productMetricsSnapshot.upsert({
     where:  { productId_snapshotDate_phase: { productId, snapshotDate, phase: 'after' } },
     update: {
       orderCount, unitsSold, revenue,
       windowStart, windowEnd,
+      storeRevenue, storeOrderCount, storeSessions,
       baselineExecutionId: executionId,
     },
     create: {
       productId, snapshotDate, phase: 'after',
       orderCount, unitsSold, revenue,
       windowStart, windowEnd,
+      storeRevenue, storeOrderCount, storeSessions,
       baselineExecutionId: executionId,
     },
   });
+
+  // Lazy backfill: if the linked before snapshot was captured before the store-metrics
+  // code was deployed, its storeRevenue/storeOrderCount will be null. Fill them in now
+  // using the window dates already stored on that snapshot so the comparison is symmetric.
+  const beforeSnap = await prisma.productMetricsSnapshot.findFirst({
+    where:  { baselineExecutionId: executionId, phase: 'before', storeRevenue: null, windowStart: { not: null } },
+    select: { id: true, windowStart: true, windowEnd: true },
+  });
+  if (beforeSnap) {
+    const beforeAgg = await prisma.order.aggregate({
+      where:  { storeId: product.storeId, createdAt: { gte: beforeSnap.windowStart, lt: beforeSnap.windowEnd } },
+      _count: { id: true },
+      _sum:   { totalPrice: true },
+    });
+    await prisma.productMetricsSnapshot.update({
+      where: { id: beforeSnap.id },
+      data:  {
+        storeRevenue:    parseFloat(beforeAgg._sum.totalPrice ?? 0),
+        storeOrderCount: beforeAgg._count.id ?? 0,
+      },
+    });
+  }
+
+  return afterSnapshot;
 }
 
 // ---------------------------------------------------------------------------
@@ -195,6 +260,17 @@ async function captureWindowedAfterSnapshot(prisma, productId, executionId, appl
 function safePct(before, after) {
   if (before === 0) return null;
   return parseFloat(((after - before) / before * 100).toFixed(2));
+}
+
+function safeAov(revenue, orderCount) {
+  if (!orderCount || orderCount === 0) return null;
+  return parseFloat((revenue / orderCount).toFixed(2));
+}
+
+// CVR expressed as a percentage (e.g. 2.50 = 2.50%). Null when sessions unavailable.
+function safeCvr(orderCount, sessions) {
+  if (!sessions || sessions === 0) return null;
+  return parseFloat((orderCount / sessions * 100).toFixed(4));
 }
 
 async function compareProductMetrics(prisma, productId) {
@@ -308,18 +384,33 @@ async function compareExecutionMetrics(prisma, executionId) {
   const aUnits   = after.unitsSold;
   const aRevenue = parseFloat(after.revenue);
 
+  const bStoreOrders   = before.storeOrderCount ?? 0;
+  const bStoreRevenue  = parseFloat(before.storeRevenue ?? 0);
+  const aStoreOrders   = after.storeOrderCount  ?? 0;
+  const aStoreRevenue  = parseFloat(after.storeRevenue  ?? 0);
+  const bStoreAov      = safeAov(bStoreRevenue, bStoreOrders);
+  const aStoreAov      = safeAov(aStoreRevenue, aStoreOrders);
+  const bStoreSessions = before.storeSessions ?? null;
+  const aStoreSessions = after.storeSessions  ?? null;
+  const bStoreCvr      = safeCvr(bStoreOrders, bStoreSessions);
+  const aStoreCvr      = safeCvr(aStoreOrders, aStoreSessions);
+
   return {
     success:     true,
     executionId,
     productId:   before.productId,
     before: {
       snapshotDate: before.snapshotDate,
+      windowStart:  before.windowStart,
+      windowEnd:    before.windowEnd,
       orderCount:   bOrders,
       unitsSold:    bUnits,
       revenue:      bRevenue,
     },
     after: {
       snapshotDate: after.snapshotDate,
+      windowStart:  after.windowStart,
+      windowEnd:    after.windowEnd,
       orderCount:   aOrders,
       unitsSold:    aUnits,
       revenue:      aRevenue,
@@ -331,6 +422,22 @@ async function compareExecutionMetrics(prisma, executionId) {
       orderCountChangePercent: safePct(bOrders,  aOrders),
       unitsSoldChangePercent:  safePct(bUnits,   aUnits),
       revenueChangePercent:    safePct(bRevenue, aRevenue),
+    },
+    store: {
+      before: { orderCount: bStoreOrders, revenue: bStoreRevenue, aov: bStoreAov, sessions: bStoreSessions, conversionRate: bStoreCvr },
+      after:  { orderCount: aStoreOrders, revenue: aStoreRevenue, aov: aStoreAov, sessions: aStoreSessions, conversionRate: aStoreCvr },
+      diff: {
+        revenueDiff:             parseFloat((aStoreRevenue - bStoreRevenue).toFixed(2)),
+        revenueChangePercent:    safePct(bStoreRevenue, aStoreRevenue),
+        orderCountDiff:          aStoreOrders - bStoreOrders,
+        orderCountChangePercent: safePct(bStoreOrders,  aStoreOrders),
+        aovDiff:                 bStoreAov !== null && aStoreAov !== null ? parseFloat((aStoreAov - bStoreAov).toFixed(2))       : null,
+        aovChangePercent:        bStoreAov !== null && aStoreAov !== null ? safePct(bStoreAov, aStoreAov)                        : null,
+        sessionsDiff:            bStoreSessions !== null && aStoreSessions !== null ? aStoreSessions - bStoreSessions            : null,
+        sessionsChangePercent:   bStoreSessions !== null && aStoreSessions !== null ? safePct(bStoreSessions, aStoreSessions)    : null,
+        cvrDiff:                 bStoreCvr !== null && aStoreCvr !== null ? parseFloat((aStoreCvr - bStoreCvr).toFixed(4))       : null,
+        cvrChangePercent:        bStoreCvr !== null && aStoreCvr !== null ? safePct(bStoreCvr, aStoreCvr)                        : null,
+      },
     },
   };
 }
@@ -367,6 +474,11 @@ async function getExecutionResultsSummary(prisma, executionId) {
       issueId:     execution.issueId,
       status:      'waiting_for_more_data',
       summary:     null,
+      store:       null,
+      unavailable: {
+        storeConversionRate:   'no session data',
+        productConversionRate: 'no product-level session data',
+      },
       insight:     null,
     };
   }
@@ -394,6 +506,45 @@ async function getExecutionResultsSummary(prisma, executionId) {
     },
   };
 
+  const sessionsAvailable =
+    compare.store?.before?.sessions !== null &&
+    compare.store?.before?.sessions !== undefined &&
+    compare.store?.after?.sessions  !== null &&
+    compare.store?.after?.sessions  !== undefined;
+
+  const storeSummary = compare.store ? {
+    sessions: {
+      before:        compare.store.before.sessions,
+      after:         compare.store.after.sessions,
+      diff:          compare.store.diff.sessionsDiff,
+      changePercent: compare.store.diff.sessionsChangePercent,
+    },
+    conversionRate: {
+      before:        compare.store.before.conversionRate,
+      after:         compare.store.after.conversionRate,
+      diff:          compare.store.diff.cvrDiff,
+      changePercent: compare.store.diff.cvrChangePercent,
+    },
+    revenue: {
+      before:        compare.store.before.revenue,
+      after:         compare.store.after.revenue,
+      diff:          compare.store.diff.revenueDiff,
+      changePercent: compare.store.diff.revenueChangePercent,
+    },
+    orders: {
+      before:        compare.store.before.orderCount,
+      after:         compare.store.after.orderCount,
+      diff:          compare.store.diff.orderCountDiff,
+      changePercent: compare.store.diff.orderCountChangePercent,
+    },
+    aov: {
+      before:        compare.store.before.aov,
+      after:         compare.store.after.aov,
+      diff:          compare.store.diff.aovDiff,
+      changePercent: compare.store.diff.aovChangePercent,
+    },
+  } : null;
+
   // Pick the most meaningful metric for the insight line (revenue first, then units)
   const insight =
     buildInsight('Revenue',    diff.revenueChangePercent)   ??
@@ -401,12 +552,21 @@ async function getExecutionResultsSummary(prisma, executionId) {
     buildInsight('Orders',     diff.orderCountChangePercent);
 
   return {
-    success:     true,
+    success:        true,
     executionId,
-    productId:   execution.productId,
-    issueId:     execution.issueId,
-    status:      'measured',
+    productId:      execution.productId,
+    issueId:        execution.issueId,
+    status:         'measured',
+    measurementWindow: {
+      before: { start: compare.before.windowStart, end: compare.before.windowEnd },
+      after:  { start: compare.after.windowStart,  end: compare.after.windowEnd  },
+    },
     summary,
+    store:          storeSummary,
+    unavailable: {
+      ...(sessionsAvailable ? {} : { storeConversionRate: 'no session data' }),
+      productConversionRate: 'no product-level session data',
+    },
     insight,
   };
 }

@@ -193,6 +193,84 @@ async function fetchOrderMetrics(store, periodDays = 90) {
   };
 }
 
+// ---------------------------------------------------------------------------
+// shopifyGraphQL — thin Admin GraphQL API wrapper.
+// Reuses the same per-store accessToken and API version as the REST client.
+// ---------------------------------------------------------------------------
+async function shopifyGraphQL(store, query, variables = {}) {
+  return shopifyFetch(
+    `${baseUrl(store.shopDomain)}/graphql.json`,
+    {
+      method:  'POST',
+      headers: headers(store.accessToken),
+      body:    JSON.stringify({ query, variables }),
+    }
+  );
+}
+
+// ---------------------------------------------------------------------------
+// fetchWindowedStoreAnalytics
+//
+// Fetches store-wide session count from Shopify Analytics (ShopifyQL) for a
+// given measurement window. Requires the read_analytics scope.
+//
+// Returns { sessions: number } on success.
+// Returns { sessions: null } on any failure (missing scope, plan limitation,
+// API error, parse error) — never throws. Callers treat null as "unavailable".
+//
+// windowStart / windowEnd: Date objects at UTC midnight.
+// ShopifyQL SINCE/UNTIL are both date-inclusive, so UNTIL = windowEnd - 1 day
+// to match our [windowStart, windowEnd) half-open UTC windows.
+//
+// Only sessions are fetched here. Conversion rate is derived later in the
+// measurement layer as storeOrderCount / storeSessions, using our own order
+// data as the numerator for full transparency.
+// ---------------------------------------------------------------------------
+async function fetchWindowedStoreAnalytics(store, windowStart, windowEnd) {
+  try {
+    const since = windowStart.toISOString().slice(0, 10);
+    const untilDate = new Date(windowEnd);
+    untilDate.setUTCDate(untilDate.getUTCDate() - 1);
+    const until = untilDate.toISOString().slice(0, 10);
+
+    const gqlQuery = `
+      mutation FetchStoreSessions($ql: String!) {
+        shopifyqlQuery(query: $ql) {
+          tableData {
+            unformattedData {
+              headers { name }
+              rows
+            }
+          }
+          parseErrors { code message }
+        }
+      }
+    `;
+
+    const data = await shopifyGraphQL(store, gqlQuery, {
+      ql: `FROM sessions SINCE ${since} UNTIL ${until} SELECT sum(sessions)`,
+    });
+
+    const result = data?.data?.shopifyqlQuery;
+
+    if (!result) return { sessions: null };
+
+    if (result.parseErrors?.length > 0) {
+      console.warn('[Analytics] ShopifyQL parse error:', result.parseErrors[0]?.message);
+      return { sessions: null };
+    }
+
+    const rows = result.tableData?.unformattedData?.rows ?? [];
+    if (!rows.length || !rows[0]?.length) return { sessions: null };
+
+    const sessions = parseInt(rows[0][0], 10);
+    return { sessions: Number.isFinite(sessions) ? sessions : null };
+  } catch (err) {
+    console.warn('[Analytics] fetchWindowedStoreAnalytics failed (non-fatal):', err.message);
+    return { sessions: null };
+  }
+}
+
 module.exports = {
   listThemes,
   getPublishedTheme,
@@ -206,4 +284,6 @@ module.exports = {
   updateImageAltText,
   previewUrl,
   fetchOrderMetrics,
+  shopifyGraphQL,
+  fetchWindowedStoreAnalytics,
 };

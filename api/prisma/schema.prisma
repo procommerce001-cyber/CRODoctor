@@ -229,6 +229,13 @@ model ProductMetricsSnapshot {
   // Defines the measurement window. Null on all-time cumulative snapshots.
   windowStart              DateTime?
   windowEnd                DateTime?
+  // Store-level totals for the same measurement window (null on standalone snapshots).
+  // Used to compute store-wide AOV before/after without a separate table.
+  storeRevenue             Decimal?
+  storeOrderCount          Int?
+  // Store-wide sessions from Shopify Analytics (null when read_analytics scope is absent).
+  // Enables store CVR = storeOrderCount / storeSessions when both are non-null.
+  storeSessions            Int?
   createdAt                DateTime @default(now())
 
   product Product @relation(fields: [productId], references: [id])
