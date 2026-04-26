@@ -1256,6 +1256,114 @@ async function getRevenueDashboard(prisma, shop) {
   };
 }
 
+// ---------------------------------------------------------------------------
+// getAttributedRevenueSummary
+//
+// Line-item-level attribution layer for the dashboard.
+// Splits store revenue into two buckets:
+//   improvedProductRevenue — line items where the product had a live applied
+//                             execution at the time of the order
+//   unattributedRevenue    — all other line items
+//
+// Attribution rule (all three must hold for a line item to be credited):
+//   1. productId is non-null (linked to a known product)
+//   2. At least one ContentExecution exists for that productId with
+//      status='applied' and createdAt < order.createdAt
+//   3. That execution was NOT rolled back before the order
+//      (no rolled_back row referencing it with createdAt < order.createdAt)
+//
+// Double-counting prevention:
+//   Each OrderLineItem.id is counted at most once regardless of how many
+//   executions exist for the same product.
+// ---------------------------------------------------------------------------
+async function getAttributedRevenueSummary(prisma, storeId, windowStart, windowEnd) {
+  // 1. Load all applied executions for this store
+  const appliedExecs = await prisma.contentExecution.findMany({
+    where:  { storeId, status: 'applied' },
+    select: { id: true, productId: true, createdAt: true },
+  });
+
+  // 2. Load all rolled_back rows that reference an applied execution
+  const rolledBackExecs = await prisma.contentExecution.findMany({
+    where:  { storeId, status: 'rolled_back', referenceExecutionId: { not: null } },
+    select: { referenceExecutionId: true, createdAt: true },
+  });
+
+  // Map: applied execution id → time it was rolled back
+  const rolledBackAt = new Map();
+  for (const rb of rolledBackExecs) {
+    rolledBackAt.set(rb.referenceExecutionId, rb.createdAt);
+  }
+
+  // productId → list of { appliedAt, rolledBackAt (or null) }
+  const productHistory = new Map();
+  for (const exec of appliedExecs) {
+    const rb = rolledBackAt.get(exec.id) ?? null;
+    if (!productHistory.has(exec.productId)) productHistory.set(exec.productId, []);
+    productHistory.get(exec.productId).push({ appliedAt: exec.createdAt, rolledBackAt: rb });
+  }
+
+  // True if product has a live improvement at orderTime
+  function isImprovedAt(productId, orderTime) {
+    const history = productHistory.get(productId);
+    if (!history) return false;
+    return history.some(h =>
+      h.appliedAt < orderTime &&
+      (h.rolledBackAt === null || h.rolledBackAt >= orderTime)
+    );
+  }
+
+  // 3. Fetch orders in window with line items
+  const orders = await prisma.order.findMany({
+    where:  { storeId, createdAt: { gte: windowStart, lt: windowEnd } },
+    select: {
+      id: true,
+      currency: true,
+      totalPrice: true,
+      createdAt: true,
+      lineItems: {
+        select: { id: true, productId: true, quantity: true, price: true, totalDiscount: true },
+      },
+    },
+  });
+
+  // 4. Attribute each line item
+  let storeRevenue           = 0;
+  let improvedProductRevenue = 0;
+  let improvedProductUnits   = 0;
+  let unattributedRevenue    = 0;
+  const improvedOrderIds     = new Set();
+  const countedLineItemIds   = new Set(); // prevent any double-count
+
+  for (const order of orders) {
+    storeRevenue += parseFloat(order.totalPrice);
+    for (const li of order.lineItems) {
+      if (countedLineItemIds.has(li.id)) continue;
+      countedLineItemIds.add(li.id);
+      const lineRevenue = parseFloat(li.price) * li.quantity - parseFloat(li.totalDiscount);
+      if (li.productId && isImprovedAt(li.productId, order.createdAt)) {
+        improvedProductRevenue += lineRevenue;
+        improvedProductUnits  += li.quantity;
+        improvedOrderIds.add(order.id);
+      } else {
+        unattributedRevenue += lineRevenue;
+      }
+    }
+  }
+
+  return {
+    windowStart,
+    windowEnd,
+    currency:               orders[0]?.currency ?? null,
+    storeRevenue:           parseFloat(storeRevenue.toFixed(2)),
+    storeOrderCount:        orders.length,
+    improvedProductRevenue: parseFloat(improvedProductRevenue.toFixed(2)),
+    improvedProductOrders:  improvedOrderIds.size,
+    improvedProductUnits,
+    unattributedRevenue:    parseFloat(unattributedRevenue.toFixed(2)),
+  };
+}
+
 module.exports = {
   analyzeExecutionOutcome,
   getStoreCROSuggestions,
@@ -1271,4 +1379,5 @@ module.exports = {
   getStoreOverview,
   getTopDecisionActions,
   getRevenueDashboard,
+  getAttributedRevenueSummary,
 };

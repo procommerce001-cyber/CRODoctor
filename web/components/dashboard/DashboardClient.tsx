@@ -3,13 +3,14 @@
 import { useState, useCallback, useEffect } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import type { DashboardPayload, ApplyResponse, TopAction, ExecutionResult, EarlySignal, ActivityItem } from '@/lib/api';
-import { applySelected, fetchTopActions, executeAction, fetchExecutionResults, fetchEarlySignal } from '@/lib/api';
+import { applySelected, fetchTopActions, executeAction, fetchExecutionResults, fetchEarlySignal, issueLabel } from '@/lib/api';
 import StoreOverview                from './StoreOverview';
 import ReadyToApplyList             from './ReadyToApplyList';
 import TopWinsList                  from './TopWinsList';
 import RecentActivityList           from './RecentActivityList';
 import ExecutionDetailsPanel        from './ExecutionDetailsPanel';
 import RevenueDashboard             from './RevenueDashboard';
+import MerchantSummary              from './MerchantSummary';
 import StoreSuggestionsList         from './StoreSuggestionsList';
 import DashboardStickySummaryBar    from './DashboardStickySummaryBar';
 import type { FilterValue }         from './StoreSuggestionsList';
@@ -170,6 +171,12 @@ export default function DashboardClient({ data }: Props) {
         onFilterChange={setActiveFilter}
       />
     <div style={styles.sections}>
+      <MerchantSummary
+        shop={SHOP}
+        overview={data.overview}
+        review={data.review}
+        recentActivity={data.recentActivity}
+      />
       <RevenueDashboard shop={SHOP} />
       {topActions.length > 0 && (() => {
         const pending     = topActions.filter(a => a.executionStatus === 'pending');
@@ -548,9 +555,9 @@ function ApplyResultBox({ result }: { result: ApplyResponse }) {
         {result.results.map(item => (
           <div key={item.selectionKey} style={styles.resultRow}>
             <span style={{ color: STATUS_COLOR[item.status] ?? '#374151', fontWeight: 600, minWidth: 60 }}>
-              {item.status}
+              {item.status === 'applied' ? 'Live' : item.status === 'skipped' ? 'Skipped' : 'Failed'}
             </span>
-            <span style={styles.resultKey}>{item.selectionKey}</span>
+            <span style={styles.resultKey}>{issueLabel(item.issueId)}</span>
             {item.reason && <span style={styles.resultReason}>{item.reason}</span>}
           </div>
         ))}

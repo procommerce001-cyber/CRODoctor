@@ -33,6 +33,7 @@ export interface DashboardOverview {
 
 export interface ReviewItem {
   productId: string;
+  productTitle: string | null;
   issueId: string;
   title: string;
   selectionKey: string;
@@ -492,6 +493,38 @@ export interface RevenueDashboardData {
   avgRevenuePerExecution: number | null;
   recentImpacts:          RecentImpact[];
   topWins:                RecentImpact[];
+}
+
+// ---------------------------------------------------------------------------
+// Attributed Revenue Summary
+// ---------------------------------------------------------------------------
+
+export interface AttributedRevenueData {
+  windowDays:             number;
+  windowStart:            string;
+  windowEnd:              string;
+  currency:               string | null;
+  storeRevenue:           number;
+  storeOrderCount:        number;
+  improvedProductRevenue: number;
+  improvedProductOrders:  number;
+  improvedProductUnits:   number;
+  unattributedRevenue:    number;
+}
+
+export async function fetchAttributedRevenue(shop: string, windowDays = 30): Promise<AttributedRevenueData | null> {
+  try {
+    const res = await fetch(
+      `${API_BASE}/metrics/store/attributed-revenue?shop=${encodeURIComponent(shop)}&windowDays=${windowDays}`,
+      { cache: 'no-store', credentials: 'include', headers: apiHeaders() }
+    );
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (!data.success) return null;
+    return data as AttributedRevenueData;
+  } catch {
+    return null;
+  }
 }
 
 export async function fetchRevenueDashboard(shop: string): Promise<RevenueDashboardData | null> {

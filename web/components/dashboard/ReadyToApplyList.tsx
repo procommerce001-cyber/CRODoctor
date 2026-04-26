@@ -9,8 +9,47 @@ function stripHtml(html: string | null): string {
   return html.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
+function patchDescription(patchMode: string | null): string {
+  if (patchMode === 'replace_full_body')     return 'This will replace your current product description.';
+  if (patchMode === 'insert_after_anchor')   return 'This will add new content to your product description.';
+  if (patchMode === 'replace_matched_block') return 'This will update a section of your product description.';
+  return 'This will update your product description.';
+}
+
+function proposedLabel(patchMode: string | null): string {
+  if (patchMode === 'replace_full_body') return 'What will replace it';
+  return 'What will be added';
+}
+
 const SEVERITY_COLOR: Record<string, string> = {
   critical: '#dc2626', high: '#ea580c', medium: '#d97706', low: '#65a30d',
+};
+
+const SEVERITY_LABEL: Record<string, string> = {
+  critical: 'Critical', high: 'High priority', medium: 'Medium', low: 'Low',
+};
+
+const REVIEW_STATUS_LABEL: Record<string, string> = {
+  approved: 'Ready to apply',
+  pending:  'Needs review',
+  rejected: 'Rejected',
+};
+
+const ISSUE_WHY: Record<string, string> = {
+  no_risk_reversal:            'Shoppers hesitate without a guarantee — adding one reduces drop-off.',
+  no_trust_bullets:            'Missing proof points make buyers uncertain before purchasing.',
+  weak_desire_creation:        'The description doesn\'t create enough desire to buy.',
+  no_description:              'No description — most shoppers will leave without one.',
+  description_too_short:       'Short descriptions don\'t answer buyer questions.',
+  description_center_aligned:  'Centre-aligned text is harder to read and reduces trust on mobile.',
+  no_social_proof:             'No social proof — reviews are a top conversion driver.',
+  no_size_guide:               'Without a size guide shoppers guess wrong and abandon the purchase.',
+  no_urgency:                  'Nothing encourages action now — urgency signals move undecided shoppers.',
+  no_compare_price:            'Without a reference price the value isn\'t obvious.',
+  missing_alt_text:            'Missing image descriptions hurt SEO and accessibility.',
+  no_future_pacing:            'Shoppers don\'t picture owning it — future-pacing language helps.',
+  no_sensory_language:         'Flat copy doesn\'t create desire. Sensory words make products feel real.',
+  no_outcome_sentence:         'No clear outcome — shoppers want to know what changes for them.',
 };
 
 interface PreviewState { loading: boolean; data: ContentPreview | null; error: string | null }
@@ -124,11 +163,10 @@ export default function ReadyToApplyList({
         <div style={styles.table}>
           <div style={styles.headerRow}>
             <span />
-            <span>Title</span>
-            <span>Severity</span>
-            <span>Score</span>
-            <span>Risk</span>
-            <span>Review</span>
+            <span>Issue</span>
+            <span>Priority</span>
+            <span>Safety</span>
+            <span>Status</span>
             <span>Preview</span>
           </div>
           {items.map((item) => {
@@ -150,13 +188,20 @@ export default function ReadyToApplyList({
                     onClick={e => e.stopPropagation()}
                     style={{ cursor: isDisabled ? 'not-allowed' : 'pointer' }}
                   />
-                  <span style={styles.title}>{item.title ?? issueLabel(item.issueId)}</span>
-                  <span style={{ ...styles.pill, color: SEVERITY_COLOR[item.severity] ?? '#374151' }}>
-                    {item.severity}
+                  <span style={styles.titleCell}>
+                    {item.productTitle && <span style={styles.productName}>{item.productTitle}</span>}
+                    <span style={styles.title}>{issueLabel(item.issueId)}</span>
+                    {ISSUE_WHY[item.issueId] && (
+                      <span style={styles.issueWhy}>{ISSUE_WHY[item.issueId]}</span>
+                    )}
                   </span>
-                  <span style={styles.mono}>{item.score ?? '—'}</span>
-                  <span style={styles.mono}>{item.riskLevel}</span>
-                  <span style={styles.mono}>{item.reviewStatus}</span>
+                  <span style={{ ...styles.pill, color: SEVERITY_COLOR[item.severity] ?? '#374151' }}>
+                    {SEVERITY_LABEL[item.severity] ?? item.severity}
+                  </span>
+                  <span style={styles.safetyBadge}>{item.riskLevel === 'low' ? '✓ Safe' : item.riskLevel}</span>
+                  <span style={{ ...styles.statusBadge, ...(item.reviewStatus === 'approved' ? styles.statusReady : {}) }}>
+                    {REVIEW_STATUS_LABEL[item.reviewStatus] ?? item.reviewStatus}
+                  </span>
                   <button
                     style={{ ...styles.btnPreview, ...(ps?.data ? styles.btnPreviewActive : {}) }}
                     onClick={e => handlePreview(item, e)}
@@ -171,38 +216,45 @@ export default function ReadyToApplyList({
                   </div>
                 )}
                 {as?.applied && (
-                  <div style={{ ...styles.previewPanel, background: '#f0fdf4', display: 'flex', alignItems: 'center', gap: 12 }}>
-                    <span style={{ color: '#16a34a', fontWeight: 600, flex: 1 }}>✓ Fix applied successfully.</span>
-                    <button
-                      style={{ ...styles.btnCancel, fontSize: 11, padding: '3px 10px', opacity: as.rollingBack ? 0.5 : 1 }}
-                      onClick={e => handleSingleRollback(item, e)}
-                      disabled={as.rollingBack}
-                    >
-                      {as.rollingBack ? 'Undoing…' : 'Undo'}
-                    </button>
-                    {as.error && <span style={{ color: '#dc2626', fontSize: 11 }}>{as.error}</span>}
+                  <div style={styles.successPanel}>
+                    <div style={styles.successMain}>✓ This change is now live on your product page.</div>
+                    <div style={styles.successSub}>We&apos;ll track the impact over the next 7 days — check back here for results.</div>
+                    <div style={styles.successFooter}>
+                      <button
+                        style={{ ...styles.btnCancel, fontSize: 11, padding: '3px 10px', opacity: as.rollingBack ? 0.5 : 1 }}
+                        onClick={e => handleSingleRollback(item, e)}
+                        disabled={as.rollingBack}
+                      >
+                        {as.rollingBack ? 'Undoing…' : 'Undo this change'}
+                      </button>
+                      {as.error && <span style={{ color: '#dc2626', fontSize: 11 }}>{as.error}</span>}
+                    </div>
                   </div>
                 )}
                 {ps?.data && !as?.applied && (
                   <div style={styles.previewPanel}>
-                    <div style={styles.previewMeta}>
-                      <span>Mode: <strong>{ps.data.patchMode ?? '—'}</strong></span>
-                      <span>Safety: <strong style={{ color: ps.data.patchSafety === 'high' ? '#16a34a' : '#d97706' }}>{ps.data.patchSafety ?? '—'}</strong></span>
-                      {ps.data.diffSummary && <span>{ps.data.diffSummary.note}</span>}
+                    <div style={styles.previewContext}>
+                      <span style={styles.previewContextText}>{patchDescription(ps.data.patchMode)}</span>
+                      {ps.data.diffSummary && (
+                        <span style={styles.previewDiffNote}>{ps.data.diffSummary.note}</span>
+                      )}
                     </div>
                     {ps.data.eligibleToApply ? (
                       <>
                         {ps.data.currentContent && (
                           <div style={{ ...styles.previewContent, marginBottom: 8 }}>
-                            <div style={styles.previewLabel}>Current description</div>
+                            <div style={styles.previewLabel}>What&apos;s on your page now</div>
                             <div style={{ ...styles.previewText, color: '#6b7280', maxHeight: 72, overflow: 'hidden' }}>
                               {stripHtml(ps.data.currentContent)}
                             </div>
                           </div>
                         )}
                         <div style={styles.previewContent}>
-                          <div style={{ ...styles.previewLabel, color: '#16a34a' }}>Proposed addition</div>
+                          <div style={{ ...styles.previewLabel, color: '#16a34a' }}>{proposedLabel(ps.data.patchMode)}</div>
                           <div style={{ ...styles.previewText, borderColor: '#bbf7d0', background: '#f0fdf4' }}>{ps.data.proposedContent}</div>
+                        </div>
+                        <div style={styles.reversibilityNote}>
+                          This change affects only this product. You can undo it instantly if needed.
                         </div>
                         <div style={styles.previewActions}>
                           <button
@@ -210,7 +262,7 @@ export default function ReadyToApplyList({
                             onClick={e => handleSingleApply(item, e)}
                             disabled={as?.applying}
                           >
-                            {as?.applying ? 'Applying…' : 'Approve & Apply this fix'}
+                            {as?.applying ? 'Applying…' : 'Apply this change'}
                           </button>
                           <button
                             style={styles.btnCancel}
@@ -223,7 +275,7 @@ export default function ReadyToApplyList({
                         </div>
                       </>
                     ) : (
-                      <div style={{ color: '#dc2626', fontSize: 12 }}>Blocked: {ps.data.blockReason}</div>
+                      <div style={{ color: '#dc2626', fontSize: 12 }}>Not available: {ps.data.blockReason}</div>
                     )}
                   </div>
                 )}
@@ -248,17 +300,29 @@ const styles: Record<string, React.CSSProperties> = {
   btnPreviewActive: { background: '#eff6ff', borderColor: '#3b82f6', color: '#1d4ed8' },
   empty:            { color: '#9ca3af', fontSize: 14 },
   table:            { border: '1px solid #e5e7eb', borderRadius: 8, overflow: 'hidden' },
-  headerRow:        { display: 'grid', gridTemplateColumns: '32px 2fr 1fr 1fr 1fr 1fr 72px', gap: 8, padding: '8px 16px', background: '#f9fafb', fontSize: 11, fontWeight: 600, color: '#6b7280', textTransform: 'uppercase' },
-  row:              { display: 'grid', gridTemplateColumns: '32px 2fr 1fr 1fr 1fr 1fr 72px', gap: 8, padding: '10px 16px', borderTop: '1px solid #f3f4f6', fontSize: 13, alignItems: 'center', cursor: 'pointer' },
+  headerRow:        { display: 'grid', gridTemplateColumns: '32px 2fr 1fr 1fr 1fr 72px', gap: 8, padding: '8px 16px', background: '#f9fafb', fontSize: 11, fontWeight: 600, color: '#6b7280', textTransform: 'uppercase' },
+  row:              { display: 'grid', gridTemplateColumns: '32px 2fr 1fr 1fr 1fr 72px', gap: 8, padding: '10px 16px', borderTop: '1px solid #f3f4f6', fontSize: 13, alignItems: 'center', cursor: 'pointer' },
+  titleCell:        { display: 'flex', flexDirection: 'column' as const, gap: 2 },
+  productName:      { fontSize: 11, fontWeight: 600, color: '#6b7280', textTransform: 'uppercase' as const, letterSpacing: '0.04em' },
   title:            { color: '#111827', fontWeight: 500 },
+  issueWhy:         { fontSize: 11, color: '#9ca3af', lineHeight: 1.4 },
   pill:             { fontWeight: 600, fontSize: 12 },
-  mono:             { color: '#374151' },
-  previewPanel:     { padding: '10px 16px 12px 48px', background: '#f8fafc', borderTop: '1px solid #e5e7eb', fontSize: 12 },
-  previewMeta:      { display: 'flex', gap: 16, marginBottom: 8, color: '#6b7280', flexWrap: 'wrap' },
-  previewContent:   {},
-  previewLabel:     { fontSize: 11, fontWeight: 600, color: '#6b7280', textTransform: 'uppercase', marginBottom: 4 },
-  previewText:      { background: '#fff', border: '1px solid #e5e7eb', borderRadius: 6, padding: '8px 12px', color: '#111827', lineHeight: 1.5, whiteSpace: 'pre-wrap' },
-  previewActions:   { display: 'flex', gap: 8, marginTop: 10, alignItems: 'center' },
-  btnApprove:       { fontSize: 12, padding: '5px 14px', border: 'none', borderRadius: 6, background: '#16a34a', color: '#fff', cursor: 'pointer', fontWeight: 600 },
-  btnCancel:        { fontSize: 12, padding: '5px 12px', border: '1px solid #d1d5db', borderRadius: 6, background: '#fff', cursor: 'pointer', color: '#374151' },
+  safetyBadge:      { fontSize: 12, color: '#16a34a' },
+  statusBadge:      { fontSize: 12, color: '#6b7280' },
+  statusReady:      { color: '#16a34a', fontWeight: 600 },
+  previewPanel:       { padding: '12px 16px 14px 48px', background: '#f8fafc', borderTop: '1px solid #e5e7eb', fontSize: 12 },
+  previewContext:     { display: 'flex', alignItems: 'baseline', gap: 12, marginBottom: 10, flexWrap: 'wrap' as const },
+  previewContextText: { fontSize: 13, color: '#374151', fontWeight: 500 },
+  previewDiffNote:    { fontSize: 11, color: '#9ca3af' },
+  previewContent:     {},
+  previewLabel:       { fontSize: 11, fontWeight: 600, color: '#6b7280', textTransform: 'uppercase' as const, marginBottom: 4 },
+  previewText:        { background: '#fff', border: '1px solid #e5e7eb', borderRadius: 6, padding: '8px 12px', color: '#111827', lineHeight: 1.5, whiteSpace: 'pre-wrap' as const },
+  reversibilityNote:  { fontSize: 11, color: '#6b7280', margin: '10px 0 6px', fontStyle: 'italic' as const },
+  previewActions:     { display: 'flex', gap: 8, marginTop: 4, alignItems: 'center' },
+  btnApprove:         { fontSize: 12, padding: '6px 16px', border: 'none', borderRadius: 6, background: '#16a34a', color: '#fff', cursor: 'pointer', fontWeight: 600 },
+  btnCancel:          { fontSize: 12, padding: '5px 12px', border: '1px solid #d1d5db', borderRadius: 6, background: '#fff', cursor: 'pointer', color: '#374151' },
+  successPanel:       { padding: '14px 16px 14px 48px', background: '#f0fdf4', borderTop: '1px solid #bbf7d0', display: 'flex', flexDirection: 'column' as const, gap: 4 },
+  successMain:        { fontSize: 13, fontWeight: 600, color: '#15803d' },
+  successSub:         { fontSize: 11, color: '#166534' },
+  successFooter:      { display: 'flex', alignItems: 'center', gap: 8, marginTop: 6 },
 };

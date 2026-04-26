@@ -3,7 +3,7 @@
 const express = require('express');
 const router  = express.Router();
 
-const { analyzeExecutionOutcome, getStoreCROSuggestions, captureProductMetricsSnapshot, compareProductMetrics, captureExecutionSnapshots, compareExecutionMetrics, getExecutionResultsSummary, getStoreResultsSummary, getStoreExecutionFeed, getStoreOverview, getRevenueDashboard } = require('../services/metrics.service');
+const { analyzeExecutionOutcome, getStoreCROSuggestions, captureProductMetricsSnapshot, compareProductMetrics, captureExecutionSnapshots, compareExecutionMetrics, getExecutionResultsSummary, getStoreResultsSummary, getStoreExecutionFeed, getStoreOverview, getRevenueDashboard, getAttributedRevenueSummary } = require('../services/metrics.service');
 const { resolveStore }      = require('../lib/resolve-store');
 const { getProductActions } = require('../services/action-center.service');
 const { PRODUCT_INCLUDE }   = require('../lib/product-include');
@@ -542,6 +542,38 @@ router.get('/revenue-dashboard', async (req, res) => {
   } catch (err) {
     console.error('[Metrics] GET /revenue-dashboard error:', err.message);
     res.status(500).json({ error: 'Internal error fetching revenue dashboard.' });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// GET /metrics/store/attributed-revenue?shop=&windowDays=30
+//
+// Line-item attribution summary: splits store revenue into improved-product
+// revenue vs unattributed revenue for the given window.
+//
+// windowDays defaults to 30. windowEnd is today UTC midnight.
+// ---------------------------------------------------------------------------
+router.get('/store/attributed-revenue', async (req, res) => {
+  const prisma = req.app.get('prisma');
+  try {
+    if (!req.query.shop) return res.status(400).json({ error: 'shop is required' });
+
+    const store = await resolveStore(prisma, req.query.shop, res);
+    if (!store) return;
+
+    const windowDays = Math.max(1, parseInt(req.query.windowDays, 10) || 30);
+    const windowEnd  = new Date();
+    windowEnd.setUTCHours(0, 0, 0, 0);
+    windowEnd.setUTCDate(windowEnd.getUTCDate() + 1); // include today
+    const windowStart = new Date(windowEnd);
+    windowStart.setUTCDate(windowStart.getUTCDate() - windowDays);
+
+    const result = await getAttributedRevenueSummary(prisma, store.id, windowStart, windowEnd);
+
+    res.json({ success: true, shop: req.query.shop, windowDays, ...result });
+  } catch (err) {
+    console.error('[Metrics] GET /store/attributed-revenue error:', err.message);
+    res.status(500).json({ error: 'Internal error computing attributed revenue.' });
   }
 });
 

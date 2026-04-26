@@ -8,11 +8,19 @@ import type { ActivityItem } from '@/lib/api';
 const SHOP = process.env.NEXT_PUBLIC_SHOP ?? '';
 
 const STATUS_COLOR: Record<string, string> = {
-  applied:       '#16a34a',
-  rolled_back:   '#9ca3af',
-  failed:        '#dc2626',
-  measured:      '#2563eb',
+  applied:               '#16a34a',
+  rolled_back:           '#9ca3af',
+  failed:                '#dc2626',
+  measured:              '#2563eb',
   waiting_for_more_data: '#d97706',
+};
+
+const STATUS_LABEL: Record<string, string> = {
+  applied:               'Live',
+  rolled_back:           'Rolled back',
+  failed:                'Failed',
+  measured:              'Measured',
+  waiting_for_more_data: 'Measuring impact',
 };
 
 function formatDate(iso: string) {
@@ -82,7 +90,7 @@ export default function RecentActivityList({ items, selectedExecId, onSelect }: 
             </div>
             <div style={styles.right}>
               <span style={{ ...styles.statusBadge, color: STATUS_COLOR[item.status] ?? '#374151' }}>
-                {item.status}
+                {STATUS_LABEL[item.status] ?? item.status}
               </span>
               <span style={styles.date}>{formatDate(item.createdAt)}</span>
               {item.status === 'applied' && (
@@ -92,13 +100,13 @@ export default function RecentActivityList({ items, selectedExecId, onSelect }: 
                     disabled={isRollingBack[item.executionId] || !!rollbackSuccess[item.executionId]}
                     onClick={(e) => { e.stopPropagation(); handleRollback(item); }}
                   >
-                    {isRollingBack[item.executionId] ? 'Rolling back...' : rollbackSuccess[item.executionId] ? 'Rolled back' : 'Rollback'}
+                    {isRollingBack[item.executionId] ? 'Undoing…' : rollbackSuccess[item.executionId] ? 'Undone' : 'Undo change'}
                   </button>
                   {rollbackError[item.executionId] && (
                     <span style={styles.rollbackError}>{rollbackError[item.executionId]}</span>
                   )}
                   {rollbackSuccess[item.executionId] && (
-                    <span style={styles.rollbackSuccess}>Rolled back successfully</span>
+                    <span style={styles.rollbackSuccess}>Change undone — product restored</span>
                   )}
                 </>
               )}

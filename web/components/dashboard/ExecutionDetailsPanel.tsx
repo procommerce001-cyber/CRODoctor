@@ -2,8 +2,15 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { fetchExecutionDetails, apiHeaders, API_BASE } from '@/lib/api';
+import { fetchExecutionDetails, apiHeaders, API_BASE, issueLabel } from '@/lib/api';
 import type { ExecutionDetails, MetricStat } from '@/lib/api';
+
+const EXECUTION_STATUS_LABEL: Record<string, string> = {
+  applied:     'Live on your store',
+  rolled_back: 'Rolled back',
+  failed:      'Failed',
+  previewed:   'Preview only',
+};
 
 const SHOP = process.env.NEXT_PUBLIC_SHOP ?? '';
 
@@ -66,7 +73,7 @@ export default function ExecutionDetailsPanel({ executionId, onClose }: Props) {
       <div style={styles.drawer}>
         {/* Header */}
         <div style={styles.header}>
-          <span style={styles.headerTitle}>Execution Details</span>
+          <span style={styles.headerTitle}>Change Details</span>
           <button style={styles.closeBtn} onClick={onClose}>✕</button>
         </div>
 
@@ -80,18 +87,16 @@ export default function ExecutionDetailsPanel({ executionId, onClose }: Props) {
             <>
               {/* ── Meta ─────────────────────────────────────── */}
               <section style={styles.section}>
-                <Row label="Execution ID" value={data.executionId} mono />
-                <Row label="Issue ID"     value={data.issueId}     mono />
-                <Row label="Product ID"   value={data.productId}   mono />
-                <Row label="Status"       value={data.status} />
-                <Row label="Created"      value={new Date(data.createdAt).toLocaleString()} />
+                <Row label="Change type" value={issueLabel(data.issueId)} />
+                <Row label="Status"      value={EXECUTION_STATUS_LABEL[data.status] ?? data.status} />
+                <Row label="Applied on"  value={new Date(data.createdAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })} />
               </section>
 
               {/* ── Content ──────────────────────────────────── */}
               <section style={styles.section}>
-                <h3 style={styles.sectionTitle}>Content</h3>
-                <ContentBlock label="Before" html={data.previousContent} />
-                <ContentBlock label="Applied" html={data.appliedContent} />
+                <h3 style={styles.sectionTitle}>What changed</h3>
+                <ContentBlock label="Before this change" html={data.previousContent} />
+                <ContentBlock label="After this change"  html={data.appliedContent} />
               </section>
 
               {/* ── Impact Snapshot ──────────────────────────── */}
@@ -137,7 +142,7 @@ export default function ExecutionDetailsPanel({ executionId, onClose }: Props) {
                 <section style={styles.section}>
                   <h3 style={styles.sectionTitle}>Actions</h3>
                   {rollbackSuccess ? (
-                    <p style={styles.rollbackSuccess}>Rollback completed.</p>
+                    <p style={styles.rollbackSuccess}>Change undone — your product has been restored.</p>
                   ) : (
                     <>
                       <button
@@ -145,7 +150,7 @@ export default function ExecutionDetailsPanel({ executionId, onClose }: Props) {
                         disabled={isRollingBack}
                         onClick={handleRollback}
                       >
-                        {isRollingBack ? 'Rolling back...' : 'Rollback change'}
+                        {isRollingBack ? 'Undoing…' : 'Undo this change'}
                       </button>
                       {rollbackError && (
                         <p style={styles.rollbackError}>{rollbackError}</p>

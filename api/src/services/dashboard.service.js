@@ -125,6 +125,7 @@ async function getReviewSelectionPayload(prisma, storeId) {
 
       const item = {
         productId:     raw.id,
+        productTitle:  raw.title ?? null,
         issueId:       action.issueId,
         title:         action.title,
         selectionKey:  `${raw.id}::${action.issueId}`,
