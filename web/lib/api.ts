@@ -490,6 +490,7 @@ export interface RevenueDashboardData {
   productsImproved:       number;
   executionsCount:        number;
   measuredCount:          number;
+  insufficientDataCount:  number;
   avgRevenuePerExecution: number | null;
   recentImpacts:          RecentImpact[];
   topWins:                RecentImpact[];

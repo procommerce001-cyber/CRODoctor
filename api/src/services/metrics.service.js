@@ -273,6 +273,24 @@ function safeCvr(orderCount, sessions) {
   return parseFloat((orderCount / sessions * 100).toFixed(4));
 }
 
+// Minimum orders required in BOTH the before AND after windows before a win/loss
+// outcome label is assigned. Below this threshold, single-product variance is too
+// high to distinguish a real lift from noise.
+const MIN_ORDERS_PER_WINDOW = 5;
+
+// Confidence tier derived from the smaller of before vs. after order counts.
+//   'high'        ≥ 30 orders in each window
+//   'medium'      ≥ 10
+//   'low'         ≥ MIN_ORDERS_PER_WINDOW (5)
+//   'insufficient' < MIN_ORDERS_PER_WINDOW — do not publish a lift number
+function deriveConfidence(beforeOrders, afterOrders) {
+  const min = Math.min(beforeOrders ?? 0, afterOrders ?? 0);
+  if (min >= 30) return 'high';
+  if (min >= 10) return 'medium';
+  if (min >= MIN_ORDERS_PER_WINDOW) return 'low';
+  return 'insufficient';
+}
+
 async function compareProductMetrics(prisma, productId) {
   const snapshots = await prisma.productMetricsSnapshot.findMany({
     where:   { productId },
@@ -563,6 +581,7 @@ async function getExecutionResultsSummary(prisma, executionId) {
     },
     summary,
     store:          storeSummary,
+    confidence:     deriveConfidence(before.orderCount, after.orderCount),
     unavailable: {
       ...(sessionsAvailable ? {} : { storeConversionRate: 'no session data' }),
       productConversionRate: 'no product-level session data',
@@ -755,7 +774,7 @@ async function getStoreCROSuggestions(prisma, shop) {
 
   for (const { id, issueId } of executions) {
     const outcome = await analyzeExecutionOutcome(prisma, id);
-    if (outcome.status === 'pending') continue;   // not enough data — skip
+    if (outcome.status === 'pending' || outcome.status === 'insufficient_data') continue;
 
     measuredExecutions++;
     if (!byIssue[issueId]) byIssue[issueId] = { success: 0, neutral: 0, negative: 0 };
@@ -813,6 +832,19 @@ async function analyzeExecutionOutcome(prisma, executionId) {
       status:         'pending',
       insight:        null,
       recommendation: 'Wait for more data before making changes',
+    };
+  }
+
+  const confidence = result.confidence ?? deriveConfidence(
+    result.summary.orders.before,
+    result.summary.orders.after,
+  );
+  if (confidence === 'insufficient') {
+    return {
+      executionId,
+      status:         'insufficient_data',
+      insight:        `Only ${result.summary.orders.before} order(s) before and ${result.summary.orders.after} after — minimum ${MIN_ORDERS_PER_WINDOW} required in each window`,
+      recommendation: `Wait for at least ${MIN_ORDERS_PER_WINDOW} orders per measurement window before drawing conclusions`,
     };
   }
 
@@ -1170,7 +1202,8 @@ async function getRevenueDashboard(prisma, shop) {
     success: true, shop, empty: true,
     totalRevenueImpact: 0, revenueGrowthPercent: null,
     ordersGrowthPercent: null, aovChangePercent: null,
-    productsImproved: 0, executionsCount: 0, measuredCount: 0, recentImpacts: [],
+    productsImproved: 0, executionsCount: 0, measuredCount: 0,
+    insufficientDataCount: 0, recentImpacts: [],
   };
   if (executions.length === 0) return empty;
 
@@ -1182,14 +1215,15 @@ async function getRevenueDashboard(prisma, shop) {
   });
   const titleMap = new Map(products.map(p => [p.id, p.title]));
 
-  let totalRevenueImpact = 0;
-  const revenueChangePcts  = [];
-  const ordersChangePcts   = [];
+  let totalRevenueImpact    = 0;
+  const revenueChangePcts   = [];
+  const ordersChangePcts    = [];
   const unitsSoldChangePcts = [];
-  const aovChangePcts      = [];
-  const improvedProducts   = new Set();
-  let measuredCount        = 0;
-  const recentImpactsRaw   = [];
+  const aovChangePcts       = [];
+  const improvedProducts    = new Set();
+  let measuredCount         = 0;
+  let insufficientDataCount = 0;
+  const recentImpactsRaw    = [];
   const r2 = n => n !== null && n !== undefined ? parseFloat(n.toFixed(2)) : null;
 
   for (const exec of executions) {
@@ -1199,10 +1233,13 @@ async function getRevenueDashboard(prisma, shop) {
     measuredCount++;
     const { revenue, orders, unitsSold } = result.summary;
 
-    if (revenue.diff > 0) {
-      totalRevenueImpact += revenue.diff;
-      improvedProducts.add(exec.productId);
+    if (result.confidence === 'insufficient') {
+      insufficientDataCount++;
+      continue; // window complete but too few orders — exclude from all aggregates
     }
+
+    totalRevenueImpact += revenue.diff;
+    if (revenue.diff > 0) improvedProducts.add(exec.productId);
 
     if (revenue.changePercent  !== null) revenueChangePcts.push(revenue.changePercent);
     if (orders.changePercent   !== null) ordersChangePcts.push(orders.changePercent);
@@ -1238,6 +1275,8 @@ async function getRevenueDashboard(prisma, shop) {
     .sort((a, b) => b.revenueDelta - a.revenueDelta)
     .slice(0, 5);
 
+  const reliableCount = measuredCount - insufficientDataCount;
+
   return {
     success:                true,
     shop,
@@ -1249,8 +1288,9 @@ async function getRevenueDashboard(prisma, shop) {
     aovChangePercent:       r2(avg(aovChangePcts)),
     productsImproved:       improvedProducts.size,
     executionsCount:        executions.length,
-    measuredCount:          measuredCount,
-    avgRevenuePerExecution: r2(measuredCount > 0 ? totalRevenueImpact / measuredCount : null),
+    measuredCount,
+    insufficientDataCount,
+    avgRevenuePerExecution: r2(reliableCount > 0 ? totalRevenueImpact / reliableCount : null),
     recentImpacts,
     topWins,
   };
