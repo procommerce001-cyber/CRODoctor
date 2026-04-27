@@ -4,7 +4,7 @@ import { useState, useEffect, useRef } from 'react';
 import type { RevenueDashboardData, RecentImpact } from '@/lib/api';
 import { fetchRevenueDashboard } from '@/lib/api';
 
-interface Props { shop: string }
+interface Props { shop: string; demoMode?: boolean }
 
 // ---------------------------------------------------------------------------
 // Formatters
@@ -171,7 +171,7 @@ function RecentActivityRow({ item }: { item: RecentImpact }) {
 // ---------------------------------------------------------------------------
 const POLL_MS = 45_000;
 
-export default function RevenueDashboard({ shop }: Props) {
+export default function RevenueDashboard({ shop, demoMode }: Props) {
   const [data,        setData]        = useState<RevenueDashboardData | null>(null);
   const [loading,     setLoading]     = useState(true);
   const [error,       setError]       = useState(false);
@@ -203,7 +203,25 @@ export default function RevenueDashboard({ shop }: Props) {
 
   const animatedRevenue = useCountUp(data?.totalRevenueImpact ?? 0);
 
-  if (loading) return <div style={s.skeleton} />;
+  if (loading) {
+    return (
+      <section style={s.wrap}>
+        <div style={s.heroSection}>
+          <div style={s.heroEyebrow}>Measured sales lift</div>
+          <div style={{ ...s.heroNumber, color: '#d1d5db' }}>—</div>
+          <div style={{ ...s.heroSub, color: '#9ca3af' }}>Calculating measured sales lift…</div>
+        </div>
+        <div style={s.kpiStrip}>
+          {[0, 1, 2].map(i => (
+            <div key={i} style={{ ...s.kpiTile, borderRight: i < 2 ? '1px solid #f3f4f6' : 'none' }}>
+              <div style={s.skelVal} />
+              <div style={s.skelLbl} />
+            </div>
+          ))}
+        </div>
+      </section>
+    );
+  }
 
   if (error || !data) {
     return (
@@ -221,8 +239,8 @@ export default function RevenueDashboard({ shop }: Props) {
       <section style={s.wrap}>
         <div style={s.emptyState}>
           <div style={s.emptyIcon}>$</div>
-          <div style={s.emptyHeadline}>No revenue impact tracked yet</div>
-          <div style={s.emptyBody}>Apply your first fix to start generating measurable impact</div>
+          <div style={s.emptyHeadline}>Measured sales lift not available yet</div>
+          <div style={s.emptyBody}>Uplift measurement requires a before/after comparison period — data will appear once enough orders have been recorded after a change</div>
         </div>
       </section>
     );
@@ -239,11 +257,12 @@ export default function RevenueDashboard({ shop }: Props) {
       {/* ── Hero: Revenue impact ─────────────────────────────────────────── */}
       <div style={s.heroSection}>
         <div style={s.heroEyebrow}>
-          Revenue impact
+          Measured sales lift
+          {demoMode && <span style={s.previewTag}>Tomorrow preview</span>}
           {justUpdated && <span style={s.updatedBadge}>Updated</span>}
         </div>
         <div style={s.heroNumber}>{fmtHeroMoney(animatedRevenue)}</div>
-        <div style={s.heroSub}>Measured revenue lift from all changes applied to your store</div>
+        <div style={s.heroSub}>Before/after revenue comparison across all measured changes</div>
       </div>
 
       {/* ── KPI strip ────────────────────────────────────────────────────── */}
@@ -289,25 +308,21 @@ const s: Record<string, React.CSSProperties> = {
     overflow:     'hidden',
   },
 
-  skeleton: {
-    background:   '#f9fafb',
-    border:       '1px solid #e5e7eb',
-    borderRadius: 12,
-    minHeight:    220,
-  },
+  skelVal: { height: 22, width: 56, background: '#f3f4f6', borderRadius: 4, marginBottom: 6 },
+  skelLbl: { height: 9,  width: 72, background: '#f9fafb',  borderRadius: 3 },
 
   // Hero
   heroSection: {
-    padding:      '24px 24px 20px',
-    background:   '#f0fdf4',
-    borderBottom: '1px solid #dcfce7',
+    padding:      '20px 24px 16px',
+    background:   '#f8f9fa',
+    borderBottom: '1px solid #f0f1f2',
   },
   heroEyebrow: {
     fontSize:      11,
     fontWeight:    700,
     letterSpacing: '0.08em',
     textTransform: 'uppercase' as const,
-    color:         '#16a34a',
+    color:         '#6b7280',
     marginBottom:  6,
     display:       'flex',
     alignItems:    'center',
@@ -320,17 +335,26 @@ const s: Record<string, React.CSSProperties> = {
     padding:      '2px 6px',
     borderRadius: 99,
   },
+  previewTag: {
+    fontSize:     10,
+    fontWeight:   600,
+    background:   '#fef3c7',
+    color:        '#92400e',
+    border:       '1px solid #fde68a',
+    padding:      '2px 6px',
+    borderRadius: 99,
+  },
   heroNumber: {
-    fontSize:      48,
+    fontSize:      40,
     fontWeight:    800,
-    color:         '#14532d',
+    color:         '#374151',
     letterSpacing: '-0.04em',
     lineHeight:    1,
     marginBottom:  6,
   },
   heroSub: {
     fontSize: 12,
-    color:    '#166534',
+    color:    '#9ca3af',
   },
 
   // KPI strip

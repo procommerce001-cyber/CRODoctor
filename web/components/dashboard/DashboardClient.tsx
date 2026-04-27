@@ -74,6 +74,7 @@ export default function DashboardClient({ data }: Props) {
   const router       = useRouter();
   const searchParams = useSearchParams();
   const selectedExecId = searchParams.get('executionId');
+  const demoMode       = searchParams.get('demoTomorrow') === '1';
 
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [suggestionCounts, setSuggestionCounts] = useState({ open: 0, completed: 0, blocked: 0 });
@@ -171,13 +172,21 @@ export default function DashboardClient({ data }: Props) {
         onFilterChange={setActiveFilter}
       />
     <div style={styles.sections}>
-      <MerchantSummary
-        shop={SHOP}
-        overview={data.overview}
-        review={data.review}
-        recentActivity={data.recentActivity}
-      />
-      <RevenueDashboard shop={SHOP} />
+      {demoMode && (
+        <div style={styles.demoBanner}>
+          Tomorrow preview — displaying today&apos;s real sales as post-measurement state. No data was changed.
+        </div>
+      )}
+      <div style={styles.heroZone}>
+        <MerchantSummary
+          shop={SHOP}
+          overview={data.overview}
+          review={data.review}
+          recentActivity={data.recentActivity}
+          demoMode={demoMode}
+        />
+        <RevenueDashboard shop={SHOP} demoMode={demoMode} />
+      </div>
       {topActions.length > 0 && (() => {
         const pending     = topActions.filter(a => a.executionStatus === 'pending');
         const revenueRisk = pending.reduce((sum, a) => sum + Math.round(a.revenue / 30), 0);
@@ -614,7 +623,9 @@ const winStyles: Record<string, React.CSSProperties> = {
 };
 
 const styles: Record<string, React.CSSProperties> = {
-  sections:       { display: 'flex', flexDirection: 'column', gap: 40 },
+  sections:       { display: 'flex', flexDirection: 'column', gap: 28 },
+  heroZone:       { display: 'flex', flexDirection: 'column', gap: 8 },
+  demoBanner:     { fontSize: 11, color: '#92400e', background: '#fef3c7', border: '1px solid #fde68a', borderRadius: 6, padding: '7px 14px', lineHeight: 1.5 },
   sectionHeading: { fontSize: 16, fontWeight: 600, marginBottom: 12 },
   actionList:     { display: 'flex', flexDirection: 'column', gap: 8 },
   // hero card — rank 1

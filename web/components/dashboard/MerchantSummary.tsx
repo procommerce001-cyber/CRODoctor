@@ -9,13 +9,14 @@ interface Props {
   overview:       DashboardOverview;
   review:         ReviewPayload;
   recentActivity: ActivityItem[];
+  demoMode?:      boolean;
 }
 
-export default function MerchantSummary({ shop, overview, review, recentActivity }: Props) {
+export default function MerchantSummary({ shop, overview, review, recentActivity, demoMode }: Props) {
   const [attr, setAttr] = useState<AttributedRevenueData | null>(null);
 
   useEffect(() => {
-    fetchAttributedRevenue(shop, 30)
+    fetchAttributedRevenue(shop, demoMode ? 1 : 30)
       .then(setAttr)
       .catch(() => setAttr(null));
   }, [shop]);
@@ -43,124 +44,137 @@ export default function MerchantSummary({ shop, overview, review, recentActivity
   const measuringCount = overview.waitingExecutions;
   const pendingCount   = review.summary.readyToApplyCount;
 
-  // Short headline sentence
-  let headline = '';
-  if (liveCount === 0) {
-    headline = 'No changes have been applied to your store yet.';
-  } else {
-    headline = `${liveCount} change${liveCount === 1 ? '' : 's'} ${liveCount === 1 ? 'is' : 'are'} currently live on your store.`;
-    if (measuringCount > 0) {
-      headline += ` ${measuringCount} ${measuringCount === 1 ? 'is' : 'are'} still being measured.`;
-    }
-    if (pendingCount > 0) {
-      headline += ` ${pendingCount} more ${pendingCount === 1 ? 'change is' : 'changes are'} ready to apply.`;
-    }
-  }
-
   const attrPct = attr && attr.storeRevenue > 0
     ? Math.round((attr.improvedProductRevenue / attr.storeRevenue) * 100)
     : null;
 
-  return (
-    <div style={s.card}>
-      {/* Header */}
-      <div style={s.headerRow}>
-        <span style={s.heading}>What changed and what happened since</span>
-        <span style={s.window}>Last 30 days</span>
-      </div>
+  let heroBody: React.ReactNode;
 
-      {/* Headline sentence */}
-      <p style={s.headline}>{headline}</p>
-
-      {/* Summary rows */}
-      <div style={s.rows}>
-        <SummaryRow
-          label="Changes currently live"
-          value={liveCount > 0 ? String(liveCount) : 'None yet'}
-          muted={liveCount === 0}
-        />
-
-        {recentProducts.length > 0 && (
-          <SummaryRow
-            label="Products changed recently"
-            value={recentProducts.join(', ')}
-          />
-        )}
-
-        {attr && (
-          <SummaryRow
-            label="Revenue from improved products"
-            value={fmtRev(attr.improvedProductRevenue)}
-            sub={attrPct !== null ? `${attrPct}% of total store revenue` : undefined}
-            highlight
-          />
-        )}
-
-        {attr && attr.improvedProductOrders > 0 && (
-          <SummaryRow
-            label="Orders containing improved products"
-            value={String(attr.improvedProductOrders)}
-          />
-        )}
-
-        {measuringCount > 0 && (
-          <SummaryRow
-            label="Still measuring impact"
-            value={`${measuringCount} change${measuringCount === 1 ? '' : 's'}`}
-            muted
-          />
-        )}
-
+  if (liveCount === 0) {
+    heroBody = (
+      <div style={s.emptyState}>
+        <div style={s.emptyTitle}>Apply your first change to start tracking revenue impact</div>
         {pendingCount > 0 && (
-          <SummaryRow
-            label="Ready to apply"
-            value={`${pendingCount} change${pendingCount === 1 ? '' : 's'} waiting`}
-            accent
-          />
+          <div style={s.emptyHint}>{pendingCount} change{pendingCount === 1 ? '' : 's'} ready to apply</div>
         )}
       </div>
+    );
+  } else if (attr === null) {
+    heroBody = (
+      <div style={s.loadingState}>
+        <div style={s.loadingDot} />
+        <div style={s.loadingText}>Attributing revenue to improved products…</div>
+        <div style={s.loadingHint}>{liveCount} change{liveCount === 1 ? '' : 's'} live — data will appear shortly</div>
+      </div>
+    );
+  } else if (attr.improvedProductRevenue === 0) {
+    const zero = fmtRev(0);
+    heroBody = demoMode ? (
+      <>
+        <div style={s.zeroRevenue}>{zero}</div>
+        <div style={s.zeroLabel}>No sales from improved products yet today</div>
+        <div style={s.zeroHint}>Results will appear here as orders come in today.</div>
+      </>
+    ) : (
+      <>
+        <div style={s.zeroRevenue}>{zero}</div>
+        <div style={s.zeroLabel}>Improved products generated {zero} so far</div>
+        <div style={s.zeroHint}>No attributed sales recorded yet this period. Results will appear as orders come in.</div>
+      </>
+    );
+  } else {
+    heroBody = (
+      <>
+        {demoMode && (
+          <div style={s.demoTag}>Preview · today&apos;s real sales · no data changed</div>
+        )}
+        <div style={s.heroRevenue}>{fmtRev(attr.improvedProductRevenue)}</div>
+        <div style={s.heroRevenueLabel}>
+          {attr.improvedProductOrders > 0 && attrPct !== null
+            ? `Brought in by ${attr.improvedProductOrders.toLocaleString()} order${attr.improvedProductOrders === 1 ? '' : 's'} on improved products — ${attrPct}% of store revenue this period`
+            : attr.improvedProductOrders > 0
+            ? `Brought in by ${attr.improvedProductOrders.toLocaleString()} order${attr.improvedProductOrders === 1 ? '' : 's'} on improved products`
+            : attrPct !== null
+            ? `${attrPct}% of your store revenue this period`
+            : 'From improved products this period'}
+        </div>
+        {recentProducts.length > 0 && (
+          <div style={s.chipsSection}>
+            <div style={s.chipsLabel}>Products contributing</div>
+            <div style={s.chips}>
+              {recentProducts.map(name => (
+                <span key={name} style={s.chip}>{name}</span>
+              ))}
+            </div>
+          </div>
+        )}
+        {attr.unattributedRevenue > 0 && (
+          <div style={s.unattributed}>
+            {fmtRev(attr.unattributedRevenue)} in store revenue came from products the system did not change
+          </div>
+        )}
+      </>
+    );
+  }
 
-      {/* Footer note */}
-      {attr && attr.unattributedRevenue > 0 && (
-        <p style={s.note}>
-          {fmtRev(attr.unattributedRevenue)} in store revenue this period came from products the system did not change.
-        </p>
+  return (
+    <div style={{ ...s.card, ...(demoMode ? s.cardDemo : {}) }}>
+      <div style={s.headerRow}>
+        <span style={s.heading}>Improved Product Revenue</span>
+        <span style={s.window}>{demoMode ? 'Today' : 'Last 30 days'}</span>
+      </div>
+      <div style={s.heroBody}>
+        {heroBody}
+      </div>
+      {liveCount > 0 && (pendingCount > 0 || measuringCount > 0) && (
+        <div style={s.footer}>
+          {pendingCount > 0 && (
+            <span style={s.footerAccent}>{pendingCount} change{pendingCount === 1 ? '' : 's'} ready to apply</span>
+          )}
+          {measuringCount > 0 && (
+            <span style={s.footerMuted}>{measuringCount} still measuring</span>
+          )}
+        </div>
       )}
     </div>
   );
 }
 
-function SummaryRow({ label, value, sub, highlight, muted, accent }: {
-  label:     string;
-  value:     string;
-  sub?:      string;
-  highlight?: boolean;
-  muted?:    boolean;
-  accent?:   boolean;
-}) {
-  const valueColor = highlight ? '#166534' : muted ? '#9ca3af' : accent ? '#b45309' : '#111827';
-  return (
-    <div style={s.row}>
-      <span style={s.rowLabel}>{label}</span>
-      <div style={s.rowRight}>
-        <span style={{ ...s.rowValue, color: valueColor }}>{value}</span>
-        {sub && <span style={s.rowSub}>{sub}</span>}
-      </div>
-    </div>
-  );
-}
-
 const s: Record<string, React.CSSProperties> = {
-  card:      { background: '#fff', border: '1px solid #e5e7eb', borderRadius: 10, padding: '16px 20px', display: 'flex', flexDirection: 'column', gap: 12 },
-  headerRow: { display: 'flex', alignItems: 'baseline', justifyContent: 'space-between' },
-  heading:   { fontSize: 13, fontWeight: 700, color: '#111827' },
-  window:    { fontSize: 11, color: '#9ca3af' },
-  headline:  { fontSize: 13, color: '#374151', lineHeight: 1.5, margin: 0, padding: '2px 0' },
-  rows:      { display: 'flex', flexDirection: 'column', gap: 0, borderTop: '1px solid #f3f4f6', paddingTop: 10 },
-  row:       { display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', padding: '7px 0', borderBottom: '1px solid #f9fafb' },
-  rowLabel:  { fontSize: 12, color: '#6b7280' },
-  rowRight:  { display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 1 },
-  rowValue:  { fontSize: 13, fontWeight: 600 },
-  rowSub:    { fontSize: 11, color: '#16a34a' },
-  note:      { fontSize: 11, color: '#9ca3af', margin: 0, paddingTop: 6, borderTop: '1px solid #f3f4f6', lineHeight: 1.5 },
+  card:             { background: '#0d0d0d', border: '1px solid #222', borderRadius: 14, padding: '24px 28px', display: 'flex', flexDirection: 'column', gap: 16 },
+  cardDemo:         { border: '1px solid #2d3a1e' },
+  headerRow:        { display: 'flex', alignItems: 'center', justifyContent: 'space-between' },
+  heading:          { fontSize: 10, fontWeight: 700, letterSpacing: '0.1em', textTransform: 'uppercase' as const, color: '#666' },
+  window:           { fontSize: 10, color: '#555' },
+  heroBody:         { display: 'flex', flexDirection: 'column', gap: 6 },
+  // Revenue positive state
+  demoTag:          { fontSize: 10, fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase' as const, color: '#4a7a28', marginBottom: 4 },
+  heroRevenue:      { fontSize: 52, fontWeight: 800, letterSpacing: '-0.04em', color: '#326F0D', lineHeight: 1, marginBottom: 2 },
+  heroRevenueLabel: { fontSize: 13, color: '#999', fontWeight: 400, lineHeight: 1.5, marginBottom: 4 },
+  heroMeta:         { display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' as const },
+  heroMetaStrong:   { fontSize: 16, fontWeight: 700, color: '#e0e0e0' },
+  heroMetaDot:      { fontSize: 14, color: '#555' },
+  heroMetaMuted:    { fontSize: 13, color: '#888' },
+  chipsSection:     { display: 'flex', flexDirection: 'column' as const, gap: 7, marginTop: 12 },
+  chipsLabel:       { fontSize: 10, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase' as const, color: '#666' },
+  chips:            { display: 'flex', flexWrap: 'wrap' as const, gap: 6 },
+  chip:             { fontSize: 11, fontWeight: 500, color: '#b8b8b8', background: '#181818', border: '1px solid #2a2a2a', borderRadius: 20, padding: '4px 12px' },
+  unattributed:     { fontSize: 11, color: '#666', marginTop: 14, lineHeight: 1.5 },
+  // Zero-result state
+  zeroRevenue:      { fontSize: 40, fontWeight: 800, letterSpacing: '-0.04em', color: '#555', lineHeight: 1 },
+  zeroLabel:        { fontSize: 13, color: '#888', marginTop: 4 },
+  zeroHint:         { fontSize: 11, color: '#777', lineHeight: 1.6, marginTop: 6 },
+  // Loading state
+  loadingState:     { display: 'flex', flexDirection: 'column' as const, gap: 8, paddingTop: 8 },
+  loadingDot:       { width: 8, height: 8, borderRadius: '50%', background: '#326F0D', opacity: 0.4 },
+  loadingText:      { fontSize: 13, color: '#888' },
+  loadingHint:      { fontSize: 11, color: '#777' },
+  // Empty state
+  emptyState:       { display: 'flex', flexDirection: 'column' as const, gap: 8, padding: '8px 0' },
+  emptyTitle:       { fontSize: 14, color: '#888', lineHeight: 1.5, fontWeight: 500 },
+  emptyHint:        { fontSize: 11, color: '#4a7a28' },
+  // Footer — secondary next steps
+  footer:           { display: 'flex', alignItems: 'center', gap: 14, paddingTop: 14, borderTop: '1px solid #1a1a1a', flexWrap: 'wrap' as const },
+  footerAccent:     { fontSize: 11, fontWeight: 700, color: '#4a7a28', letterSpacing: '0.01em' },
+  footerMuted:      { fontSize: 11, color: '#666' },
 };

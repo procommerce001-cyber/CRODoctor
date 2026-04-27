@@ -37,10 +37,10 @@ export default async function DashboardPage() {
 }
 
 const styles: Record<string, React.CSSProperties> = {
-  main:     { maxWidth: 960, margin: '0 auto', padding: '32px 24px', fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif', color: '#111827' },
-  header:   { display: 'flex', alignItems: 'baseline', gap: 16, marginBottom: 32, borderBottom: '1px solid #e5e7eb', paddingBottom: 16 },
-  title:    { fontSize: 22, fontWeight: 700, margin: 0 },
-  shop:     { fontSize: 13, color: '#9ca3af' },
+  main:     { maxWidth: 960, margin: '0 auto', padding: '24px 24px 40px', fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif', color: '#111827' },
+  header:   { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20, borderBottom: '1px solid #f3f4f6', paddingBottom: 16 },
+  title:    { fontSize: 17, fontWeight: 800, margin: 0, letterSpacing: '-0.025em', color: '#111827' },
+  shop:     { fontSize: 11, color: '#9ca3af', background: '#f9fafb', border: '1px solid #f3f4f6', borderRadius: 20, padding: '4px 12px', letterSpacing: '0.01em' },
   sections: { display: 'flex', flexDirection: 'column', gap: 40 },
   error:    { padding: 32, color: '#dc2626', fontFamily: 'sans-serif', fontSize: 14 },
 };
