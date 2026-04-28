@@ -184,6 +184,125 @@ app.get('/debug/store', requireDev, async (req, res) => {
   }
 });
 
+// GET /debug/order-qa?shop=&limit=4
+// Internal-only: newest synced orders with line-item credit breakdown.
+// Blocked in production by requireDev. Never affects merchant-facing metrics.
+app.get('/debug/order-qa', requireDev, async (req, res) => {
+  const { shop } = req.query;
+  const limit = Math.min(parseInt(req.query.limit ?? '4', 10), 20);
+  if (!shop) return res.status(400).json({ error: 'shop query param required' });
+
+  try {
+    const store = await prisma.store.findUnique({ where: { shopDomain: shop } });
+    if (!store) return res.status(404).json({ error: 'Store not found' });
+
+    const orders = await prisma.order.findMany({
+      where: { storeId: store.id },
+      orderBy: { createdAt: 'desc' },
+      take: limit,
+      include: { lineItems: { include: { product: true } } },
+    });
+
+    const productIds = [...new Set(
+      orders.flatMap(o => o.lineItems.map(li => li.productId).filter(Boolean))
+    )];
+
+    const executions = await prisma.contentExecution.findMany({
+      where: { productId: { in: productIds }, status: 'applied' },
+      select: { id: true, productId: true, issueId: true, patchMode: true, createdAt: true },
+    });
+
+    const execByProduct = {};
+    for (const ex of executions) {
+      (execByProduct[ex.productId] ??= []).push(ex);
+    }
+
+    // Test-batch detection: titles contain -test/-ttest, or all orders placed within 3 min
+    const timestamps = orders.map(o => new Date(o.createdAt).getTime());
+    const timeSpanMs = timestamps.length > 1 ? Math.max(...timestamps) - Math.min(...timestamps) : 0;
+    const titleTestRe = /[-_]t{1,2}est\b/i;
+    const hasTestTitles = orders.some(o => o.lineItems.some(li => titleTestRe.test(li.title)));
+    const isTestBatch = hasTestTitles || timeSpanMs < 3 * 60 * 1000;
+
+    let totalChecked = 0, totalCredited = 0, totalUncredited = 0;
+    let ordersWithTouch = 0, ordersWithoutTouch = 0;
+    const untrackedProducts = [];
+
+    const enrichedOrders = orders.map(order => {
+      let orderHasTouch = false;
+
+      const lineItems = order.lineItems.map(li => {
+        const price = parseFloat(li.price) * li.quantity;
+        totalChecked += price;
+
+        const execs = li.productId ? (execByProduct[li.productId] ?? []) : [];
+        const touched = execs.length > 0;
+
+        // Untracked injection: body modified outside ContentExecution flow
+        const bodyHtml = li.product?.bodyHtml ?? '';
+        const hasUntrackedInject = bodyHtml.includes('[CRODoctor');
+        if (hasUntrackedInject && execs.length === 0) {
+          untrackedProducts.push(li.title);
+        }
+
+        const credited = touched ? price : 0;
+        const reason = touched
+          ? `${execs.length} execution(s): ${execs.map(e => e.issueId).join(', ')}`
+          : 'No applied ContentExecution for this product';
+
+        totalCredited += credited;
+        totalUncredited += price - credited;
+        if (touched) orderHasTouch = true;
+
+        return {
+          title: li.title,
+          quantity: li.quantity,
+          unitPrice: parseFloat(li.price),
+          lineTotal: price,
+          touched,
+          credited,
+          reason,
+          executionIds: execs.map(e => e.id),
+          untrackedInjectDetected: hasUntrackedInject,
+        };
+      });
+
+      if (orderHasTouch) ordersWithTouch++; else ordersWithoutTouch++;
+
+      return {
+        orderId: order.id,
+        orderNumber: order.orderNumber,
+        totalPrice: parseFloat(order.totalPrice),
+        currency: order.currency,
+        createdAt: order.createdAt,
+        lineItems,
+      };
+    });
+
+    res.json({
+      _qa: true,
+      isTestBatch,
+      testBatchReason: isTestBatch
+        ? (hasTestTitles ? 'Product titles contain test suffixes' : `All orders placed within ${Math.round(timeSpanMs / 1000)}s`)
+        : null,
+      untrackedProducts,
+      summary: {
+        ordersChecked: orders.length,
+        totalChecked: +totalChecked.toFixed(2),
+        totalCredited: +totalCredited.toFixed(2),
+        totalUncredited: +totalUncredited.toFixed(2),
+        pctCredited: totalChecked > 0 ? +(totalCredited / totalChecked * 100).toFixed(1) : 0,
+        ordersWithTouch,
+        ordersWithoutTouch,
+      },
+      orders: enrichedOrders,
+    });
+  } catch (err) {
+    console.error('[Debug] GET /debug/order-qa error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ---------------------------------------------------------------------------
 // Product endpoints
 // ---------------------------------------------------------------------------

@@ -280,7 +280,6 @@ module.exports = {
   getAsset,
   putAsset,
   deleteAsset,
-  updateProductDescription,
   updateImageAltText,
   previewUrl,
   fetchOrderMetrics,

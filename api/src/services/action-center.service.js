@@ -15,7 +15,25 @@
 const { analyzeProduct }      = require('./cro/analyzeProduct');
 const { toCroProduct }        = require('./cro/formatters');
 const { APPLY_TYPE_MAP }      = require('./cro/constants');
-const { fetchOrderMetrics, updateProductDescription } = require('./shopify-admin.service');
+const { fetchOrderMetrics }   = require('./shopify-admin.service');
+
+// Private — must only be called from applyContentChange or rollbackContentChange.
+// Every call MUST create a ContentExecution record in the same operation.
+// Not exported. Not reachable from outside this module.
+async function updateProductDescription(store, shopifyProductId, bodyHtml) {
+  const url = `https://${store.shopDomain}/admin/api/2024-01/products/${shopifyProductId}.json`;
+  const res = await fetch(url, {
+    method:  'PUT',
+    headers: { 'X-Shopify-Access-Token': store.accessToken, 'Content-Type': 'application/json' },
+    body:    JSON.stringify({ product: { id: shopifyProductId, body_html: bodyHtml } }),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Shopify API ${res.status} — ${url}\n${text}`);
+  }
+  const { product } = await res.json();
+  return product;
+}
 const { classifyExecution }   = require('./cro/classifyExecution');
 const { buildResultContent }  = require('./content-execution.service');
 
@@ -1018,6 +1036,14 @@ async function applyContentChange(prisma, store, rawProduct, actionItem) {
     if (!wasRolledBack) {
       return { applied: false, skipped: true, reason: 'already applied' };
     }
+  }
+
+  // 1c. Content-presence guard — skip if proposed text is already in the body,
+  // regardless of DB record state. Prevents double-insertion when the same
+  // content exists in the description from a non-tracked source (e.g. original
+  // Shopify description, manual admin edit, or rolled-back state re-sync).
+  if (currentContent && proposedContent && currentContent.includes(proposedContent)) {
+    return { applied: false, skipped: true, reason: 'proposed content already present in product description' };
   }
 
   // 2. Build result using the same PATCH_MODE_REGISTRY pipeline as preview,
