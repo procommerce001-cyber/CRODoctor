@@ -8,7 +8,8 @@
     "dev": "nodemon src/server.js",
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
-    "db:push": "prisma db push"
+    "db:push": "prisma db push",
+    "test": "node --test src/__tests__/classifyArchetype.test.js"
   },
   "dependencies": {
     "@prisma/client": "^5.14.0",

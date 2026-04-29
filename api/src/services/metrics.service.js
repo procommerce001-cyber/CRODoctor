@@ -4,6 +4,28 @@ const { getProductActions }           = require('./action-center.service');
 const { PRODUCT_INCLUDE }             = require('../lib/product-include');
 const { fetchWindowedStoreAnalytics } = require('./shopify-admin.service');
 
+// ── Test-order exclusion ─────────────────────────────────────────────────────
+// Applied only to merchant-facing proof surfaces (snapshots, attribution,
+// decision engine). /debug/order-qa intentionally bypasses these so Internal QA
+// can inspect test orders and surface them with explicit warnings.
+//
+// Matches line-item titles with known test-order suffixes (case-insensitive):
+//   -test  _test  -ttest  _ttest
+//
+// Gate: CRO_EXCLUDE_TEST_ORDERS=false disables exclusion for local testing.
+// Default (unset or any other value) keeps exclusion ON — production-safe.
+// Prisma silently drops `NOT: undefined`, so callsites need no change.
+const _EXCLUDE_TEST_ORDERS = process.env.CRO_EXCLUDE_TEST_ORDERS !== 'false';
+
+const _TEST_LI_TITLE_FILTER = _EXCLUDE_TEST_ORDERS
+  ? { OR: ['-test', '_test', '-ttest', '_ttest'].map(f => ({ title: { contains: f, mode: 'insensitive' } })) }
+  : undefined;
+
+// For Order-level queries: exclude orders that contain any test line item.
+const _TEST_ORDER_FILTER = _EXCLUDE_TEST_ORDERS
+  ? { lineItems: { some: _TEST_LI_TITLE_FILTER } }
+  : undefined;
+
 // ---------------------------------------------------------------------------
 // captureProductMetricsSnapshot
 //
@@ -24,9 +46,9 @@ async function captureProductMetricsSnapshot(prisma, productId, phase = 'standal
   });
   if (!product) throw new Error(`Product not found: ${productId}`);
 
-  // Pull all line items for this product
+  // Pull all line items for this product (test orders excluded — see _TEST_LI_TITLE_FILTER)
   const lineItems = await prisma.orderLineItem.findMany({
-    where:  { productId },
+    where:  { productId, NOT: _TEST_LI_TITLE_FILTER },
     select: { orderId: true, quantity: true, price: true, totalDiscount: true },
   });
 
@@ -86,6 +108,7 @@ async function captureWindowedBeforeSnapshot(prisma, productId, windowDays = 7) 
   const lineItems = await prisma.orderLineItem.findMany({
     where: {
       productId,
+      NOT: _TEST_LI_TITLE_FILTER,
       order: {
         createdAt: { gte: windowStart, lt: windowEnd },
       },
@@ -103,7 +126,7 @@ async function captureWindowedBeforeSnapshot(prisma, productId, windowDays = 7) 
   // Store-level totals for the same window — used later to compute store AOV before/after.
   // Queries Order directly so product attribution is not required.
   const storeAgg = await prisma.order.aggregate({
-    where:  { storeId: product.storeId, createdAt: { gte: windowStart, lt: windowEnd } },
+    where:  { storeId: product.storeId, createdAt: { gte: windowStart, lt: windowEnd }, NOT: _TEST_ORDER_FILTER },
     _count: { id: true },
     _sum:   { totalPrice: true },
   });
@@ -176,6 +199,7 @@ async function captureWindowedAfterSnapshot(prisma, productId, executionId, appl
   const lineItems = await prisma.orderLineItem.findMany({
     where: {
       productId,
+      NOT: _TEST_LI_TITLE_FILTER,
       order: {
         createdAt: { gte: windowStart, lt: windowEnd },
       },
@@ -191,7 +215,7 @@ async function captureWindowedAfterSnapshot(prisma, productId, executionId, appl
   );
 
   const storeAgg = await prisma.order.aggregate({
-    where:  { storeId: product.storeId, createdAt: { gte: windowStart, lt: windowEnd } },
+    where:  { storeId: product.storeId, createdAt: { gte: windowStart, lt: windowEnd }, NOT: _TEST_ORDER_FILTER },
     _count: { id: true },
     _sum:   { totalPrice: true },
   });
@@ -235,7 +259,7 @@ async function captureWindowedAfterSnapshot(prisma, productId, executionId, appl
   });
   if (beforeSnap) {
     const beforeAgg = await prisma.order.aggregate({
-      where:  { storeId: product.storeId, createdAt: { gte: beforeSnap.windowStart, lt: beforeSnap.windowEnd } },
+      where:  { storeId: product.storeId, createdAt: { gte: beforeSnap.windowStart, lt: beforeSnap.windowEnd }, NOT: _TEST_ORDER_FILTER },
       _count: { id: true },
       _sum:   { totalPrice: true },
     });
@@ -358,7 +382,7 @@ async function captureExecutionSnapshots(prisma, productId, executionId) {
   snapshotDate.setUTCHours(0, 0, 0, 0);
 
   const lineItems = await prisma.orderLineItem.findMany({
-    where:  { productId },
+    where:  { productId, NOT: _TEST_LI_TITLE_FILTER },
     select: { orderId: true, quantity: true, price: true, totalDiscount: true },
   });
   const orderCount = new Set(lineItems.map(li => li.orderId)).size;
@@ -1033,7 +1057,7 @@ async function getTopDecisionActions(prisma, shop) {
   const needFallback = productIds.filter(id => !revenueMap.has(id) || revenueMap.get(id) === 0);
   if (needFallback.length > 0) {
     const lineItems = await prisma.orderLineItem.findMany({
-      where:  { productId: { in: needFallback } },
+      where:  { productId: { in: needFallback }, NOT: _TEST_LI_TITLE_FILTER },
       select: { productId: true, quantity: true, price: true, totalDiscount: true },
     });
     const fallback = {};
@@ -1355,7 +1379,7 @@ async function getAttributedRevenueSummary(prisma, storeId, windowStart, windowE
 
   // 3. Fetch orders in window with line items
   const orders = await prisma.order.findMany({
-    where:  { storeId, createdAt: { gte: windowStart, lt: windowEnd } },
+    where:  { storeId, createdAt: { gte: windowStart, lt: windowEnd }, NOT: _TEST_ORDER_FILTER },
     select: {
       id: true,
       currency: true,
