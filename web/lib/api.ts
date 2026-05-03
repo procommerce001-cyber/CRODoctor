@@ -318,6 +318,8 @@ export interface TopAction {
   recommendedAction:     string;
   executionStatus:       'pending' | 'completed';
   executedAt:            string | null;
+  confidenceTier:        string | null;
+  confidenceSampleSize:  number | null;
 }
 
 export async function fetchTopActions(shop: string): Promise<TopAction[]> {

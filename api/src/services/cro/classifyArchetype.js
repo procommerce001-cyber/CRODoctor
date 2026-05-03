@@ -69,12 +69,12 @@ function classifyArchetype({
     };
   }
 
-  // ── GATE 0: no session data — cannot classify ────────────────────────────
-  // Shopify Analytics scope absent, plan limitation, or product has never
-  // been viewed. Returned as unclassified so callers handle it explicitly.
+  // ── GATE 0: no session data — record gap and continue ───────────────────
+  // Shopify Analytics scope absent or plan limitation. Gate 2 (trust_mismatch)
+  // can still fire from order-derived signals; all later ATC-dependent gates
+  // naturally skip because atcRate is also null in this case.
   if (sessions === null || sessions === undefined) {
     dataGaps.push('sessions_unavailable');
-    return result(ARCHETYPES.UNCLASSIFIED, 'low', { gate: 'GATE_0' });
   }
 
   // ── GATE 1: traffic problem (with hysteresis) ────────────────────────────
@@ -86,7 +86,7 @@ function classifyArchetype({
   const isBelowMin        = sessions < cfg.TRAFFIC_MIN_SESSIONS;
   const holdingBottleneck = previousArchetype === ARCHETYPES.CONTENT_BOTTLENECK;
 
-  if (isBelowHysteresis || (isBelowMin && !holdingBottleneck)) {
+  if (sessions !== null && (isBelowHysteresis || (isBelowMin && !holdingBottleneck))) {
     dataGaps.push('insufficient_traffic');
     return result(ARCHETYPES.TRAFFIC_PROBLEM, 'high', { gate: 'GATE_1' });
   }

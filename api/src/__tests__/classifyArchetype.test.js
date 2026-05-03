@@ -288,7 +288,7 @@ describe('Fixture 9: unclassified — no session data', () => {
 
   test('dataGaps contains sessions_unavailable', () => {
     const r = classifyArchetype(input);
-    assert.deepEqual(r.dataGaps, ['sessions_unavailable']);
+    assert.ok(r.dataGaps.includes('sessions_unavailable'));
   });
 });
 

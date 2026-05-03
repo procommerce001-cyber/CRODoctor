@@ -64,10 +64,12 @@ function computeNextBestAction(
   };
 }
 
-function confidenceLabel(severity: string): string {
-  if (severity === 'critical' || severity === 'high') return 'High';
-  if (severity === 'medium') return 'Medium';
-  return 'Low';
+function confidenceTierLabel(tier: string | null | undefined): string | null {
+  if (tier === 'high')     return 'Proven pattern';
+  if (tier === 'medium')   return 'Emerging pattern';
+  if (tier === 'low')      return 'Early signal';
+  if (tier === 'unproven') return 'Limited data';
+  return null;
 }
 
 export default function DashboardClient({ data }: Props) {
@@ -353,9 +355,16 @@ export default function DashboardClient({ data }: Props) {
                           </strong>
                         </div>
                       )}
-                      <div style={styles.heroConfidence}>
-                        Confidence: <strong>{confidenceLabel(action.severity)}</strong>
-                      </div>
+                      {confidenceTierLabel(action.confidenceTier) && (
+                        <div style={styles.heroConfidence}>
+                          Pattern confidence: <strong>{confidenceTierLabel(action.confidenceTier)}</strong>
+                          {action.confidenceSampleSize != null && action.confidenceSampleSize >= 1 && (
+                            <div style={styles.heroConfidenceSub}>
+                              Based on {action.confidenceSampleSize} similar fix{action.confidenceSampleSize === 1 ? '' : 'es'}
+                            </div>
+                          )}
+                        </div>
+                      )}
                     </>
                   )}
                   <div style={isHero ? styles.heroWhy : styles.actionWhy}>{action.whyNow}</div>
@@ -389,6 +398,9 @@ export default function DashboardClient({ data }: Props) {
                     )}
                     {!isHero && action.estimatedImpactLabel && (
                       <span style={styles.impact}>{action.estimatedImpactLabel}</span>
+                    )}
+                    {!isHero && confidenceTierLabel(action.confidenceTier) && (
+                      <span style={styles.confidenceChip}>{confidenceTierLabel(action.confidenceTier)}</span>
                     )}
                   </div>
                   {isDone && (
@@ -637,7 +649,9 @@ const styles: Record<string, React.CSSProperties> = {
   heroUrgency:    { fontSize: 12, fontWeight: 500, color: '#b45309', marginBottom: 4, fontStyle: 'italic' },
   heroTrust:      { fontSize: 11, color: '#9ca3af', marginBottom: 6 },
   heroImpactLine:  { fontSize: 12, color: '#4b5563', marginBottom: 4 },
-  heroConfidence:  { fontSize: 12, color: '#6b7280', marginBottom: 10 },
+  heroConfidence:     { fontSize: 12, color: '#6b7280', marginBottom: 10 },
+  heroConfidenceSub:  { fontSize: 11, color: '#9ca3af', marginTop: 2 },
+  confidenceChip:     { fontSize: 11, color: '#6b7280', background: '#f3f4f6', border: '1px solid #e5e7eb', borderRadius: 4, padding: '1px 6px' },
   priorityBadge:  { fontSize: 10, fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase' as const, color: '#b45309', background: '#fef3c7', border: '1px solid #fde68a', borderRadius: 4, padding: '2px 7px' },
   // secondary cards — ranks 2 & 3
   actionCard:     { background: '#f9fafb', border: '1px solid #e5e7eb', borderRadius: 8, padding: '12px 16px' },

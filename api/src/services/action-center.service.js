@@ -12,10 +12,11 @@
 //   - Never write to Shopify. Never patch theme code.
 // ---------------------------------------------------------------------------
 
-const { analyzeProduct }      = require('./cro/analyzeProduct');
-const { toCroProduct }        = require('./cro/formatters');
-const { APPLY_TYPE_MAP }      = require('./cro/constants');
-const { fetchOrderMetrics }   = require('./shopify-admin.service');
+const { analyzeProduct }                    = require('./cro/analyzeProduct');
+const { toCroProduct }                      = require('./cro/formatters');
+const { APPLY_TYPE_MAP }                    = require('./cro/constants');
+const { fetchOrderMetrics }                 = require('./shopify-admin.service');
+const { getLatestProductPerformanceProfile } = require('./product-performance.service');
 
 // Private — must only be called from applyContentChange or rollbackContentChange.
 // Every call MUST create a ContentExecution record in the same operation.
@@ -1044,6 +1045,20 @@ async function applyContentChange(prisma, store, rawProduct, actionItem) {
   // Shopify description, manual admin edit, or rolled-back state re-sync).
   if (currentContent && proposedContent && currentContent.includes(proposedContent)) {
     return { applied: false, skipped: true, reason: 'proposed content already present in product description' };
+  }
+
+  // 1d. Trust-mismatch guard — block apply when the product has a confirmed high
+  // refund-rate pattern. Applying content improvements to a trust_mismatch product
+  // risks widening the expectation-reality gap rather than fixing it.
+  // Hard block. No Shopify write occurs. Caller must resolve the trust issue first.
+  const _profile = await getLatestProductPerformanceProfile(prisma, rawProduct.id);
+  if (_profile?.archetype === 'trust_mismatch') {
+    return {
+      applied:              false,
+      blockReason:          'Product has a trust_mismatch archetype: high refund rate detected. Resolve the trust issue before applying content changes.',
+      archetypeWarning:     'trust_mismatch',
+      archetypeWarningConf: _profile.archetypeConf ?? null,
+    };
   }
 
   // 2. Build result using the same PATCH_MODE_REGISTRY pipeline as preview,

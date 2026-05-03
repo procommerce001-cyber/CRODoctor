@@ -271,6 +271,87 @@ async function fetchWindowedStoreAnalytics(store, windowStart, windowEnd) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// fetchProductAnalytics
+//
+// Fetches product-page session and add-to-cart counts from Shopify Analytics
+// (ShopifyQL) for a given measurement window.  Requires the read_analytics scope.
+//
+// productHandleOrRef — a bare handle string OR any object with a `.handle` field
+//                      (e.g. a Prisma Product row).
+// windowStart / windowEnd — same UTC-midnight Date contract as
+//                           fetchWindowedStoreAnalytics.
+//
+// Returns { sessions, atcCount, atcRate, source } on success.
+// Returns all-null + source:'unavailable' on any failure (missing scope, plan
+// limitation, unknown ShopifyQL field, parse error, network error).
+// Never throws.
+// ---------------------------------------------------------------------------
+async function fetchProductAnalytics(store, windowStart, windowEnd, productHandleOrRef) {
+  try {
+    const handle = typeof productHandleOrRef === 'string'
+      ? productHandleOrRef
+      : productHandleOrRef?.handle;
+
+    if (!handle) return { sessions: null, atcCount: null, atcRate: null, source: 'unavailable' };
+
+    const since = windowStart.toISOString().slice(0, 10);
+    const untilDate = new Date(windowEnd);
+    untilDate.setUTCDate(untilDate.getUTCDate() - 1);
+    const until = untilDate.toISOString().slice(0, 10);
+
+    const gqlQuery = `
+      mutation FetchProductAnalytics($ql: String!) {
+        shopifyqlQuery(query: $ql) {
+          tableData {
+            unformattedData {
+              headers { name }
+              rows
+            }
+          }
+          parseErrors { code message }
+        }
+      }
+    `;
+
+    const data = await shopifyGraphQL(store, gqlQuery, {
+      ql: `FROM sessions SINCE ${since} UNTIL ${until} WHERE landing_page_path LIKE '/products/${handle}' SELECT sum(sessions), sum(add_to_carts)`,
+    });
+
+    const result = data?.data?.shopifyqlQuery;
+    if (!result) return { sessions: null, atcCount: null, atcRate: null, source: 'unavailable' };
+
+    if (result.parseErrors?.length > 0) {
+      console.warn('[Analytics] fetchProductAnalytics parse error:', result.parseErrors[0]?.message);
+      return { sessions: null, atcCount: null, atcRate: null, source: 'unavailable' };
+    }
+
+    const hdrs = result.tableData?.unformattedData?.headers ?? [];
+    const rows = result.tableData?.unformattedData?.rows    ?? [];
+    if (!rows.length || !rows[0]?.length) return { sessions: null, atcCount: null, atcRate: null, source: 'unavailable' };
+
+    const sessionIdx = hdrs.findIndex(h => h.name === 'sum_sessions');
+    const atcIdx     = hdrs.findIndex(h => h.name === 'sum_add_to_carts');
+
+    const row      = rows[0];
+    const sessions = sessionIdx >= 0 ? parseInt(row[sessionIdx], 10) : null;
+    const atcCount = atcIdx     >= 0 ? parseInt(row[atcIdx],     10) : null;
+    const atcRate  = (Number.isFinite(sessions) && sessions > 0 && Number.isFinite(atcCount))
+      ? Math.round((atcCount / sessions) * 10000) / 10000
+      : null;
+
+    return {
+      sessions: Number.isFinite(sessions) ? sessions : null,
+      atcCount: Number.isFinite(atcCount) ? atcCount : null,
+      atcRate,
+      source: 'shopify_analytics',
+    };
+  } catch (err) {
+    console.warn('[Analytics] fetchProductAnalytics failed (non-fatal):', err.message);
+    return { sessions: null, atcCount: null, atcRate: null, source: 'unavailable' };
+  }
+}
+
 module.exports = {
   listThemes,
   getPublishedTheme,
@@ -285,4 +366,5 @@ module.exports = {
   fetchOrderMetrics,
   shopifyGraphQL,
   fetchWindowedStoreAnalytics,
+  fetchProductAnalytics,
 };

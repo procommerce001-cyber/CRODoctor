@@ -7,8 +7,9 @@ const PgSession = require('connect-pg-simple')(session);
 const { PrismaClient } = require('@prisma/client');
 const { fetchProducts, fetchOrders } = require('./services/shopify.service');
 const { requireSession }             = require('./lib/auth-middleware');
-const { startImpactWindowScheduler } = require('./scheduler/impact-window.scheduler');
-const { startDeltaSyncScheduler }    = require('./scheduler/delta-sync.scheduler');
+const { startImpactWindowScheduler }        = require('./scheduler/impact-window.scheduler');
+const { startDeltaSyncScheduler }           = require('./scheduler/delta-sync.scheduler');
+const { startProductPerformanceScheduler }  = require('./scheduler/product-performance.scheduler');
 const webhooksRouter       = require('./routes/webhooks.routes');
 const authRouter           = require('./routes/auth.routes');
 const croRouter            = require('./routes/cro.routes');
@@ -634,6 +635,7 @@ app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
   startImpactWindowScheduler(prisma);
   startDeltaSyncScheduler(prisma);
+  startProductPerformanceScheduler(prisma);
 });
 
 module.exports = { app, prisma };

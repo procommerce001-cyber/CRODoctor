@@ -975,6 +975,37 @@ function decisionReadinessBonus(canAutoApply, reviewStatus) {
   return 0;
 }
 
+// Confidence thresholds — mirror phase2-config CONFIDENCE_* constants (inlined to avoid
+// cross-service import; keep in sync if phase2-config thresholds are ever tuned).
+const CONF_SAMPLE_LOW    = 2;
+const CONF_SAMPLE_MEDIUM = 5;
+const CONF_SAMPLE_HIGH   = 10;
+
+// computeConfidenceTier
+// Pure function. Maps a raw measured-outcome count to a four-level tier.
+// "Measured outcome" = a ContentExecution that has a captured after-snapshot,
+// scoped to this store's products.
+function computeConfidenceTier(n) {
+  if (n < CONF_SAMPLE_LOW)    return 'unproven';
+  if (n < CONF_SAMPLE_MEDIUM) return 'low';
+  if (n < CONF_SAMPLE_HIGH)   return 'medium';
+  return 'high';
+}
+
+// decisionConfidenceAdjustment
+// Pure function. Converts a confidenceTier to a flat score delta applied on top
+// of the base opportunityScore. Range is deliberately narrow (−4 to +8) so
+// confidence can break ties and influence prioritisation without ever overriding
+// the primary severity / revenue / effort signals. Quick-win multiplier is
+// applied before this adjustment so it remains independent of that boost.
+function decisionConfidenceAdjustment(tier) {
+  if (tier === 'high')    return  8;
+  if (tier === 'medium')  return  4;
+  if (tier === 'low')     return  1;
+  if (tier === 'unproven') return -4;
+  return 0; // null / unknown — conservative neutral
+}
+
 // Derive a short merchant-facing "why act now" line from scoring context.
 function buildWhyNow(action, revenue) {
   if (action.canAutoApply && action.reviewStatus === 'approved') {
@@ -1074,7 +1105,7 @@ async function getTopDecisionActions(prisma, shop) {
   // Applied executions — exclude already-fixed (product × issue) pairs
   const appliedRows = await prisma.contentExecution.findMany({
     where:  { productId: { in: productIds }, status: 'applied' },
-    select: { productId: true, issueId: true },
+    select: { id: true, productId: true, issueId: true },
   });
   const appliedSet = new Set(appliedRows.map(r => `${r.productId}:${r.issueId}`));
 
@@ -1085,9 +1116,48 @@ async function getTopDecisionActions(prisma, shop) {
   });
   const completedMap = new Map(completedRows.map(r => [`${r.productId}:${r.issueId}`, r.createdAt]));
 
+  // ── Phase 2B: ProductPerformanceProfile batch load ────────────────────────
+  // One query for all products; first row per productId is the latest (ORDER BY capturedAt DESC).
+  const allProfiles = await prisma.productPerformanceProfile.findMany({
+    where:   { productId: { in: productIds } },
+    orderBy: { capturedAt: 'desc' },
+    select:  { productId: true, archetype: true, archetypeConf: true },
+  });
+  const profileMap = new Map();
+  for (const p of allProfiles) {
+    if (!profileMap.has(p.productId)) profileMap.set(p.productId, p);
+  }
+
+  // ── Phase 2B: pattern confidence via measured outcomes ────────────────────
+  // For each (issueId × archetype) pair, count ContentExecution rows that have
+  // a captured after-snapshot — the only form of measured lift this system
+  // produces. No after-snapshot = not yet measured, regardless of apply count.
+  const appliedIdToMeta = new Map(
+    appliedRows.map(r => [r.id, { issueId: r.issueId, productId: r.productId }])
+  );
+  const measuredOutcomeMap = new Map(); // key: `${issueId}_${archetype}` → count
+  if (appliedIdToMeta.size > 0) {
+    const afterSnapshots = await prisma.productMetricsSnapshot.findMany({
+      where:  { baselineExecutionId: { in: [...appliedIdToMeta.keys()] }, phase: 'after' },
+      select: { baselineExecutionId: true },
+    });
+    for (const snap of afterSnapshots) {
+      const meta    = appliedIdToMeta.get(snap.baselineExecutionId);
+      if (!meta) continue;
+      const archKey = profileMap.get(meta.productId)?.archetype ?? 'unclassified';
+      const key     = `${meta.issueId}_${archKey}`;
+      measuredOutcomeMap.set(key, (measuredOutcomeMap.get(key) ?? 0) + 1);
+    }
+  }
+
   const candidates = [];
 
   for (const raw of rawProducts) {
+    const profile = profileMap.get(raw.id) ?? null;
+    // Gate: traffic_problem products cannot benefit from content CRO — skip entirely.
+    // unclassified (no session data) passes through unchanged.
+    if (profile?.archetype === 'traffic_problem') continue;
+
     const actionResult = await getProductActions(raw, { prisma, storeId: store.id });
     const revenue      = revenueMap.get(raw.id) ?? 0;
 
@@ -1109,9 +1179,14 @@ async function getTopDecisionActions(prisma, shop) {
       const baseTotal = sScore + rScore + eScore + rBonus;
 
       const quickWin  = isQuickWin(action, revenue);
-      const total     = quickWin ? Math.round(baseTotal * (1 + QUICK_WIN_SCORE_BOOST)) : baseTotal;
+      const baseScore = quickWin ? Math.round(baseTotal * (1 + QUICK_WIN_SCORE_BOOST)) : baseTotal;
 
       const readyToApply = action.canAutoApply === true && action.reviewStatus === 'approved';
+
+      const outcomeKey   = `${action.issueId}_${profile?.archetype ?? 'unclassified'}`;
+      const outcomeCount = measuredOutcomeMap.get(outcomeKey) ?? 0;
+      const confAdj      = decisionConfidenceAdjustment(computeConfidenceTier(outcomeCount));
+      const total        = baseScore + confAdj;
 
       candidates.push({
         rank:                  0,   // assigned after sort
@@ -1134,14 +1209,21 @@ async function getTopDecisionActions(prisma, shop) {
         estimatedImpactLabel:  null, // set after rankingMode is determined
 
         scoreBreakdown: {
-          severityScore:  sScore,
-          revenueScore:   rScore,
-          effortScore:    eScore,
-          readinessBonus: rBonus,
+          severityScore:       sScore,
+          revenueScore:        rScore,
+          effortScore:         eScore,
+          readinessBonus:      rBonus,
+          confidenceAdj:       confAdj,
         },
 
         // internal tie-break only — not exposed at top level
         _scoreImpact: action.scoreImpact ?? null,
+
+        archetype:     profile?.archetype     ?? null,
+        archetypeConf: profile?.archetypeConf ?? null,
+
+        confidenceTier:       computeConfidenceTier(outcomeCount),
+        confidenceSampleSize: outcomeCount,
       });
     }
   }

@@ -1,7 +1,8 @@
 'use strict';
 
-const { classifyArchetype } = require('./cro/classifyArchetype');
-const cfg                   = require('./cro/phase2-config');
+const { classifyArchetype }    = require('./cro/classifyArchetype');
+const cfg                      = require('./cro/phase2-config');
+const { fetchProductAnalytics } = require('./shopify-admin.service');
 
 // ---------------------------------------------------------------------------
 // Test-order exclusion — mirrors the same gate in metrics.service.js.
@@ -173,7 +174,12 @@ async function captureProductPerformanceProfile(prisma, productId, opts = {}) {
 
   const product = await prisma.product.findUniqueOrThrow({
     where:  { id: productId },
-    select: { id: true, storeId: true },
+    select: { id: true, storeId: true, handle: true },
+  });
+
+  const store = await prisma.store.findUniqueOrThrow({
+    where:  { id: product.storeId },
+    select: { shopDomain: true, accessToken: true },
   });
 
   const previous          = await getLatestProductPerformanceProfile(prisma, productId);
@@ -188,11 +194,11 @@ async function captureProductPerformanceProfile(prisma, productId, opts = {}) {
       (metrics.trafficOrganic + metrics.trafficDirect) >= cfg.QUALIFIED_TRAFFIC_THRESHOLD;
   }
 
-  // Product-level page analytics not yet available — deferred to a follow-up phase.
-  // classifyArchetype receives sessions=null → Gate 0 → unclassified until wired in.
-  const sessions = null;
-  const atcCount = null;
-  const atcRate  = null;
+  // Fetch product-level page analytics; falls back to all-null when unavailable.
+  // classifyArchetype receives sessions=null → Gate 0 when analytics cannot be read.
+  const { sessions, atcCount, atcRate } = await fetchProductAnalytics(
+    store, windowStart, windowEnd, product
+  );
 
   const { archetype, archetypeConf, archetypeSignals, dataGaps } = classifyArchetype({
     sessions,
