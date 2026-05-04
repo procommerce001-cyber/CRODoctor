@@ -87,6 +87,7 @@ export default function RecentActivityList({ items, selectedExecId, onSelect }: 
               {item.productTitle && <span style={styles.productTitle}>{item.productTitle}</span>}
               <span style={styles.issueId}>{issueLabel(item.issueId)}</span>
               {item.insight && <span style={styles.insight}>{item.insight}</span>}
+              <LiftBadge item={item} />
             </div>
             <div style={styles.right}>
               <span style={{ ...styles.statusBadge, color: STATUS_COLOR[item.status] ?? '#374151' }}>
@@ -117,6 +118,67 @@ export default function RecentActivityList({ items, selectedExecId, onSelect }: 
     </section>
   );
 }
+
+// ---------------------------------------------------------------------------
+// LiftBadge
+//
+// Publish rule:
+//   show lift    — resultStatus === 'measured' AND confidence is low/medium/high
+//   show pending — resultStatus === 'waiting_for_more_data'
+//                  OR (measured AND confidence === 'insufficient')
+//   show nothing — resultStatus === null (not applied / no measurement state)
+//
+// Wording is factual. No causation claim. No attribution language.
+// ---------------------------------------------------------------------------
+function LiftBadge({ item }: { item: ActivityItem }) {
+  const { resultStatus, measurementConfidence, revenueChangePercent } = item;
+
+  const publishable =
+    resultStatus === 'measured' &&
+    (measurementConfidence === 'low' ||
+     measurementConfidence === 'medium' ||
+     measurementConfidence === 'high');
+
+  const windowClosed = resultStatus === 'measured' && measurementConfidence === 'insufficient';
+
+  if (publishable && revenueChangePercent !== null) {
+    const sign     = revenueChangePercent > 0 ? '+' : '';
+    const pct      = Math.round(revenueChangePercent);
+    const positive = revenueChangePercent > 0;
+    const neutral  = revenueChangePercent === 0;
+    const color    = neutral ? '#6b7280' : positive ? '#166534' : '#dc2626';
+    const bg       = neutral ? '#f3f4f6' : positive ? '#dcfce7'  : '#fee2e2';
+    const border   = neutral ? '#e5e7eb' : positive ? '#bbf7d0'  : '#fecaca';
+    return (
+      <span style={{ ...liftStyles.badge, color, background: bg, borderColor: border }}>
+        {sign}{pct}% revenue — 7-day after vs. before
+      </span>
+    );
+  }
+
+  if (windowClosed) {
+    return (
+      <span style={liftStyles.measuring}>
+        Window complete — not enough orders to report a result
+      </span>
+    );
+  }
+
+  if (resultStatus === 'waiting_for_more_data') {
+    return (
+      <span style={liftStyles.measuring}>
+        Measuring — 7-day window in progress
+      </span>
+    );
+  }
+
+  return null;
+}
+
+const liftStyles: Record<string, React.CSSProperties> = {
+  badge:     { display: 'inline-block', marginTop: 4, fontSize: 11, fontWeight: 600, padding: '2px 7px', borderRadius: 4, border: '1px solid' },
+  measuring: { display: 'inline-block', marginTop: 4, fontSize: 11, color: '#9ca3af', fontStyle: 'italic' },
+};
 
 const styles: Record<string, React.CSSProperties> = {
   heading:     { fontSize: 16, fontWeight: 600, marginBottom: 12 },

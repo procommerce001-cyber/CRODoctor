@@ -93,6 +93,8 @@ export interface ActivityItem {
   revenueChangePercent: number | null;
   unitsSoldChangePercent: number | null;
   ordersChangePercent: number | null;
+  // 'high'|'medium'|'low'|'insufficient'|null — controls measured-lift display
+  measurementConfidence: string | null;
 }
 
 export interface DashboardPayload {
