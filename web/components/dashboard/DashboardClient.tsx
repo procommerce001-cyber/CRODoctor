@@ -64,6 +64,11 @@ function computeNextBestAction(
   };
 }
 
+function formatReadyAt(iso: string | null): string {
+  if (!iso) return 'soon';
+  return new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}
+
 function confidenceTierLabel(tier: string | null | undefined): string | null {
   if (tier === 'high')     return 'Proven pattern';
   if (tier === 'medium')   return 'Emerging pattern';
@@ -366,6 +371,11 @@ export default function DashboardClient({ data }: Props) {
                         </div>
                       )}
                     </>
+                  )}
+                  {action.openMeasurementWindow && (
+                    <div style={styles.measuringNotice}>
+                      Measuring — check back after {formatReadyAt(action.openMeasurementWindowReadyAt)}
+                    </div>
                   )}
                   <div style={isHero ? styles.heroWhy : styles.actionWhy}>{action.whyNow}</div>
                   <div style={styles.actionFooter}>
@@ -706,6 +716,7 @@ const styles: Record<string, React.CSSProperties> = {
   dailyTitle:     { fontSize: 13, fontWeight: 700, color: '#111827' },
   dailyMsg:       { fontSize: 12, color: '#6b7280' },
   impact:         { fontSize: 11, color: '#9ca3af' },
+  measuringNotice: { fontSize: 12, color: '#6b7280', background: '#f3f4f6', border: '1px solid #e5e7eb', borderRadius: 4, padding: '3px 8px', marginBottom: 8, display: 'inline-block' as const },
   errorBox:     { padding: '12px 16px', background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 8, color: '#dc2626', fontSize: 13 },
   resultBox:    { padding: '16px', background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: 8 },
   resultHeader: { fontSize: 14, fontWeight: 600, color: '#111827', marginBottom: 12 },

@@ -1047,7 +1047,32 @@ async function applyContentChange(prisma, store, rawProduct, actionItem) {
     return { applied: false, skipped: true, reason: 'proposed content already present in product description' };
   }
 
-  // 1d. Trust-mismatch guard — block apply when the product has a confirmed high
+  // 1d. Open measurement window guard — block apply when this product already has a
+  // live applied execution whose after-window has not yet closed (afterReadyAt > now).
+  // Stacking a second change would contaminate the in-progress measurement window and
+  // make attribution impossible. Null afterReadyAt rows (legacy) are naturally excluded
+  // by the { gt } comparison. Other products are unaffected — filter is product-scoped.
+  const openWindow = await prisma.contentExecution.findFirst({
+    where: {
+      productId:    rawProduct.id,
+      status:       'applied',
+      afterReadyAt: { gt: new Date() },
+    },
+    select: { id: true, issueId: true, afterReadyAt: true },
+  });
+  if (openWindow) {
+    return {
+      applied:     false,
+      blockReason: 'This product has an open measurement window. Wait until the current change is fully measured before applying another.',
+      openWindow: {
+        executionId: openWindow.id,
+        issueId:     openWindow.issueId,
+        readyAt:     openWindow.afterReadyAt,
+      },
+    };
+  }
+
+  // 1e. Trust-mismatch guard — block apply when the product has a confirmed high
   // refund-rate pattern. Applying content improvements to a trust_mismatch product
   // risks widening the expectation-reality gap rather than fixing it.
   // Hard block. No Shopify write occurs. Caller must resolve the trust issue first.

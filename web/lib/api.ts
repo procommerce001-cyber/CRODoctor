@@ -322,6 +322,8 @@ export interface TopAction {
   executedAt:            string | null;
   confidenceTier:        string | null;
   confidenceSampleSize:  number | null;
+  openMeasurementWindow:        boolean;
+  openMeasurementWindowReadyAt: string | null;
 }
 
 export async function fetchTopActions(shop: string): Promise<TopAction[]> {

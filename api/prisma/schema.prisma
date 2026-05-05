@@ -238,6 +238,10 @@ model ProductMetricsSnapshot {
   // Store-wide sessions from Shopify Analytics (null when read_analytics scope is absent).
   // Enables store CVR = storeOrderCount / storeSessions when both are non-null.
   storeSessions            Int?
+  // Product-page sessions and ATC counts from Shopify Analytics for the measurement window.
+  // Null when read_analytics scope is absent or the product handle is unavailable.
+  productSessions          Int?
+  productAtcCount          Int?
   createdAt                DateTime @default(now())
 
   product Product @relation(fields: [productId], references: [id])

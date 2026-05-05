@@ -2,7 +2,7 @@
 
 const { getProductActions }           = require('./action-center.service');
 const { PRODUCT_INCLUDE }             = require('../lib/product-include');
-const { fetchWindowedStoreAnalytics } = require('./shopify-admin.service');
+const { fetchWindowedStoreAnalytics, fetchProductAnalytics } = require('./shopify-admin.service');
 
 // ── Test-order exclusion ─────────────────────────────────────────────────────
 // Applied only to merchant-facing proof surfaces (snapshots, attribution,
@@ -96,7 +96,7 @@ async function captureProductMetricsSnapshot(prisma, productId, phase = 'standal
 async function captureWindowedBeforeSnapshot(prisma, productId, windowDays = 7) {
   const product = await prisma.product.findUnique({
     where:  { id: productId },
-    select: { id: true, storeId: true },
+    select: { id: true, storeId: true, handle: true },
   });
   if (!product) throw new Error(`Product not found: ${productId}`);
 
@@ -143,6 +143,10 @@ async function captureWindowedBeforeSnapshot(prisma, productId, windowDays = 7) 
     ? await fetchWindowedStoreAnalytics(storeObj, windowStart, windowEnd)
     : { sessions: null };
 
+  const { sessions: productSessions, atcCount: productAtcCount } = storeObj
+    ? await fetchProductAnalytics(storeObj, windowStart, windowEnd, product)
+    : { sessions: null, atcCount: null };
+
   const latestExecution = await prisma.contentExecution.findFirst({
     where:   { productId, status: 'applied' },
     orderBy: { createdAt: 'desc' },
@@ -158,6 +162,7 @@ async function captureWindowedBeforeSnapshot(prisma, productId, windowDays = 7) 
       orderCount, unitsSold, revenue,
       windowStart, windowEnd,
       storeRevenue, storeOrderCount, storeSessions,
+      productSessions, productAtcCount,
       latestAppliedExecutionId: latestExecution?.id ?? null,
     },
     create: {
@@ -165,6 +170,7 @@ async function captureWindowedBeforeSnapshot(prisma, productId, windowDays = 7) 
       orderCount, unitsSold, revenue,
       windowStart, windowEnd,
       storeRevenue, storeOrderCount, storeSessions,
+      productSessions, productAtcCount,
       latestAppliedExecutionId: latestExecution?.id ?? null,
     },
   });
@@ -185,7 +191,7 @@ async function captureWindowedBeforeSnapshot(prisma, productId, windowDays = 7) 
 async function captureWindowedAfterSnapshot(prisma, productId, executionId, applyDate) {
   const product = await prisma.product.findUnique({
     where:  { id: productId },
-    select: { id: true, storeId: true },
+    select: { id: true, storeId: true, handle: true },
   });
   if (!product) throw new Error(`Product not found: ${productId}`);
 
@@ -230,6 +236,10 @@ async function captureWindowedAfterSnapshot(prisma, productId, executionId, appl
     ? await fetchWindowedStoreAnalytics(storeObj, windowStart, windowEnd)
     : { sessions: null };
 
+  const { sessions: productSessions, atcCount: productAtcCount } = storeObj
+    ? await fetchProductAnalytics(storeObj, windowStart, windowEnd, product)
+    : { sessions: null, atcCount: null };
+
   const snapshotDate = new Date();
   snapshotDate.setUTCHours(0, 0, 0, 0);
 
@@ -239,6 +249,7 @@ async function captureWindowedAfterSnapshot(prisma, productId, executionId, appl
       orderCount, unitsSold, revenue,
       windowStart, windowEnd,
       storeRevenue, storeOrderCount, storeSessions,
+      productSessions, productAtcCount,
       baselineExecutionId: executionId,
     },
     create: {
@@ -246,6 +257,7 @@ async function captureWindowedAfterSnapshot(prisma, productId, executionId, appl
       orderCount, unitsSold, revenue,
       windowStart, windowEnd,
       storeRevenue, storeOrderCount, storeSessions,
+      productSessions, productAtcCount,
       baselineExecutionId: executionId,
     },
   });
@@ -437,33 +449,52 @@ async function compareExecutionMetrics(prisma, executionId) {
   const bStoreCvr      = safeCvr(bStoreOrders, bStoreSessions);
   const aStoreCvr      = safeCvr(aStoreOrders, aStoreSessions);
 
+  const bProductSessions = before.productSessions ?? null;
+  const aProductSessions = after.productSessions  ?? null;
+  const bProductAtcCount = before.productAtcCount ?? null;
+  const aProductAtcCount = after.productAtcCount  ?? null;
+  const bProductCvr      = safeCvr(bOrders, bProductSessions);
+  const aProductCvr      = safeCvr(aOrders, aProductSessions);
+
   return {
     success:     true,
     executionId,
     productId:   before.productId,
     before: {
-      snapshotDate: before.snapshotDate,
-      windowStart:  before.windowStart,
-      windowEnd:    before.windowEnd,
-      orderCount:   bOrders,
-      unitsSold:    bUnits,
-      revenue:      bRevenue,
+      snapshotDate:    before.snapshotDate,
+      windowStart:     before.windowStart,
+      windowEnd:       before.windowEnd,
+      orderCount:      bOrders,
+      unitsSold:       bUnits,
+      revenue:         bRevenue,
+      productSessions: bProductSessions,
+      productAtcCount: bProductAtcCount,
     },
     after: {
-      snapshotDate: after.snapshotDate,
-      windowStart:  after.windowStart,
-      windowEnd:    after.windowEnd,
-      orderCount:   aOrders,
-      unitsSold:    aUnits,
-      revenue:      aRevenue,
+      snapshotDate:    after.snapshotDate,
+      windowStart:     after.windowStart,
+      windowEnd:       after.windowEnd,
+      orderCount:      aOrders,
+      unitsSold:       aUnits,
+      revenue:         aRevenue,
+      productSessions: aProductSessions,
+      productAtcCount: aProductAtcCount,
     },
     diff: {
-      orderCountDiff:          aOrders  - bOrders,
-      unitsSoldDiff:           aUnits   - bUnits,
-      revenueDiff:             parseFloat((aRevenue - bRevenue).toFixed(2)),
-      orderCountChangePercent: safePct(bOrders,  aOrders),
-      unitsSoldChangePercent:  safePct(bUnits,   aUnits),
-      revenueChangePercent:    safePct(bRevenue, aRevenue),
+      orderCountDiff:              aOrders  - bOrders,
+      unitsSoldDiff:               aUnits   - bUnits,
+      revenueDiff:                 parseFloat((aRevenue - bRevenue).toFixed(2)),
+      orderCountChangePercent:     safePct(bOrders,  aOrders),
+      unitsSoldChangePercent:      safePct(bUnits,   aUnits),
+      revenueChangePercent:        safePct(bRevenue, aRevenue),
+      productSessionsDiff:         bProductSessions !== null && aProductSessions !== null ? aProductSessions - bProductSessions : null,
+      productSessionsChangePercent: safePct(bProductSessions, aProductSessions),
+      productAtcCountDiff:         bProductAtcCount !== null && aProductAtcCount !== null ? aProductAtcCount - bProductAtcCount : null,
+      productAtcCountChangePercent: safePct(bProductAtcCount, aProductAtcCount),
+      productCvrBefore:            bProductCvr,
+      productCvrAfter:             aProductCvr,
+      productCvrDiff:              bProductCvr !== null && aProductCvr !== null ? parseFloat((aProductCvr - bProductCvr).toFixed(4)) : null,
+      productCvrChangePercent:     bProductCvr !== null && aProductCvr !== null ? safePct(bProductCvr, aProductCvr)                  : null,
     },
     store: {
       before: { orderCount: bStoreOrders, revenue: bStoreRevenue, aov: bStoreAov, sessions: bStoreSessions, conversionRate: bStoreCvr },
@@ -482,6 +513,38 @@ async function compareExecutionMetrics(prisma, executionId) {
       },
     },
   };
+}
+
+// ---------------------------------------------------------------------------
+// detectExecutionOverlap
+//
+// Finds other applied ContentExecutions on the same product whose createdAt
+// falls inside the given measurement window. A non-empty result means the
+// after-window contains concurrent changes that may confound attribution.
+//
+// Never throws — returns empty array on any error so it can never block a
+// measurement result.
+// ---------------------------------------------------------------------------
+async function detectExecutionOverlap(prisma, executionId, productId, windowStart, windowEnd) {
+  try {
+    const rows = await prisma.contentExecution.findMany({
+      where: {
+        productId,
+        id:        { not: executionId },
+        status:    'applied',
+        createdAt: { gte: windowStart, lt: windowEnd },
+      },
+      select: { id: true, issueId: true, createdAt: true, status: true },
+    });
+    return rows.map(r => ({
+      executionId: r.id,
+      issueId:     r.issueId,
+      appliedAt:   r.createdAt,
+      status:      r.status,
+    }));
+  } catch (_) {
+    return [];
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -554,6 +617,33 @@ async function getExecutionResultsSummary(prisma, executionId) {
     compare.store?.after?.sessions  !== null &&
     compare.store?.after?.sessions  !== undefined;
 
+  const productSessionsAvailable =
+    compare.before?.productSessions !== null &&
+    compare.before?.productSessions !== undefined &&
+    compare.after?.productSessions  !== null &&
+    compare.after?.productSessions  !== undefined;
+
+  const productSummary = {
+    sessions: {
+      before:        compare.before.productSessions,
+      after:         compare.after.productSessions,
+      diff:          compare.diff.productSessionsDiff,
+      changePercent: compare.diff.productSessionsChangePercent,
+    },
+    atcCount: {
+      before:        compare.before.productAtcCount,
+      after:         compare.after.productAtcCount,
+      diff:          compare.diff.productAtcCountDiff,
+      changePercent: compare.diff.productAtcCountChangePercent,
+    },
+    conversionRate: {
+      before:        compare.diff.productCvrBefore,
+      after:         compare.diff.productCvrAfter,
+      diff:          compare.diff.productCvrDiff,
+      changePercent: compare.diff.productCvrChangePercent,
+    },
+  };
+
   const storeSummary = compare.store ? {
     sessions: {
       before:        compare.store.before.sessions,
@@ -593,6 +683,16 @@ async function getExecutionResultsSummary(prisma, executionId) {
     buildInsight('Units sold', diff.unitsSoldChangePercent) ??
     buildInsight('Orders',     diff.orderCountChangePercent);
 
+  const confoundedBy = compare.after.windowStart
+    ? await detectExecutionOverlap(
+        prisma,
+        executionId,
+        execution.productId,
+        compare.after.windowStart,
+        compare.after.windowEnd,
+      )
+    : [];
+
   return {
     success:        true,
     executionId,
@@ -604,13 +704,15 @@ async function getExecutionResultsSummary(prisma, executionId) {
       after:  { start: compare.after.windowStart,  end: compare.after.windowEnd  },
     },
     summary,
+    product:        productSummary,
     store:          storeSummary,
     confidence:     deriveConfidence(before.orderCount, after.orderCount),
     unavailable: {
-      ...(sessionsAvailable ? {} : { storeConversionRate: 'no session data' }),
-      productConversionRate: 'no product-level session data',
+      ...(sessionsAvailable       ? {} : { storeConversionRate:   'no session data' }),
+      ...(productSessionsAvailable ? {} : { productConversionRate: 'no product-level session data' }),
     },
     insight,
+    confoundedBy,
   };
 }
 
@@ -1107,9 +1209,25 @@ async function getTopDecisionActions(prisma, shop) {
   // Applied executions — exclude already-fixed (product × issue) pairs
   const appliedRows = await prisma.contentExecution.findMany({
     where:  { productId: { in: productIds }, status: 'applied' },
-    select: { id: true, productId: true, issueId: true },
+    select: { id: true, productId: true, issueId: true, afterReadyAt: true },
   });
   const appliedSet = new Set(appliedRows.map(r => `${r.productId}:${r.issueId}`));
+
+  // ── Phase 3b: open measurement window signal ──────────────────────────────
+  // Products with at least one applied execution whose after-window has not yet
+  // closed. Null afterReadyAt rows (legacy) are excluded by the > now check.
+  // Map value = latest afterReadyAt across all open windows for that product,
+  // so the caller knows the earliest point when applying again is safe.
+  const _now = new Date();
+  const openWindowMap = new Map(); // productId → latest afterReadyAt
+  for (const r of appliedRows) {
+    if (r.afterReadyAt && r.afterReadyAt > _now) {
+      const existing = openWindowMap.get(r.productId);
+      if (!existing || r.afterReadyAt > existing) {
+        openWindowMap.set(r.productId, r.afterReadyAt);
+      }
+    }
+  }
 
   // Completed executions — for executionStatus field in response
   const completedRows = await prisma.contentExecution.findMany({
@@ -1188,7 +1306,11 @@ async function getTopDecisionActions(prisma, shop) {
       const outcomeKey   = `${action.issueId}_${profile?.archetype ?? 'unclassified'}`;
       const outcomeCount = measuredOutcomeMap.get(outcomeKey) ?? 0;
       const confAdj      = decisionConfidenceAdjustment(computeConfidenceTier(outcomeCount));
-      const total        = baseScore + confAdj;
+
+      const openMeasurementWindow        = openWindowMap.has(raw.id);
+      const openMeasurementWindowReadyAt = openWindowMap.get(raw.id) ?? null;
+      const openWindowAdj                = openMeasurementWindow ? -25 : 0;
+      const total                        = baseScore + confAdj + openWindowAdj;
 
       candidates.push({
         rank:                  0,   // assigned after sort
@@ -1210,12 +1332,16 @@ async function getTopDecisionActions(prisma, shop) {
         recommendedAction:     buildRecommendedAction(action),
         estimatedImpactLabel:  null, // set after rankingMode is determined
 
+        openMeasurementWindow,
+        openMeasurementWindowReadyAt,
+
         scoreBreakdown: {
           severityScore:       sScore,
           revenueScore:        rScore,
           effortScore:         eScore,
           readinessBonus:      rBonus,
           confidenceAdj:       confAdj,
+          openWindowAdj,
         },
 
         // internal tie-break only — not exposed at top level
