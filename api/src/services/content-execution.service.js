@@ -952,9 +952,25 @@ function buildResultContent(issueId, currentContent, proposedContent) {
   return applyPatch(plan, currentContent, proposedContent, issueId);
 }
 
+// ---------------------------------------------------------------------------
+// wrapIssueContent
+//
+// Returns the HTML-wrapped form of `text` for the given issueId using the
+// same PATCH_MODE_REGISTRY.wrapContent() used internally by applyPatch.
+// Exported so the apply path can compute the exact block shape that will
+// appear in resultContent — used to locate and annotate the inserted block
+// with exposure-tracking markers without re-running the full patch pipeline.
+// ---------------------------------------------------------------------------
+function wrapIssueContent(issueId, text) {
+  const reg = PATCH_MODE_REGISTRY[issueId];
+  if (!reg) return text;
+  return reg.wrapContent(text);
+}
+
 module.exports = {
   previewContentExecution,
   previewRollback,
   getExecutionHistory,
   buildResultContent,
+  wrapIssueContent,
 };

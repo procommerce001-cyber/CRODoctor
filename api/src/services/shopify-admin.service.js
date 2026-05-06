@@ -352,6 +352,32 @@ async function fetchProductAnalytics(store, windowStart, windowEnd, productHandl
   }
 }
 
+// ---------------------------------------------------------------------------
+// ensureScriptTag
+// Idempotent: creates the CRODoctor tracker ScriptTag if one with the same
+// src does not already exist. Shopify's ?src= filter does an exact match,
+// so we can safely call this on every auth callback.
+// ---------------------------------------------------------------------------
+async function ensureScriptTag(store, scriptUrl) {
+  const existing = await shopifyFetch(
+    `${baseUrl(store.shopDomain)}/script_tags.json?limit=250&src=${encodeURIComponent(scriptUrl)}`,
+    { headers: headers(store.accessToken) }
+  );
+  if (existing.script_tags && existing.script_tags.length > 0) return existing.script_tags[0];
+
+  const created = await shopifyFetch(
+    `${baseUrl(store.shopDomain)}/script_tags.json`,
+    {
+      method: 'POST',
+      headers: headers(store.accessToken),
+      body: JSON.stringify({
+        script_tag: { event: 'onload', src: scriptUrl, display_scope: 'online_store' },
+      }),
+    }
+  );
+  return created.script_tag;
+}
+
 module.exports = {
   listThemes,
   getPublishedTheme,
@@ -367,4 +393,5 @@ module.exports = {
   shopifyGraphQL,
   fetchWindowedStoreAnalytics,
   fetchProductAnalytics,
+  ensureScriptTag,
 };

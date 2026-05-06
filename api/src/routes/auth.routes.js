@@ -7,6 +7,7 @@ const router  = express.Router();
 const { fetchProducts }                  = require('../services/shopify.service');
 const { captureWindowedBeforeSnapshot }  = require('../services/metrics.service');
 const { registerWebhooks }               = require('../services/webhook-registration.service');
+const { ensureScriptTag }                = require('../services/shopify-admin.service');
 const {
   pendingOAuthStates,
   OAUTH_STATE_TTL_MS,
@@ -16,7 +17,7 @@ const {
 
 const CLIENT_ID     = process.env.SHOPIFY_CLIENT_ID;
 const CLIENT_SECRET = process.env.SHOPIFY_CLIENT_SECRET;
-const SCOPES        = process.env.SHOPIFY_SCOPES || 'read_products,write_products,read_orders,read_analytics';
+const SCOPES        = process.env.SHOPIFY_SCOPES || 'read_products,write_products,read_orders,read_analytics,write_script_tags';
 const APP_BASE_URL  = (process.env.APP_BASE_URL || '').replace(/\/$/, '');
 const REDIRECT_URI  = `${APP_BASE_URL}/auth/callback`;
 
@@ -32,6 +33,12 @@ async function runInitialSync(prisma, store) {
   // Register webhooks first — non-fatal if it fails
   await registerWebhooks(store, APP_BASE_URL).catch(err =>
     console.error(`${tag} webhook registration failed (non-fatal):`, err.message)
+  );
+
+  // Register tracker ScriptTag — non-fatal; APP_BASE_URL must resolve to the API host
+  const _trackerUrl = `${APP_BASE_URL}/cro-tracker.js`;
+  await ensureScriptTag(store, _trackerUrl).catch(err =>
+    console.error(`${tag} script tag registration failed (non-fatal):`, err.message)
   );
 
   try {
@@ -330,6 +337,28 @@ router.post('/logout', (req, res) => {
     res.clearCookie('cro.sid');
     res.json({ success: true });
   });
+});
+
+// ---------------------------------------------------------------------------
+// POST /auth/ensure-tracker
+// Idempotently registers the CRODoctor ScriptTag on the authenticated store.
+// Call this once for existing stores that pre-date automatic registration.
+// ---------------------------------------------------------------------------
+router.post('/ensure-tracker', async (req, res) => {
+  const prisma = req.app.get('prisma');
+  const { shopDomain } = req.session;
+  try {
+    const store = await prisma.store.findUnique({ where: { shopDomain } });
+    if (!store || !store.accessToken) {
+      return res.status(404).json({ error: 'Store not found or token missing.' });
+    }
+    const trackerUrl = `${APP_BASE_URL}/cro-tracker.js`;
+    const scriptTag  = await ensureScriptTag(store, trackerUrl);
+    res.json({ ok: true, scriptTagId: scriptTag?.id ?? null, src: trackerUrl });
+  } catch (err) {
+    console.error('[Auth] ensure-tracker error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // ---------------------------------------------------------------------------

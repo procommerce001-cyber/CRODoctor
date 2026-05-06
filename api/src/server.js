@@ -1,7 +1,8 @@
 require('dotenv').config();
 const express = require('express');
-const cors = require('cors');
-const crypto = require('crypto');
+const cors    = require('cors');
+const path    = require('path');
+const crypto  = require('crypto');
 const session = require('express-session');
 const PgSession = require('connect-pg-simple')(session);
 const { PrismaClient } = require('@prisma/client');
@@ -17,6 +18,7 @@ const actionCenterRouter   = require('./routes/action-center.routes');
 const metricsRouter        = require('./routes/metrics.routes');
 const dashboardRouter      = require('./routes/dashboard.routes');
 const decisionEngineRouter = require('./routes/decision-engine.routes');
+const eventsRouter         = require('./routes/events.routes');
 
 const app = express();
 const prisma = new PrismaClient({
@@ -46,18 +48,16 @@ function safeStore(store) {
 
 
 // ---------------------------------------------------------------------------
-// CORS — restrict to configured frontend origin(s) only
+// CORS — open for public event/tracker paths; restricted elsewhere
 // ---------------------------------------------------------------------------
 const ALLOWED_ORIGIN = process.env.ALLOWED_ORIGIN || 'http://localhost:5173';
 
-app.use(cors({
-  origin: (origin, callback) => {
-    // Allow same-origin / server-to-server requests (no Origin header)
-    if (!origin) return callback(null, true);
-    if (origin === ALLOWED_ORIGIN) return callback(null, true);
-    callback(new Error(`CORS: origin "${origin}" is not allowed`));
-  },
-  credentials: true,
+app.use(cors(function corsDelegate(req, callback) {
+  const pub = req.path === '/cro-tracker.js' || req.path.startsWith('/events');
+  if (pub) return callback(null, { origin: true, credentials: false });
+  const origin = req.headers.origin;
+  if (!origin || origin === ALLOWED_ORIGIN) return callback(null, { origin: true, credentials: true });
+  callback(new Error(`CORS: origin "${origin}" is not allowed`));
 }));
 
 // ---------------------------------------------------------------------------
@@ -86,6 +86,15 @@ app.use(session({
 }));
 
 app.use(express.json());
+// Events endpoint — public, no session required (storefront pixel target).
+// Mounted before requireSession so the gate does not block ingest calls.
+app.use('/events', eventsRouter);
+// Tracker snippet — public static file, no auth.
+app.get('/cro-tracker.js', (_req, res) => {
+  res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
+  res.setHeader('Cache-Control', 'public, max-age=300');
+  res.sendFile(path.join(__dirname, '..', 'public', 'cro-tracker.js'));
+});
 app.use(requireSession);
 
 // ---------------------------------------------------------------------------

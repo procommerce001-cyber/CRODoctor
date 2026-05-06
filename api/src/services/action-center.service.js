@@ -35,8 +35,10 @@ async function updateProductDescription(store, shopifyProductId, bodyHtml) {
   const { product } = await res.json();
   return product;
 }
-const { classifyExecution }   = require('./cro/classifyExecution');
-const { buildResultContent }  = require('./content-execution.service');
+const { classifyExecution }              = require('./cro/classifyExecution');
+const { buildResultContent,
+        wrapIssueContent }               = require('./content-execution.service');
+const { randomUUID }                     = require('crypto');
 
 // ---------------------------------------------------------------------------
 // V1_RULE_ALLOWLIST
@@ -1095,9 +1097,24 @@ async function applyContentChange(prisma, store, rawProduct, actionItem) {
     return { applied: false, error: `Patch failed: ${err.message}` };
   }
 
+  // 2b. Pre-generate the execution id and inject an exposure marker so the
+  //     storefront snippet can observe which block / execution is in view.
+  //     Wraps the inserted block in a semantically-neutral div with two data
+  //     attributes — the issueId and the pre-generated execution id.
+  //     Degrades safely: if wrapping fails for any reason the apply continues
+  //     without a marker and resultContent is written unchanged.
+  const executionId   = randomUUID();
+  let   markedContent = resultContent;
+  try {
+    const wrappedBlock = wrapIssueContent(actionItem.issueId, proposedContent);
+    const markedBlock  = `<div data-cro-block="${actionItem.issueId}" data-cro-eid="${executionId}">\n${wrappedBlock}\n</div>`;
+    const candidate    = resultContent.replace(wrappedBlock, () => markedBlock);
+    if (candidate !== resultContent) markedContent = candidate;
+  } catch (_) { /* non-fatal — apply proceeds without marker */ }
+
   // 3. Shopify write
   try {
-    await updateProductDescription(store, rawProduct.shopifyProductId, resultContent);
+    await updateProductDescription(store, rawProduct.shopifyProductId, markedContent);
   } catch (err) {
     return { applied: false, error: `Shopify write failed: ${err.message}` };
   }
@@ -1114,6 +1131,7 @@ async function applyContentChange(prisma, store, rawProduct, actionItem) {
   try {
     await prisma.contentExecution.create({
       data: {
+        id:                   executionId,
         storeId:              store.id,
         productId:            rawProduct.id,
         issueId:              actionItem.issueId,
@@ -1123,7 +1141,7 @@ async function applyContentChange(prisma, store, rawProduct, actionItem) {
         matchedBlock:         null,
         previousContent:      currentContent,
         newContent:           proposedContent,
-        resultContent,
+        resultContent:        markedContent,
         status:               'applied',
         afterReadyAt,
       },
@@ -1138,7 +1156,7 @@ async function applyContentChange(prisma, store, rawProduct, actionItem) {
   // 4b. Update local product
   await prisma.product.update({
     where: { id: rawProduct.id },
-    data:  { bodyHtml: resultContent },
+    data:  { bodyHtml: markedContent },
   });
 
   return {

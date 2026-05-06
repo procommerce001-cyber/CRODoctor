@@ -330,3 +330,35 @@ model ProductPerformanceProfile {
   @@unique([productId, capturedAt])
   @@index([storeId, capturedAt])
 }
+
+// ---------------------------------------------------------------------------
+// PdpEvent — append-only raw event log from first-party storefront tracking.
+// One row per event. Never updated. Never deleted.
+// productId resolved at ingest time from shopifyProductId; null if unknown.
+// executionId and blockId are null until Phase 4B exposure anchors are added.
+// ---------------------------------------------------------------------------
+model PdpEvent {
+  id               String   @id @default(cuid())
+  storeId          String
+  // Resolved internal product id — null when shopifyProductId not in DB yet
+  productId        String?
+  shopifyProductId String
+  // Client-generated UUID scoping one PDP visit (sessionStorage, not persisted cross-session)
+  sessionId        String
+  // Opaque visitor id — client-generated, no PII, client-rotated
+  visitorId        String?
+  // pdp_view | scroll_depth | block_viewed | atc_click | checkout_click | pdp_exit
+  event            String
+  // Client-reported timestamp (ms since epoch → stored as DateTime)
+  issuedAt         DateTime
+  // Reserved for Phase 4B exposure anchors — null until then
+  executionId      String?
+  blockId          String?
+  // Per-event optional payload (scroll depth %, variant id, time on page ms, etc.)
+  meta             Json     @default("{}")
+  createdAt        DateTime @default(now())
+
+  @@index([storeId, issuedAt])
+  @@index([productId, issuedAt])
+  @@index([sessionId])
+}

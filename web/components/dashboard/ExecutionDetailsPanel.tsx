@@ -115,6 +115,16 @@ export default function ExecutionDetailsPanel({ executionId, onClose }: Props) {
                     <MetricRow label="Orders"     stat={data.summary.orders} />
                     <MetricRow label="Units sold" stat={data.summary.unitsSold} />
                     <MetricRow label="Revenue"    stat={data.summary.revenue} prefix="$" />
+                    {data.confounds?.detected && data.confounds.overlappingExecutions.length > 0 && (
+                      <div style={styles.confoundBox}>
+                        <p style={styles.confoundTitle}>Another change was also live during this measurement window. Results may reflect both changes.</p>
+                        {data.confounds.overlappingExecutions.map(ex => (
+                          <p key={ex.executionId} style={styles.confoundDetail}>
+                            Also active: {issueLabel(ex.issueId)} &bull; {new Date(ex.appliedAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}
+                          </p>
+                        ))}
+                      </div>
+                    )}
                   </>
                 )}
 
@@ -250,4 +260,7 @@ const styles: Record<string, React.CSSProperties> = {
   measuringDot:    { width: 8, height: 8, borderRadius: '50%', background: '#f59e0b', flexShrink: 0, marginTop: 4 },
   measuringTitle:  { fontSize: 13, fontWeight: 600, color: '#92400e', marginBottom: 2 },
   measuringBody:   { fontSize: 12, color: '#78350f', lineHeight: 1.5 },
+  confoundBox:     { marginTop: 12, padding: '10px 12px', background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 6 },
+  confoundTitle:   { fontSize: 12, color: '#92400e', lineHeight: 1.5, margin: 0 },
+  confoundDetail:  { fontSize: 12, color: '#78350f', marginTop: 4, marginBottom: 0, lineHeight: 1.4 },
 };

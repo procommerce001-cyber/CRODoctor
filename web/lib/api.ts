@@ -276,6 +276,16 @@ export interface ExecutionDetails {
     unitsSold: MetricStat;
     revenue:   MetricStat;
   } | null;
+  confounds?: {
+    detected: boolean;
+    overlappingExecutions: Array<{
+      executionId: string;
+      issueId:     string;
+      appliedAt:   string;
+      status:      string;
+    }>;
+    warning?: string;
+  };
 }
 
 export async function fetchExecutionDetails(shop: string, executionId: string): Promise<ExecutionDetails> {
