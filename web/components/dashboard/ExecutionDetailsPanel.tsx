@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { fetchExecutionDetails, apiHeaders, API_BASE, issueLabel } from '@/lib/api';
-import type { ExecutionDetails, MetricStat } from '@/lib/api';
+import type { ExecutionDetails, MetricStat, ExposureSummary } from '@/lib/api';
 
 const EXECUTION_STATUS_LABEL: Record<string, string> = {
   applied:     'Live on your store',
@@ -145,6 +145,8 @@ export default function ExecutionDetailsPanel({ executionId, onClose }: Props) {
                 {!data.resultStatus && (
                   <p style={styles.muted}>No impact data available for this execution.</p>
                 )}
+
+                {data.exposure && <ExposureSection e={data.exposure} />}
               </section>
 
               {/* ── Rollback ─────────────────────────────────── */}
@@ -206,6 +208,20 @@ function ContentBlock({ label, html }: { label: string; html: string | null }) {
   );
 }
 
+function ExposureSection({ e }: { e: ExposureSummary }) {
+  const rate = e.exposureRate != null ? `${Math.round(e.exposureRate * 100)}%` : '—';
+  return (
+    <div style={styles.exposureBox}>
+      <p style={styles.exposureTitle}>Visitor exposure</p>
+      <div style={styles.exposureRow}><span>PDP sessions</span><span>{e.pdpSessionCount}</span></div>
+      <div style={styles.exposureRow}><span>Exposed to change</span><span>{e.exposedSessionCount}</span></div>
+      <div style={styles.exposureRow}><span>Not exposed</span><span>{e.unexposedPdpSessionCount}</span></div>
+      <div style={styles.exposureRow}><span>Block views</span><span>{e.blockViewedCount}</span></div>
+      <div style={styles.exposureRow}><span>Exposure rate</span><span>{rate}</span></div>
+    </div>
+  );
+}
+
 function MetricRow({ label, stat, prefix = '' }: { label: string; stat: MetricStat; prefix?: string }) {
   const pct   = stat.changePercent;
   const color = pct == null ? '#6b7280' : pct > 0 ? '#16a34a' : pct < 0 ? '#dc2626' : '#6b7280';
@@ -263,4 +279,7 @@ const styles: Record<string, React.CSSProperties> = {
   confoundBox:     { marginTop: 12, padding: '10px 12px', background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 6 },
   confoundTitle:   { fontSize: 12, color: '#92400e', lineHeight: 1.5, margin: 0 },
   confoundDetail:  { fontSize: 12, color: '#78350f', marginTop: 4, marginBottom: 0, lineHeight: 1.4 },
+  exposureBox:     { marginTop: 16, padding: '10px 12px', background: '#f9fafb', border: '1px solid #e5e7eb', borderRadius: 6 },
+  exposureTitle:   { fontSize: 11, fontWeight: 600, textTransform: 'uppercase' as const, letterSpacing: '0.05em', color: '#9ca3af', marginBottom: 8, marginTop: 0 },
+  exposureRow:     { display: 'flex', justifyContent: 'space-between', fontSize: 12, color: '#6b7280', marginBottom: 4, lineHeight: 1.5 },
 };

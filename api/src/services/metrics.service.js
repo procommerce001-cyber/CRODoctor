@@ -562,14 +562,76 @@ function buildInsight(metric, pct) {
   return `${metric} ${direction} by ${absPct}% after this content change.`;
 }
 
+// ---------------------------------------------------------------------------
+// getExecutionExposure
+//
+// Read-time aggregation of PdpEvent rows for one ContentExecution.
+// Window: execution.createdAt → now (block has been live since that moment).
+// Never throws — returns null on any failure.
+// ---------------------------------------------------------------------------
+async function getExecutionExposure(prisma, executionId, productId, windowStart, executionStatus) {
+  try {
+    // For superseded executions the block was removed at rollback time — cap windowEnd there.
+    // For applied (still live) executions windowEnd is now.
+    let windowEnd = new Date();
+    if (executionStatus === 'superseded') {
+      const rollbackRow = await prisma.contentExecution.findFirst({
+        where:   { referenceExecutionId: executionId, status: 'rolled_back' },
+        select:  { createdAt: true },
+        orderBy: { createdAt: 'asc' },
+      });
+      if (rollbackRow) windowEnd = rollbackRow.createdAt;
+    }
+
+    const [pdpSessions, exposedRows, blockViewedCount] = await Promise.all([
+      prisma.pdpEvent.findMany({
+        where:    { productId, event: 'pdp_view', issuedAt: { gte: windowStart, lt: windowEnd } },
+        select:   { sessionId: true },
+        distinct: ['sessionId'],
+      }),
+      prisma.pdpEvent.findMany({
+        where:  { executionId, event: 'block_viewed', issuedAt: { gte: windowStart, lt: windowEnd } },
+        select: { sessionId: true },
+      }),
+      prisma.pdpEvent.count({
+        where:  { executionId, event: 'block_viewed', issuedAt: { gte: windowStart, lt: windowEnd } },
+      }),
+    ]);
+
+    const pdpSessionCount           = pdpSessions.length;
+    const exposedSessions           = new Set(exposedRows.map(r => r.sessionId));
+    const exposedSessionCount       = exposedSessions.size;
+    const unexposedPdpSessionCount  = Math.max(pdpSessionCount - exposedSessionCount, 0);
+    const exposureRate              = pdpSessionCount > 0
+      ? Math.round((exposedSessionCount / pdpSessionCount) * 10000) / 10000
+      : null;
+
+    return {
+      windowStart,
+      windowEnd,
+      pdpSessionCount,
+      exposedSessionCount,
+      unexposedPdpSessionCount,
+      blockViewedCount,
+      exposureRate,
+    };
+  } catch (err) {
+    console.warn('[Metrics] getExecutionExposure failed (non-fatal):', err.message);
+    return null;
+  }
+}
+
 async function getExecutionResultsSummary(prisma, executionId) {
   const execution = await prisma.contentExecution.findUnique({
     where:  { id: executionId },
-    select: { id: true, productId: true, issueId: true, status: true },
+    select: { id: true, productId: true, issueId: true, status: true, createdAt: true },
   });
   if (!execution) return { success: false, reason: 'execution not found' };
 
-  const compare = await compareExecutionMetrics(prisma, executionId);
+  const [compare, exposure] = await Promise.all([
+    compareExecutionMetrics(prisma, executionId),
+    getExecutionExposure(prisma, executionId, execution.productId, execution.createdAt, execution.status),
+  ]);
 
   if (!compare.success) {
     return {
@@ -585,6 +647,7 @@ async function getExecutionResultsSummary(prisma, executionId) {
         productConversionRate: 'no product-level session data',
       },
       insight:     null,
+      exposure,
     };
   }
 
@@ -713,6 +776,7 @@ async function getExecutionResultsSummary(prisma, executionId) {
     },
     insight,
     confoundedBy,
+    exposure,
   };
 }
 

@@ -259,6 +259,16 @@ export interface MetricStat {
   changePercent: number | null;
 }
 
+export interface ExposureSummary {
+  windowStart:              string;
+  windowEnd:                string;
+  pdpSessionCount:          number;
+  exposedSessionCount:      number;
+  unexposedPdpSessionCount: number;
+  blockViewedCount:         number;
+  exposureRate:             number | null;
+}
+
 export interface ExecutionDetails {
   success:         boolean;
   executionId:     string;
@@ -286,6 +296,7 @@ export interface ExecutionDetails {
     }>;
     warning?: string;
   };
+  exposure?: ExposureSummary | null;
 }
 
 export async function fetchExecutionDetails(shop: string, executionId: string): Promise<ExecutionDetails> {
