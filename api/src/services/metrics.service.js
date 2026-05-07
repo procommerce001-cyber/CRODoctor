@@ -981,6 +981,7 @@ async function getStoreExecutionFeed(prisma, shop) {
       ordersChangePercent:    measured ? result.summary.orders.changePercent      : null,
       // 'high'|'medium'|'low'|'insufficient'|null — gate for measured-lift display
       measurementConfidence:  measured ? result.confidence                        : null,
+      decisionSignal:         result?.decisionSignal ?? null,
     });
   }
 

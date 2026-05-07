@@ -12,7 +12,7 @@ interface Props {
   demoMode?:      boolean;
 }
 
-export default function MerchantSummary({ shop, overview, review, demoMode }: Props) {
+export default function MerchantSummary({ shop, overview, review, recentActivity, demoMode }: Props) {
   const [attr, setAttr]       = useState<AttributedRevenueData | null>(null);
   const [revDash, setRevDash] = useState<RevenueDashboardData | null>(null);
 
@@ -38,6 +38,7 @@ export default function MerchantSummary({ shop, overview, review, demoMode }: Pr
   const liveCount      = overview.totalAppliedExecutions;
   const measuringCount = overview.waitingExecutions;
   const pendingCount   = review.summary.readyToApplyCount;
+  const rollbackCount  = recentActivity.filter(i => i.decisionSignal === 'rollback_candidate').length;
 
   const insufficientCount = revDash?.insufficientDataCount ?? 0;
   const reliableCount     = revDash ? revDash.measuredCount - insufficientCount : 0;
@@ -150,13 +151,16 @@ export default function MerchantSummary({ shop, overview, review, demoMode }: Pr
       <div style={s.heroBody}>
         {heroBody}
       </div>
-      {liveCount > 0 && (pendingCount > 0 || measuringCount > 0) && (
+      {liveCount > 0 && (pendingCount > 0 || measuringCount > 0 || rollbackCount > 0) && (
         <div style={s.footer}>
           {pendingCount > 0 && (
             <span style={s.footerAccent}>{pendingCount} change{pendingCount === 1 ? '' : 's'} ready to apply</span>
           )}
           {measuringCount > 0 && (
             <span style={s.footerMuted}>{measuringCount} still measuring</span>
+          )}
+          {rollbackCount > 0 && (
+            <span style={s.footerReview}>{rollbackCount} change{rollbackCount === 1 ? '' : 's'} flagged for review</span>
           )}
         </div>
       )}
@@ -205,4 +209,5 @@ const s: Record<string, React.CSSProperties> = {
   footer:          { display: 'flex', alignItems: 'center', gap: 14, paddingTop: 14, borderTop: '1px solid #1a1a1a', flexWrap: 'wrap' as const },
   footerAccent:    { fontSize: 11, fontWeight: 700, color: '#4a7a28', letterSpacing: '0.01em' },
   footerMuted:     { fontSize: 11, color: '#666' },
+  footerReview:    { fontSize: 11, fontWeight: 700, color: '#d97706', letterSpacing: '0.01em' },
 };

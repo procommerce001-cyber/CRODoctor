@@ -88,6 +88,9 @@ export default function RecentActivityList({ items, selectedExecId, onSelect }: 
               <span style={styles.issueId}>{issueLabel(item.issueId)}</span>
               {item.insight && <span style={styles.insight}>{item.insight}</span>}
               <LiftBadge item={item} />
+              {(item.decisionSignal === 'revise' || item.decisionSignal === 'rollback_candidate') && (
+                <DecisionTag signal={item.decisionSignal} />
+              )}
             </div>
             <div style={styles.right}>
               <span style={{ ...styles.statusBadge, color: STATUS_COLOR[item.status] ?? '#374151' }}>
@@ -130,6 +133,21 @@ export default function RecentActivityList({ items, selectedExecId, onSelect }: 
 //
 // Wording is factual. No causation claim. No attribution language.
 // ---------------------------------------------------------------------------
+const DECISION_TAG: Record<string, { label: string; color: string; background: string; borderColor: string }> = {
+  revise:             { label: 'Needs review',       color: '#92400e', background: '#fffbeb', borderColor: '#fde68a' },
+  rollback_candidate: { label: 'Rollback candidate', color: '#b45309', background: '#fef3c7', borderColor: '#fde68a' },
+};
+
+function DecisionTag({ signal }: { signal: string }) {
+  const cfg = DECISION_TAG[signal];
+  if (!cfg) return null;
+  return (
+    <span style={{ ...liftStyles.badge, color: cfg.color, background: cfg.background, borderColor: cfg.borderColor }}>
+      {cfg.label}
+    </span>
+  );
+}
+
 function LiftBadge({ item }: { item: ActivityItem }) {
   const { resultStatus, measurementConfidence, revenueChangePercent } = item;
 

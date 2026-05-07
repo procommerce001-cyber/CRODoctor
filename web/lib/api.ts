@@ -95,6 +95,7 @@ export interface ActivityItem {
   ordersChangePercent: number | null;
   // 'high'|'medium'|'low'|'insufficient'|null — controls measured-lift display
   measurementConfidence: string | null;
+  decisionSignal?: 'still_measuring' | 'keep' | 'revise' | 'rollback_candidate' | null;
 }
 
 export interface DashboardPayload {
