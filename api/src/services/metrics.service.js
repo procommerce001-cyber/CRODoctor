@@ -563,6 +563,30 @@ function buildInsight(metric, pct) {
 }
 
 // ---------------------------------------------------------------------------
+// deriveDecisionSignal
+//
+// Pure classifier — no DB access, no side effects.
+// Returns one of: 'still_measuring' | 'keep' | 'revise' | 'rollback_candidate'
+// ---------------------------------------------------------------------------
+function deriveDecisionSignal(resultStatus, confidence, revenueChangePercent, confoundedBy) {
+  if (
+    resultStatus !== 'measured' ||
+    confidence === 'insufficient' ||
+    revenueChangePercent === null
+  ) return 'still_measuring';
+
+  if (
+    (confidence === 'high' || confidence === 'medium') &&
+    revenueChangePercent <= -10 &&
+    confoundedBy.length === 0
+  ) return 'rollback_candidate';
+
+  if (revenueChangePercent < 0) return 'revise';
+
+  return 'keep';
+}
+
+// ---------------------------------------------------------------------------
 // getExecutionExposure
 //
 // Read-time aggregation of PdpEvent rows for one ContentExecution.
@@ -583,28 +607,70 @@ async function getExecutionExposure(prisma, executionId, productId, windowStart,
       if (rollbackRow) windowEnd = rollbackRow.createdAt;
     }
 
-    const [pdpSessions, exposedRows, blockViewedCount] = await Promise.all([
+    const window = { gte: windowStart, lt: windowEnd };
+
+    const [pdpSessions, exposedRows, blockViewedCount, atcRows, checkoutRows] = await Promise.all([
       prisma.pdpEvent.findMany({
-        where:    { productId, event: 'pdp_view', issuedAt: { gte: windowStart, lt: windowEnd } },
+        where:    { productId, event: 'pdp_view',       issuedAt: window },
         select:   { sessionId: true },
         distinct: ['sessionId'],
       }),
       prisma.pdpEvent.findMany({
-        where:  { executionId, event: 'block_viewed', issuedAt: { gte: windowStart, lt: windowEnd } },
+        where:  { executionId, event: 'block_viewed',   issuedAt: window },
         select: { sessionId: true },
       }),
       prisma.pdpEvent.count({
-        where:  { executionId, event: 'block_viewed', issuedAt: { gte: windowStart, lt: windowEnd } },
+        where:  { executionId, event: 'block_viewed',   issuedAt: window },
+      }),
+      prisma.pdpEvent.findMany({
+        where:    { productId, event: 'atc_click',      issuedAt: window },
+        select:   { sessionId: true },
+        distinct: ['sessionId'],
+      }),
+      prisma.pdpEvent.findMany({
+        where:    { productId, event: 'checkout_click', issuedAt: window },
+        select:   { sessionId: true },
+        distinct: ['sessionId'],
       }),
     ]);
 
-    const pdpSessionCount           = pdpSessions.length;
-    const exposedSessions           = new Set(exposedRows.map(r => r.sessionId));
-    const exposedSessionCount       = exposedSessions.size;
-    const unexposedPdpSessionCount  = Math.max(pdpSessionCount - exposedSessionCount, 0);
-    const exposureRate              = pdpSessionCount > 0
+    const pdpSessionCount          = pdpSessions.length;
+    const exposedSessions          = new Set(exposedRows.map(r => r.sessionId));
+    const exposedSessionCount      = exposedSessions.size;
+    const unexposedPdpSessionCount = Math.max(pdpSessionCount - exposedSessionCount, 0);
+    const exposureRate             = pdpSessionCount > 0
       ? Math.round((exposedSessionCount / pdpSessionCount) * 10000) / 10000
       : null;
+
+    // ── Funnel comparison ────────────────────────────────────────────────────
+    const atcSessionIds      = new Set(atcRows.map(r => r.sessionId));
+    const checkoutSessionIds = new Set(checkoutRows.map(r => r.sessionId));
+
+    const unexposedSessionIds = new Set(
+      pdpSessions.map(r => r.sessionId).filter(s => !exposedSessions.has(s))
+    );
+
+    const rate = (n, d) => d > 0 ? Math.round((n / d) * 10000) / 10000 : null;
+
+    const expAtc      = [...exposedSessions].filter(s => atcSessionIds.has(s)).length;
+    const expCheckout = [...exposedSessions].filter(s => checkoutSessionIds.has(s)).length;
+    const unxAtc      = [...unexposedSessionIds].filter(s => atcSessionIds.has(s)).length;
+    const unxCheckout = [...unexposedSessionIds].filter(s => checkoutSessionIds.has(s)).length;
+
+    const funnel = (exposedSessionCount === 0 && unexposedPdpSessionCount === 0) ? null : {
+      exposed: {
+        atcSessions:      expAtc,
+        checkoutSessions: expCheckout,
+        atcRate:          rate(expAtc,      exposedSessionCount),
+        checkoutRate:     rate(expCheckout, exposedSessionCount),
+      },
+      unexposed: {
+        atcSessions:      unxAtc,
+        checkoutSessions: unxCheckout,
+        atcRate:          rate(unxAtc,      unexposedPdpSessionCount),
+        checkoutRate:     rate(unxCheckout, unexposedPdpSessionCount),
+      },
+    };
 
     return {
       windowStart,
@@ -614,6 +680,7 @@ async function getExecutionExposure(prisma, executionId, productId, windowStart,
       unexposedPdpSessionCount,
       blockViewedCount,
       exposureRate,
+      funnel,
     };
   } catch (err) {
     console.warn('[Metrics] getExecutionExposure failed (non-fatal):', err.message);
@@ -635,19 +702,20 @@ async function getExecutionResultsSummary(prisma, executionId) {
 
   if (!compare.success) {
     return {
-      success:     true,
+      success:        true,
       executionId,
-      productId:   execution.productId,
-      issueId:     execution.issueId,
-      status:      'waiting_for_more_data',
-      summary:     null,
-      store:       null,
+      productId:      execution.productId,
+      issueId:        execution.issueId,
+      status:         'waiting_for_more_data',
+      summary:        null,
+      store:          null,
       unavailable: {
         storeConversionRate:   'no session data',
         productConversionRate: 'no product-level session data',
       },
-      insight:     null,
+      insight:        null,
       exposure,
+      decisionSignal: 'still_measuring',
     };
   }
 
@@ -756,6 +824,14 @@ async function getExecutionResultsSummary(prisma, executionId) {
       )
     : [];
 
+  const confidence     = deriveConfidence(before.orderCount, after.orderCount);
+  const decisionSignal = deriveDecisionSignal(
+    'measured',
+    confidence,
+    diff.revenueChangePercent,
+    confoundedBy,
+  );
+
   return {
     success:        true,
     executionId,
@@ -769,7 +845,7 @@ async function getExecutionResultsSummary(prisma, executionId) {
     summary,
     product:        productSummary,
     store:          storeSummary,
-    confidence:     deriveConfidence(before.orderCount, after.orderCount),
+    confidence,
     unavailable: {
       ...(sessionsAvailable       ? {} : { storeConversionRate:   'no session data' }),
       ...(productSessionsAvailable ? {} : { productConversionRate: 'no product-level session data' }),
@@ -777,6 +853,7 @@ async function getExecutionResultsSummary(prisma, executionId) {
     insight,
     confoundedBy,
     exposure,
+    decisionSignal,
   };
 }
 

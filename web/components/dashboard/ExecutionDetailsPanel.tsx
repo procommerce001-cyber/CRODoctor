@@ -3,13 +3,27 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { fetchExecutionDetails, apiHeaders, API_BASE, issueLabel } from '@/lib/api';
-import type { ExecutionDetails, MetricStat, ExposureSummary } from '@/lib/api';
+import type { ExecutionDetails, MetricStat, ExposureSummary, ExposureFunnelGroup } from '@/lib/api';
 
 const EXECUTION_STATUS_LABEL: Record<string, string> = {
   applied:     'Live on your store',
   rolled_back: 'Rolled back',
   failed:      'Failed',
   previewed:   'Preview only',
+};
+
+const DECISION_LABEL: Record<string, string> = {
+  still_measuring:    'Still measuring',
+  keep:               'Stable — keep live',
+  revise:             'Needs review',
+  rollback_candidate: 'Rollback candidate',
+};
+
+const DECISION_COLORS: Record<string, { background: string; color: string; borderColor: string }> = {
+  still_measuring:    { background: '#f3f4f6', color: '#6b7280',  borderColor: '#e5e7eb' },
+  keep:               { background: '#f0fdf4', color: '#166534',  borderColor: '#bbf7d0' },
+  revise:             { background: '#fffbeb', color: '#92400e',  borderColor: '#fde68a' },
+  rollback_candidate: { background: '#fef3c7', color: '#b45309',  borderColor: '#fde68a' },
 };
 
 const SHOP = process.env.NEXT_PUBLIC_SHOP ?? '';
@@ -103,6 +117,8 @@ export default function ExecutionDetailsPanel({ executionId, onClose }: Props) {
               <section style={styles.section}>
                 <h3 style={styles.sectionTitle}>7-Day Impact Snapshot</h3>
 
+                {data.decisionSignal && <DecisionBadge signal={data.decisionSignal} />}
+
                 {data.resultStatus === 'measured' && data.summary && (
                   <>
                     {data.insight && <p style={styles.insight}>{data.insight}</p>}
@@ -183,6 +199,12 @@ export default function ExecutionDetailsPanel({ executionId, onClose }: Props) {
 // Sub-components
 // ---------------------------------------------------------------------------
 
+function DecisionBadge({ signal }: { signal: string }) {
+  const label  = DECISION_LABEL[signal]  ?? signal;
+  const colors = DECISION_COLORS[signal] ?? DECISION_COLORS.still_measuring;
+  return <span style={{ ...styles.decisionBadge, ...colors }}>{label}</span>;
+}
+
 function Row({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
   return (
     <div style={styles.row}>
@@ -218,6 +240,35 @@ function ExposureSection({ e }: { e: ExposureSummary }) {
       <div style={styles.exposureRow}><span>Not exposed</span><span>{e.unexposedPdpSessionCount}</span></div>
       <div style={styles.exposureRow}><span>Block views</span><span>{e.blockViewedCount}</span></div>
       <div style={styles.exposureRow}><span>Exposure rate</span><span>{rate}</span></div>
+      {e.funnel && (
+        <>
+          <div style={styles.funnelDivider} />
+          <FunnelRow label="Add to cart" g={e.funnel.exposed} u={e.funnel.unexposed} field="atc" />
+          <FunnelRow label="Checkout"    g={e.funnel.exposed} u={e.funnel.unexposed} field="checkout" />
+        </>
+      )}
+    </div>
+  );
+}
+
+function FunnelRow({
+  label, g, u, field,
+}: {
+  label:  string;
+  g:      ExposureFunnelGroup;
+  u:      ExposureFunnelGroup;
+  field:  'atc' | 'checkout';
+}) {
+  const pct  = (r: number | null) => r != null ? `${Math.round(r * 100)}%` : '—';
+  const expN = field === 'atc' ? g.atcSessions      : g.checkoutSessions;
+  const expR = field === 'atc' ? g.atcRate          : g.checkoutRate;
+  const unxN = field === 'atc' ? u.atcSessions      : u.checkoutSessions;
+  const unxR = field === 'atc' ? u.atcRate          : u.checkoutRate;
+  return (
+    <div style={styles.funnelBlock}>
+      <span style={styles.funnelLabel}>{label}</span>
+      <div style={styles.funnelSubRow}><span>Exposed</span><span>{expN} ({pct(expR)})</span></div>
+      <div style={styles.funnelSubRow}><span>Not exposed</span><span>{unxN} ({pct(unxR)})</span></div>
     </div>
   );
 }
@@ -282,4 +333,9 @@ const styles: Record<string, React.CSSProperties> = {
   exposureBox:     { marginTop: 16, padding: '10px 12px', background: '#f9fafb', border: '1px solid #e5e7eb', borderRadius: 6 },
   exposureTitle:   { fontSize: 11, fontWeight: 600, textTransform: 'uppercase' as const, letterSpacing: '0.05em', color: '#9ca3af', marginBottom: 8, marginTop: 0 },
   exposureRow:     { display: 'flex', justifyContent: 'space-between', fontSize: 12, color: '#6b7280', marginBottom: 4, lineHeight: 1.5 },
+  decisionBadge:   { display: 'inline-block', fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 10, border: '1px solid', marginBottom: 10 },
+  funnelDivider:   { height: 1, background: '#e5e7eb', margin: '8px 0' },
+  funnelBlock:     { marginBottom: 6 },
+  funnelLabel:     { fontSize: 11, fontWeight: 600, color: '#9ca3af', display: 'block', marginBottom: 2 },
+  funnelSubRow:    { display: 'flex', justifyContent: 'space-between', fontSize: 12, color: '#6b7280', lineHeight: 1.5, paddingLeft: 4 },
 };

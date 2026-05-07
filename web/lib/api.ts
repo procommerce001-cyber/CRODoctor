@@ -259,6 +259,13 @@ export interface MetricStat {
   changePercent: number | null;
 }
 
+export interface ExposureFunnelGroup {
+  atcSessions:      number;
+  checkoutSessions: number;
+  atcRate:          number | null;
+  checkoutRate:     number | null;
+}
+
 export interface ExposureSummary {
   windowStart:              string;
   windowEnd:                string;
@@ -267,6 +274,10 @@ export interface ExposureSummary {
   unexposedPdpSessionCount: number;
   blockViewedCount:         number;
   exposureRate:             number | null;
+  funnel: {
+    exposed:   ExposureFunnelGroup;
+    unexposed: ExposureFunnelGroup;
+  } | null;
 }
 
 export interface ExecutionDetails {
@@ -296,7 +307,8 @@ export interface ExecutionDetails {
     }>;
     warning?: string;
   };
-  exposure?: ExposureSummary | null;
+  exposure?:       ExposureSummary | null;
+  decisionSignal?: 'still_measuring' | 'keep' | 'revise' | 'rollback_candidate';
 }
 
 export async function fetchExecutionDetails(shop: string, executionId: string): Promise<ExecutionDetails> {
