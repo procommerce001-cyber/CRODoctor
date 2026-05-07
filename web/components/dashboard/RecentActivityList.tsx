@@ -5,8 +5,6 @@ import { useRouter } from 'next/navigation';
 import { apiHeaders, API_BASE, issueLabel } from '@/lib/api';
 import type { ActivityItem } from '@/lib/api';
 
-const SHOP = process.env.NEXT_PUBLIC_SHOP ?? '';
-
 const STATUS_COLOR: Record<string, string> = {
   applied:               '#16a34a',
   rolled_back:           '#9ca3af',
@@ -27,7 +25,7 @@ function formatDate(iso: string) {
   return new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 }
 
-export default function RecentActivityList({ items, selectedExecId, onSelect }: { items: ActivityItem[]; selectedExecId?: string | null; onSelect?: (id: string) => void }) {
+export default function RecentActivityList({ shop, items, selectedExecId, onSelect }: { shop: string; items: ActivityItem[]; selectedExecId?: string | null; onSelect?: (id: string) => void }) {
   const router = useRouter();
   const [isRollingBack,   setIsRollingBack]   = useState<Record<string, boolean>>({});
   const [rollbackError,   setRollbackError]   = useState<Record<string, string>>({});
@@ -45,7 +43,7 @@ export default function RecentActivityList({ items, selectedExecId, onSelect }: 
           method:      'POST',
           credentials: 'include',
           headers:     apiHeaders({ 'Content-Type': 'application/json' }),
-          body:        JSON.stringify({ shop: SHOP, issueId }),
+          body:        JSON.stringify({ shop, issueId }),
         },
       );
       if (!res.ok) throw new Error(await res.text());

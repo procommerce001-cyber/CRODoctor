@@ -1,16 +1,21 @@
-import { fetchDashboard } from '@/lib/api';
+import { cookies }         from 'next/headers';
+import { fetchDashboard, fetchMe } from '@/lib/api';
 import DashboardClient    from '@/components/dashboard/DashboardClient';
 
-const SHOP = process.env.NEXT_PUBLIC_SHOP ?? '';
-
 export default async function DashboardPage() {
-  if (!SHOP) {
-    return <div style={styles.error}>NEXT_PUBLIC_SHOP is not configured.</div>;
+  // Resolve shop at runtime: session cookie (production) → NEXT_PUBLIC_SHOP (dev fallback)
+  const cookieStore  = await cookies();
+  const cookieHeader = cookieStore.getAll().map(c => `${c.name}=${c.value}`).join('; ');
+  const me   = await fetchMe(cookieHeader);
+  const shop = me?.shopDomain ?? process.env.NEXT_PUBLIC_SHOP ?? '';
+
+  if (!shop) {
+    return <div style={styles.error}>Shop could not be resolved. Complete the Shopify install or set NEXT_PUBLIC_SHOP for local dev.</div>;
   }
 
   let data;
   try {
-    data = await fetchDashboard(SHOP);
+    data = await fetchDashboard(shop);
   } catch (err) {
     return (
       <div style={styles.error}>
@@ -22,7 +27,7 @@ export default async function DashboardPage() {
   }
 
   if (!data.success) {
-    return <div style={styles.error}>API returned an error for shop: {SHOP}</div>;
+    return <div style={styles.error}>API returned an error for shop: {shop}</div>;
   }
 
   return (

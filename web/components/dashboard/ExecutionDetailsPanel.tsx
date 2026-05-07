@@ -26,14 +26,13 @@ const DECISION_COLORS: Record<string, { background: string; color: string; borde
   rollback_candidate: { background: '#fef3c7', color: '#b45309',  borderColor: '#fde68a' },
 };
 
-const SHOP = process.env.NEXT_PUBLIC_SHOP ?? '';
-
 interface Props {
+  shop:        string;
   executionId: string;
-  onClose: () => void;
+  onClose:     () => void;
 }
 
-export default function ExecutionDetailsPanel({ executionId, onClose }: Props) {
+export default function ExecutionDetailsPanel({ shop, executionId, onClose }: Props) {
   const router = useRouter();
 
   const [data,            setData]            = useState<ExecutionDetails | null>(null);
@@ -55,7 +54,7 @@ export default function ExecutionDetailsPanel({ executionId, onClose }: Props) {
           method:      'POST',
           credentials: 'include',
           headers:     apiHeaders({ 'Content-Type': 'application/json' }),
-          body:        JSON.stringify({ shop: SHOP, issueId: data.issueId }),
+          body:        JSON.stringify({ shop: shop, issueId: data.issueId }),
         },
       );
       if (!res.ok) throw new Error(await res.text());
@@ -72,7 +71,7 @@ export default function ExecutionDetailsPanel({ executionId, onClose }: Props) {
     setLoading(true);
     setError(null);
     setData(null);
-    fetchExecutionDetails(SHOP, executionId)
+    fetchExecutionDetails(shop, executionId)
       .then(setData)
       .catch(err => setError(err instanceof Error ? err.message : 'Failed to load'))
       .finally(() => setLoading(false));

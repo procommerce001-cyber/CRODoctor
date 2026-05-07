@@ -6,8 +6,6 @@ import type { StoreSuggestion, SuggestionStatus, SuggestionCandidatesPayload, Su
 
 type SuggestionsWithStatusPayload = { suggestions: StoreSuggestion[] };
 
-const SHOP = process.env.NEXT_PUBLIC_SHOP ?? '';
-
 // ---------------------------------------------------------------------------
 // Dev-only seed data — injected when the store has no real suggestions yet.
 // Matches the StoreSuggestionsPayload shape exactly. Never used in production.
@@ -166,6 +164,7 @@ const STATUS_BADGE: Record<NonNullable<CandidateStatus>, { color: string }> = {
 interface SuggestionCounts { open: number; completed: number; blocked: number }
 
 interface Props {
+  shop:                    string;
   onSelectMatches:         (keys: string[]) => void;
   onAppliedSelectionKeys:  (keys: string[]) => void;
   onSuggestionCounts?:     (counts: SuggestionCounts) => void;
@@ -173,7 +172,7 @@ interface Props {
   onFilterChange:          (f: FilterValue) => void;
 }
 
-export default function StoreSuggestionsList({ onSelectMatches, onAppliedSelectionKeys, onSuggestionCounts, activeFilter, onFilterChange }: Props) {
+export default function StoreSuggestionsList({ shop, onSelectMatches, onAppliedSelectionKeys, onSuggestionCounts, activeFilter, onFilterChange }: Props) {
   const [data,     setData]     = useState<SuggestionsWithStatusPayload | null>(null);
   const [loading,  setLoading]  = useState(true);
   const [error,    setError]    = useState<string | null>(null);
@@ -191,7 +190,7 @@ export default function StoreSuggestionsList({ onSelectMatches, onAppliedSelecti
   const [applyError,    setApplyError]    = useState<Record<string, string>>({});
 
   useEffect(() => {
-    fetchStoreSuggestionsWithStatus(SHOP)
+    fetchStoreSuggestionsWithStatus(shop)
       .then(r => {
         const payload = r as SuggestionsWithStatusPayload;
         if (process.env.NODE_ENV === 'development' && payload.suggestions.length === 0) {
@@ -222,7 +221,7 @@ export default function StoreSuggestionsList({ onSelectMatches, onAppliedSelecti
     setCandidateLoading(prev => ({ ...prev, [issueId]: true }));
     setCandidateError(prev => ({ ...prev, [issueId]: '' }));
     try {
-      const result = await fetchSuggestionCandidates(SHOP, issueId);
+      const result = await fetchSuggestionCandidates(shop, issueId);
       setCandidates(prev => ({ ...prev, [issueId]: result }));
     } catch (err) {
       setCandidateError(prev => ({ ...prev, [issueId]: err instanceof Error ? err.message : 'Failed to load candidates' }));
@@ -241,16 +240,16 @@ export default function StoreSuggestionsList({ onSelectMatches, onAppliedSelecti
     setApplyError(prev  => ({ ...prev, [issueId]: '' }));
     setApplyResult(prev => { const n = { ...prev }; delete n[issueId]; return n; });
     try {
-      const result = await applySelected(SHOP, keys);
+      const result = await applySelected(shop, keys);
       setApplyResult(prev => ({ ...prev, [issueId]: result }));
       setCandidates(prev => { const n = { ...prev }; delete n[issueId]; return n; });
       onAppliedSelectionKeys(keys);
       // Re-fetch candidates immediately (section stays expanded)
-      fetchSuggestionCandidates(SHOP, issueId)
+      fetchSuggestionCandidates(shop, issueId)
         .then(fresh => setCandidates(prev => ({ ...prev, [issueId]: fresh })))
         .catch(() => {});
       // Re-fetch suggestions so outcome counts reflect new executions
-      fetchStoreSuggestionsWithStatus(SHOP).then(r => setData(r as SuggestionsWithStatusPayload)).catch(() => {});
+      fetchStoreSuggestionsWithStatus(shop).then(r => setData(r as SuggestionsWithStatusPayload)).catch(() => {});
     } catch (err) {
       setApplyError(prev => ({ ...prev, [issueId]: err instanceof Error ? err.message : 'Apply failed' }));
     } finally {

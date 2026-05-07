@@ -324,6 +324,23 @@ export async function fetchExecutionDetails(shop: string, executionId: string): 
   return res.json();
 }
 
+// ---------------------------------------------------------------------------
+// fetchMe — server-component bootstrap helper.
+// Calls GET /auth/me with a forwarded Cookie header (production session flow).
+// Returns null on any failure so callers can fall back gracefully.
+// ---------------------------------------------------------------------------
+export async function fetchMe(cookieHeader?: string): Promise<{ shopDomain: string; storeId: string; userId: string | null } | null> {
+  try {
+    const headers: Record<string, string> = apiHeaders();
+    if (cookieHeader) headers['Cookie'] = cookieHeader;
+    const res = await fetch(`${API_BASE}/auth/me`, { cache: 'no-store', headers });
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
+    return null;
+  }
+}
+
 export async function fetchDashboard(shop: string): Promise<DashboardPayload> {
   const res = await fetch(
     `${API_BASE}/dashboard/selection?shop=${encodeURIComponent(shop)}`,

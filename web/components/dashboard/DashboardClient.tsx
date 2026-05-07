@@ -15,8 +15,6 @@ import StoreSuggestionsList         from './StoreSuggestionsList';
 import DashboardStickySummaryBar    from './DashboardStickySummaryBar';
 import type { FilterValue }         from './StoreSuggestionsList';
 
-const SHOP = process.env.NEXT_PUBLIC_SHOP ?? '';
-
 interface Props {
   data: DashboardPayload;
 }
@@ -78,6 +76,8 @@ function confidenceTierLabel(tier: string | null | undefined): string | null {
 }
 
 export default function DashboardClient({ data }: Props) {
+  const SHOP = data.shop;
+
   const router       = useRouter();
   const searchParams = useSearchParams();
   const selectedExecId = searchParams.get('executionId');
@@ -467,6 +467,7 @@ export default function DashboardClient({ data }: Props) {
 
       <TopWinsList          items={data.topWins} />
       <StoreSuggestionsList
+        shop={SHOP}
         onSelectMatches={keys =>
           setSelected(prev => new Set([...prev, ...keys]))
         }
@@ -478,6 +479,7 @@ export default function DashboardClient({ data }: Props) {
         onFilterChange={setActiveFilter}
       />
       <RecentActivityList
+        shop={SHOP}
         items={data.recentActivity}
         selectedExecId={selectedExecId}
         onSelect={id => router.push(`/dashboard?executionId=${id}`)}
@@ -485,6 +487,7 @@ export default function DashboardClient({ data }: Props) {
 
       {selectedExecId && (
         <ExecutionDetailsPanel
+          shop={SHOP}
           executionId={selectedExecId}
           onClose={() => router.push('/dashboard')}
         />

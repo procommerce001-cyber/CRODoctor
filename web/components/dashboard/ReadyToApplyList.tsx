@@ -2,7 +2,6 @@ import { useState } from 'react';
 import type { ReviewItem, ContentPreview } from '@/lib/api';
 import { fetchContentPreview, applySelected, issueLabel, API_BASE, apiHeaders } from '@/lib/api';
 
-const SHOP = process.env.NEXT_PUBLIC_SHOP ?? '';
 
 function stripHtml(html: string | null): string {
   if (!html) return '';
@@ -102,7 +101,7 @@ export default function ReadyToApplyList({
           method:      'POST',
           credentials: 'include',
           headers:     apiHeaders({ 'Content-Type': 'application/json' }),
-          body:        JSON.stringify({ shop: SHOP, issueId: item.issueId }),
+          body:        JSON.stringify({ shop, issueId: item.issueId }),
         },
       );
       if (!res.ok) throw new Error(await res.text());
