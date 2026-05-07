@@ -8,7 +8,7 @@
 // ---------------------------------------------------------------------------
 
 const { getProductActions }  = require('./action-center.service');
-const { getStoreOverview }   = require('./metrics.service');
+const { getStoreResultsSummary, getStoreExecutionFeed } = require('./metrics.service');
 const { PRODUCT_INCLUDE }    = require('../lib/product-include');
 
 // ---------------------------------------------------------------------------
@@ -189,27 +189,44 @@ async function getDashboardSelectionPayload(prisma, shop) {
   });
   if (!store) return { success: false, reason: 'store not found' };
 
-  // 3. Parallel fetch with per-branch timeout + safe fallbacks
-  const [overviewResult, review] = await Promise.all([
+  // 3. Parallel fetch with per-branch timeouts + safe fallbacks.
+  //    Two fast count queries run alongside the expensive enriched calls so that
+  //    totalAppliedExecutions and waitingExecutions are never incorrectly zero
+  //    even when the enriched summary times out.
+  const [summaryResult, feedResult, review, appliedCount, waitingCount] = await Promise.all([
     withTimeout(
-      getStoreOverview(prisma, shop).catch(() => EMPTY_OVERVIEW),
-      2000,
-      EMPTY_OVERVIEW
+      getStoreResultsSummary(prisma, shop).catch(() => null),
+      8000,
+      null
+    ),
+    withTimeout(
+      getStoreExecutionFeed(prisma, shop).catch(() => null),
+      8000,
+      null
     ),
     withTimeout(
       getReviewSelectionPayload(prisma, store.id).catch(() => EMPTY_REVIEW),
-      2000,
+      8000,
       EMPTY_REVIEW
     ),
+    prisma.contentExecution.count({ where: { storeId: store.id, status: 'applied' } }),
+    prisma.contentExecution.count({ where: { storeId: store.id, status: 'applied', afterReadyAt: { gt: new Date() } } }),
   ]);
+
+  const baseOverview = summaryResult?.summary ?? EMPTY_OVERVIEW.overview;
+  const overview = {
+    ...baseOverview,
+    totalAppliedExecutions: Math.max(baseOverview.totalAppliedExecutions, appliedCount),
+    waitingExecutions:      Math.max(baseOverview.waitingExecutions,      waitingCount),
+  };
 
   const payload = {
     success:        true,
     shop,
-    overview:       overviewResult.overview  ?? EMPTY_OVERVIEW.overview,
+    overview,
     review,
-    topWins:        overviewResult.topWins        ?? [],
-    recentActivity: overviewResult.recentActivity ?? [],
+    topWins:        summaryResult?.topWins?.slice(0, 5) ?? [],
+    recentActivity: (feedResult?.items ?? []).slice(0, 10),
   };
 
   // 4. Cache the fresh payload

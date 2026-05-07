@@ -325,9 +325,12 @@ router.get('/executions/:id/details', async (req, res) => {
       previousContent: execution.previousContent,
       appliedContent:  execution.newContent,
       afterReadyAt:    execution.afterReadyAt ?? null,
-      resultStatus:    result.success ? result.status  : null,
-      insight:         result.success ? result.insight : null,
-      summary:         result.success ? result.summary : null,
+      resultStatus:    result.success ? result.status             : null,
+      insight:         result.success ? result.insight            : null,
+      summary:         result.success ? result.summary            : null,
+      exposure:        result.success ? (result.exposure    ?? null) : null,
+      confoundedBy:    result.success ? (result.confoundedBy ?? null) : null,
+      decisionSignal:  result.success ? (result.decisionSignal ?? null) : null,
     });
   } catch (err) {
     console.error('[Metrics] GET /executions/:id/details error:', err.message);
