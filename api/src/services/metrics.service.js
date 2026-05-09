@@ -314,12 +314,43 @@ function safeCvr(orderCount, sessions) {
 // high to distinguish a real lift from noise.
 const MIN_ORDERS_PER_WINDOW = 5;
 
-// Confidence tier derived from the smaller of before vs. after order counts.
-//   'high'        ≥ 30 orders in each window
-//   'medium'      ≥ 10
-//   'low'         ≥ MIN_ORDERS_PER_WINDOW (5)
-//   'insufficient' < MIN_ORDERS_PER_WINDOW — do not publish a lift number
-function deriveConfidence(beforeOrders, afterOrders) {
+// ATC confidence thresholds — keyed to add-to-cart events per measurement window.
+// 20 / 60 / 150 matches the statistical power of 5 / 10 / 30 orders at a
+// typical 3–4 % ATC-to-order conversion rate. Used when productAtcCount is
+// available from Shopify Analytics; falls back to order thresholds when null.
+const MIN_ATC_PER_WINDOW        = 20;   // 'low'    floor
+const MIN_ATC_PER_WINDOW_MEDIUM = 60;   // 'medium' floor
+const MIN_ATC_PER_WINDOW_HIGH   = 150;  // 'high'   floor
+
+// Three-tier confidence evaluation:
+//   Path A — Shopify Analytics snapshot ATC counts (most plentiful; requires read_analytics)
+//   Path B — first-party PdpEvent ATC counts (tracker-based; no scope required)
+//   Path C — order counts (ultimate fallback; always available)
+//
+//  ATC paths (A & B): 'high' ≥ 150 | 'medium' ≥ 60 | 'low' ≥ 20 | 'insufficient'
+//  Order path (C):    'high' ≥  30 | 'medium' ≥ 10 | 'low' ≥  5 | 'insufficient'
+//
+// Path B activates only when at least one window has ≥ 1 first-party ATC event,
+// distinguishing zero-observations from tracker-not-loaded.
+function deriveConfidence(beforeAtc, afterAtc, beforeFpAtc, afterFpAtc, beforeOrders, afterOrders) {
+  // Path A: Shopify Analytics ATC snapshot counts
+  if (beforeAtc !== null && beforeAtc !== undefined &&
+      afterAtc  !== null && afterAtc  !== undefined) {
+    const min = Math.min(beforeAtc, afterAtc);
+    if (min >= MIN_ATC_PER_WINDOW_HIGH)   return 'high';
+    if (min >= MIN_ATC_PER_WINDOW_MEDIUM) return 'medium';
+    if (min >= MIN_ATC_PER_WINDOW)        return 'low';
+    return 'insufficient';
+  }
+  // Path B: first-party PdpEvent ATC counts
+  if (beforeFpAtc !== null && afterFpAtc !== null && (beforeFpAtc >= 1 || afterFpAtc >= 1)) {
+    const min = Math.min(beforeFpAtc, afterFpAtc);
+    if (min >= MIN_ATC_PER_WINDOW_HIGH)   return 'high';
+    if (min >= MIN_ATC_PER_WINDOW_MEDIUM) return 'medium';
+    if (min >= MIN_ATC_PER_WINDOW)        return 'low';
+    return 'insufficient';
+  }
+  // Path C: order counts
   const min = Math.min(beforeOrders ?? 0, afterOrders ?? 0);
   if (min >= 30) return 'high';
   if (min >= 10) return 'medium';
@@ -721,6 +752,33 @@ async function getExecutionResultsSummary(prisma, executionId) {
 
   const { before, after, diff } = compare;
 
+  // Path B: query first-party ATC counts only when Shopify Analytics ATC is absent
+  // from both snapshots. Runs two parallel COUNT queries against PdpEvent using the
+  // window boundaries already stored on the snapshots.
+  let fpBeforeAtc = null;
+  let fpAfterAtc  = null;
+  if ((before.productAtcCount === null || before.productAtcCount === undefined) &&
+      (after.productAtcCount  === null || after.productAtcCount  === undefined)) {
+    if (before.windowStart && before.windowEnd && after.windowStart && after.windowEnd) {
+      [fpBeforeAtc, fpAfterAtc] = await Promise.all([
+        prisma.pdpEvent.count({
+          where: { productId: execution.productId, event: 'atc_click', issuedAt: { gte: before.windowStart, lt: before.windowEnd } },
+        }).catch(() => null),
+        prisma.pdpEvent.count({
+          where: { productId: execution.productId, event: 'atc_click', issuedAt: { gte: after.windowStart,  lt: after.windowEnd  } },
+        }).catch(() => null),
+      ]);
+    }
+  }
+
+  const measurementSource =
+    (before.productAtcCount !== null && before.productAtcCount !== undefined &&
+     after.productAtcCount  !== null && after.productAtcCount  !== undefined)
+      ? 'shopify_analytics'
+      : (fpBeforeAtc !== null && fpAfterAtc !== null && (fpBeforeAtc >= 1 || fpAfterAtc >= 1))
+        ? 'first_party'
+        : 'orders';
+
   const summary = {
     orders: {
       before:        before.orderCount,
@@ -824,7 +882,14 @@ async function getExecutionResultsSummary(prisma, executionId) {
       )
     : [];
 
-  const confidence     = deriveConfidence(before.orderCount, after.orderCount);
+  const confidence     = deriveConfidence(
+    before.productAtcCount,
+    after.productAtcCount,
+    fpBeforeAtc,
+    fpAfterAtc,
+    before.orderCount,
+    after.orderCount,
+  );
   const decisionSignal = deriveDecisionSignal(
     'measured',
     confidence,
@@ -854,6 +919,7 @@ async function getExecutionResultsSummary(prisma, executionId) {
     confoundedBy,
     exposure,
     decisionSignal,
+    measurementSource,
   };
 }
 
@@ -1106,6 +1172,7 @@ async function analyzeExecutionOutcome(prisma, executionId) {
   }
 
   const confidence = result.confidence ?? deriveConfidence(
+    null, null, null, null,
     result.summary.orders.before,
     result.summary.orders.after,
   );
@@ -1113,8 +1180,8 @@ async function analyzeExecutionOutcome(prisma, executionId) {
     return {
       executionId,
       status:         'insufficient_data',
-      insight:        `Only ${result.summary.orders.before} order(s) before and ${result.summary.orders.after} after — minimum ${MIN_ORDERS_PER_WINDOW} required in each window`,
-      recommendation: `Wait for at least ${MIN_ORDERS_PER_WINDOW} orders per measurement window before drawing conclusions`,
+      insight:        `Only ${result.summary.orders.before} order(s) before and ${result.summary.orders.after} after — insufficient data for a reliable result`,
+      recommendation: 'Not enough data in this measurement window to draw a reliable conclusion',
     };
   }
 
@@ -1193,6 +1260,12 @@ const QUICK_WIN_CONTENT_ISSUE_IDS = new Set([
 // Small enough not to invert the revenue/severity hierarchy, large enough to
 // surface at least one quick win in the top 2 slots.
 const QUICK_WIN_SCORE_BOOST = 0.12;
+
+// Minimum first-party pdp_view events in the 14-day lookback window required
+// before a product is eligible for a new recommendation.
+// Products with zero pdp_view events (tracker not yet deployed) pass through
+// unchanged — scored on revenue/severity only, same as today.
+const MIN_PDP_VIEWS_FOR_MEASUREMENT = 30;
 
 // An action is a Quick Win when ALL of:
 //   1. The issue is a pure content change (copy, formatting, proof — no inventory/dev work)
@@ -1412,6 +1485,20 @@ async function getTopDecisionActions(prisma, shop) {
     }
   }
 
+  // ── Traffic suitability — 14-day first-party pdp_view count ─────────────
+  // One groupBy across all candidate productIds; never throws so the function
+  // degrades gracefully when the pdpEvent table is empty or unavailable.
+  const _trafficLookback = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000);
+  let pdpViewMap = new Map();
+  try {
+    const pdpViewGroups = await prisma.pdpEvent.groupBy({
+      by:    ['productId'],
+      where: { productId: { in: productIds }, event: 'pdp_view', issuedAt: { gte: _trafficLookback } },
+      _count: { id: true },
+    });
+    pdpViewMap = new Map(pdpViewGroups.map(r => [r.productId, r._count.id]));
+  } catch (_) {}
+
   const candidates = [];
 
   for (const raw of rawProducts) {
@@ -1419,6 +1506,10 @@ async function getTopDecisionActions(prisma, shop) {
     // Gate: traffic_problem products cannot benefit from content CRO — skip entirely.
     // unclassified (no session data) passes through unchanged.
     if (profile?.archetype === 'traffic_problem') continue;
+    // Gate: tracker has data for this product but below measurement-power floor.
+    // pdpViewCount === 0 means no tracker data — pass through (original behaviour).
+    const pdpViewCount = pdpViewMap.get(raw.id) ?? 0;
+    if (pdpViewCount > 0 && pdpViewCount < MIN_PDP_VIEWS_FOR_MEASUREMENT) continue;
 
     const actionResult = await getProductActions(raw, { prisma, storeId: store.id });
     const revenue      = revenueMap.get(raw.id) ?? 0;

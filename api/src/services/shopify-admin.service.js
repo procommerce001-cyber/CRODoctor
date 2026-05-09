@@ -319,7 +319,12 @@ async function fetchProductAnalytics(store, windowStart, windowEnd, productHandl
     });
 
     const result = data?.data?.shopifyqlQuery;
-    if (!result) return { sessions: null, atcCount: null, atcRate: null, source: 'unavailable' };
+    if (!result) {
+      if (data?.errors?.length) {
+        console.warn('[Analytics] fetchProductAnalytics unavailable for', store.shopDomain, '—', data.errors[0]?.message);
+      }
+      return { sessions: null, atcCount: null, atcRate: null, source: 'unavailable' };
+    }
 
     if (result.parseErrors?.length > 0) {
       console.warn('[Analytics] fetchProductAnalytics parse error:', result.parseErrors[0]?.message);

@@ -20,6 +20,7 @@ const CLIENT_SECRET = process.env.SHOPIFY_CLIENT_SECRET;
 const SCOPES        = process.env.SHOPIFY_SCOPES || 'read_products,write_products,read_orders,read_analytics,write_script_tags';
 const APP_BASE_URL  = (process.env.APP_BASE_URL || '').replace(/\/$/, '');
 const REDIRECT_URI  = `${APP_BASE_URL}/auth/callback`;
+const FRONTEND_URL  = (process.env.ALLOWED_ORIGIN || '').replace(/\/$/, '');
 
 // ---------------------------------------------------------------------------
 // Background helper — syncs all products for a store, then captures a
@@ -308,13 +309,7 @@ router.get('/callback', async (req, res) => {
   req.session.save(saveErr => {
     if (saveErr) console.error('[Auth] session save error:', saveErr.message);
 
-    res.json({
-      success:     true,
-      shop,
-      storeId:     store.id,
-      userId:      user?.id ?? null,
-      setupStatus: 'SYNCING',
-    });
+    res.redirect(`${FRONTEND_URL}/dashboard`);
 
     // 7. Background: sync products → before-snapshots → set setupStatus = COMPLETED
     setImmediate(() => {
