@@ -17,6 +17,8 @@ const { toCroProduct }                      = require('./cro/formatters');
 const { APPLY_TYPE_MAP }                    = require('./cro/constants');
 const { fetchOrderMetrics }                 = require('./shopify-admin.service');
 const { getLatestProductPerformanceProfile } = require('./product-performance.service');
+const { buildCopyPlan }                      = require('./cro/copy-plan');
+const { generateDesireBlock }                = require('./cro/generators/desire-block');
 
 // Private — must only be called from applyContentChange or rollbackContentChange.
 // Every call MUST create a ContentExecution record in the same operation.
@@ -433,6 +435,29 @@ async function getProductActions(rawProduct, { prisma, storeId } = {}) {
   if (prisma && storeId) {
     const stateMap   = await loadReviewStateMap(prisma, storeId, rawProduct.id);
     actionableItems  = mergeReviewState(actionableItems, stateMap);
+  }
+
+  // Phase B2B: barrier-first CopyPlan enrichment for weak_desire_creation only.
+  // Runs after review-state merge so the item is in its final shape before patching.
+  // One extra findFirst on ProductPerformanceProfile — same guard as review state.
+  // Non-fatal: any error leaves the item with its original template-generated fix.
+  if (prisma) {
+    const wdcIdx = actionableItems.findIndex(i => i.issueId === 'weak_desire_creation');
+    if (wdcIdx !== -1) {
+      try {
+        const profile  = await getLatestProductPerformanceProfile(prisma, rawProduct.id);
+        const copyPlan = buildCopyPlan(rawProduct, profile);
+        if (copyPlan) {
+          const enriched = generateDesireBlock(rawProduct, copyPlan);
+          const item     = actionableItems[wdcIdx];
+          actionableItems[wdcIdx] = {
+            ...item,
+            generatedFix:    enriched,
+            proposedContent: enriched.bestGuess?.content ?? item.proposedContent,
+          };
+        }
+      } catch (_) { /* non-fatal — item keeps original template-generated fix */ }
+    }
   }
 
   // Surface compounding issue interactions so the client can explain

@@ -579,6 +579,97 @@ async function detectExecutionOverlap(prisma, executionId, productId, windowStar
 }
 
 // ---------------------------------------------------------------------------
+// detectStoreRevenueSpike
+//
+// Pure — derived from already-fetched before/after comparison data. No query.
+// Flags when store revenue in the after-window grew significantly relative to
+// the before-window, suggesting a store-wide event (sale, campaign, seasonal
+// uplift) that may have inflated product results independent of the content
+// change. Returns null when below the threshold or data is insufficient.
+// ---------------------------------------------------------------------------
+function detectStoreRevenueSpike(beforeRevenue, afterRevenue) {
+  if (!beforeRevenue || beforeRevenue < 50) return null;
+  const ratio = afterRevenue / beforeRevenue;
+  if (ratio > 3.0) return {
+    type:     'store_revenue_spike',
+    severity: 'high',
+    label:    'Large store-wide revenue spike',
+    detail:   `Store revenue in the after-window was ${ratio.toFixed(1)}× the before-window — a sale, campaign, or seasonal event may have inflated product results.`,
+  };
+  if (ratio > 2.0) return {
+    type:     'store_revenue_spike',
+    severity: 'medium',
+    label:    'Store-wide revenue increase',
+    detail:   `Store revenue in the after-window was ${ratio.toFixed(1)}× the before-window — a store-wide traffic uplift may have influenced product results.`,
+  };
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+// detectProductTrafficSpike
+//
+// Pure — derived from already-fetched before/after comparison data. No query.
+// Flags when product page sessions in the after-window grew significantly,
+// suggesting an external traffic source (ad campaign, social post) drove
+// extra visitors to this PDP during the measurement window.
+// Only fires when Shopify Analytics session data is available (non-null).
+// Returns null when sessions are absent or below the noise floor.
+// ---------------------------------------------------------------------------
+function detectProductTrafficSpike(beforeSessions, afterSessions) {
+  if (beforeSessions === null || beforeSessions === undefined) return null;
+  if (afterSessions  === null || afterSessions  === undefined) return null;
+  if (beforeSessions < 10) return null;
+  const ratio = afterSessions / beforeSessions;
+  if (ratio > 3.0) return {
+    type:     'product_traffic_spike',
+    severity: 'high',
+    label:    'Product traffic spike',
+    detail:   `Product page sessions in the after-window were ${ratio.toFixed(1)}× the before-window — external traffic may have influenced results independently of the content change.`,
+  };
+  if (ratio > 2.0) return {
+    type:     'product_traffic_spike',
+    severity: 'medium',
+    label:    'Product traffic increase',
+    detail:   `Product page sessions in the after-window were ${ratio.toFixed(1)}× the before-window — consider whether a campaign or referral drove this increase.`,
+  };
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+// detectInventoryDepletion
+//
+// Checks current ProductVariant state for this product.
+// Flags when variants are out of stock at result-read time, suggesting
+// conversion may have been constrained by inventory rather than content
+// quality during the measurement window.
+// Never throws — returns null on any failure so results always surface.
+// ---------------------------------------------------------------------------
+async function detectInventoryDepletion(prisma, productId) {
+  try {
+    const variants = await prisma.productVariant.findMany({
+      where:  { productId },
+      select: { id: true, availableForSale: true, inventoryQuantity: true },
+    });
+    if (!variants.length) return null;
+    const depleted = variants.filter(
+      v => !v.availableForSale || (v.inventoryQuantity !== null && v.inventoryQuantity === 0)
+    );
+    if (!depleted.length) return null;
+    const allDepleted = depleted.length === variants.length;
+    return {
+      type:     'inventory_depletion',
+      severity: allDepleted ? 'high' : 'medium',
+      label:    allDepleted ? 'All variants out of stock' : 'Some variants out of stock',
+      detail:   allDepleted
+        ? 'All product variants are currently out of stock — measurement results may reflect inventory constraints rather than the content change.'
+        : `${depleted.length} of ${variants.length} variants are currently out of stock — this may have limited conversion during the measurement window.`,
+    };
+  } catch (_) {
+    return null;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // getExecutionResultsSummary
 //
 // Business-facing summary for one ContentExecution.
@@ -598,8 +689,12 @@ function buildInsight(metric, pct) {
 //
 // Pure classifier — no DB access, no side effects.
 // Returns one of: 'still_measuring' | 'keep' | 'revise' | 'rollback_candidate'
+//
+// confoundSignals: array of { type, severity } objects from Phase B2 detectors.
+// rollback_candidate is suppressed when any confoundSignal has severity='high'
+// (in addition to the existing confoundedBy.length === 0 guard).
 // ---------------------------------------------------------------------------
-function deriveDecisionSignal(resultStatus, confidence, revenueChangePercent, confoundedBy) {
+function deriveDecisionSignal(resultStatus, confidence, revenueChangePercent, confoundedBy, confoundSignals = []) {
   if (
     resultStatus !== 'measured' ||
     confidence === 'insufficient' ||
@@ -609,7 +704,8 @@ function deriveDecisionSignal(resultStatus, confidence, revenueChangePercent, co
   if (
     (confidence === 'high' || confidence === 'medium') &&
     revenueChangePercent <= -10 &&
-    confoundedBy.length === 0
+    confoundedBy.length === 0 &&
+    !confoundSignals.some(s => s.severity === 'high')
   ) return 'rollback_candidate';
 
   if (revenueChangePercent < 0) return 'revise';
@@ -872,15 +968,34 @@ async function getExecutionResultsSummary(prisma, executionId) {
     buildInsight('Units sold', diff.unitsSoldChangePercent) ??
     buildInsight('Orders',     diff.orderCountChangePercent);
 
-  const confoundedBy = compare.after.windowStart
-    ? await detectExecutionOverlap(
-        prisma,
-        executionId,
-        execution.productId,
-        compare.after.windowStart,
-        compare.after.windowEnd,
-      )
-    : [];
+  // Run overlap detection and inventory check in parallel — both are non-blocking
+  // and never throw, so the result is always available before we build the signal.
+  const [confoundedBy, inventoryConfound] = await Promise.all([
+    compare.after.windowStart
+      ? detectExecutionOverlap(
+          prisma,
+          executionId,
+          execution.productId,
+          compare.after.windowStart,
+          compare.after.windowEnd,
+        )
+      : Promise.resolve([]),
+    detectInventoryDepletion(prisma, execution.productId),
+  ]);
+
+  // Phase B2: derive additional confound signals from already-fetched data.
+  // Pure detectors read from the compare object — no additional queries.
+  const confoundSignals = [
+    detectStoreRevenueSpike(
+      parseFloat(compare.store?.before?.revenue ?? 0),
+      parseFloat(compare.store?.after?.revenue  ?? 0),
+    ),
+    detectProductTrafficSpike(
+      compare.before.productSessions,
+      compare.after.productSessions,
+    ),
+    inventoryConfound,
+  ].filter(Boolean);
 
   const confidence     = deriveConfidence(
     before.productAtcCount,
@@ -895,6 +1010,7 @@ async function getExecutionResultsSummary(prisma, executionId) {
     confidence,
     diff.revenueChangePercent,
     confoundedBy,
+    confoundSignals,
   );
 
   return {
@@ -917,6 +1033,7 @@ async function getExecutionResultsSummary(prisma, executionId) {
     },
     insight,
     confoundedBy,
+    confoundSignals,
     exposure,
     decisionSignal,
     measurementSource,
@@ -1220,10 +1337,12 @@ async function analyzeExecutionOutcome(prisma, executionId) {
 // by a deterministic opportunityScore and returns the top 3.
 //
 // Scoring inputs (see inline constants):
-//   severityScore  — how damaging is the issue?
-//   revenueScore   — how much revenue is at stake on this product?
-//   effortScore    — how fast can it be fixed?
-//   readinessBonus — is it already approved and auto-applicable?
+//   severityScore      — how damaging is the issue?
+//   revenueScore       — how much revenue is at stake on this product?
+//   effortScore        — how fast can it be fixed?
+//   readinessBonus     — is it already approved and auto-applicable?
+//   funnelLeakageScore — how severely is the PDP-to-ATC rate underperforming? (Phase B1)
+//   productRoleScore   — what share of store revenue does this product represent? (Phase B1)
 //
 // Revenue signal:
 //   Primary: latest ProductMetricsSnapshot revenue value.
@@ -1294,6 +1413,31 @@ function decisionReadinessBonus(canAutoApply, reviewStatus) {
   return 0;
 }
 
+// funnelLeakageScore
+// Rewards products where the PDP-to-ATC rate signals visitor friction.
+// Only fires when tracker data is reliable (≥30 pdp_view events in 14 days).
+// pdpViews = 0 means tracker not yet deployed — score 0, no ranking effect.
+function funnelLeakageScore(pdpViews, atcClicks) {
+  if (pdpViews < MIN_PDP_VIEWS_FOR_MEASUREMENT) return 0;
+  const rate = atcClicks / pdpViews;
+  if (rate >= 0.05) return  0;   // healthy — ≥5% ATC rate
+  if (rate >= 0.03) return  8;   // below average
+  if (rate >= 0.01) return 18;   // poor
+  return 25;                     // critical leakage — < 1% ATC rate
+}
+
+// productRoleScore
+// Rewards products that represent a meaningful share of total store revenue.
+// Derived from the in-memory revenueMap — no additional query required.
+// storeRevenue = 0 means no order history yet — score 0, no ranking effect.
+function productRoleScore(productRevenue, storeRevenue) {
+  if (!storeRevenue) return 0;
+  const share = productRevenue / storeRevenue;
+  if (share >= 0.20) return 15;   // Hero — top revenue contributor
+  if (share >= 0.05) return  8;   // Growth — meaningful contributor
+  return 0;                       // Tail — minor contributor
+}
+
 // Confidence thresholds — mirror phase2-config CONFIDENCE_* constants (inlined to avoid
 // cross-service import; keep in sync if phase2-config thresholds are ever tuned).
 const CONF_SAMPLE_LOW    = 2;
@@ -1326,9 +1470,12 @@ function decisionConfidenceAdjustment(tier) {
 }
 
 // Derive a short merchant-facing "why act now" line from scoring context.
-function buildWhyNow(action, revenue) {
+function buildWhyNow(action, revenue, fScore) {
   if (action.canAutoApply && action.reviewStatus === 'approved') {
     return 'Approved and ready to apply in one click.';
+  }
+  if (fScore >= 18) {
+    return 'Weak PDP-to-ATC rate detected — visitors are landing but not adding to cart. This fix directly addresses the copy or trust gap driving the drop-off.';
   }
   if (action.severity === 'critical') {
     return 'Critical issue actively blocking conversions on a live product.';
@@ -1421,6 +1568,10 @@ async function getTopDecisionActions(prisma, shop) {
     }
   }
 
+  // storeRevenue — sum of all active products' revenues for product role classification.
+  // Computed in-memory from the fully-built revenueMap. No additional query.
+  const storeRevenue = [...revenueMap.values()].reduce((sum, r) => sum + r, 0);
+
   // Applied executions — exclude already-fixed (product × issue) pairs
   const appliedRows = await prisma.contentExecution.findMany({
     where:  { productId: { in: productIds }, status: 'applied' },
@@ -1485,18 +1636,22 @@ async function getTopDecisionActions(prisma, shop) {
     }
   }
 
-  // ── Traffic suitability — 14-day first-party pdp_view count ─────────────
-  // One groupBy across all candidate productIds; never throws so the function
-  // degrades gracefully when the pdpEvent table is empty or unavailable.
-  const _trafficLookback = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000);
-  let pdpViewMap = new Map();
+  // ── Traffic suitability + funnel signal — 14-day first-party PdpEvent counts ──
+  // Two groupBy queries run in parallel; never throws so the function degrades
+  // gracefully when the pdpEvent table is empty or the tracker is not yet deployed.
+  // pdpViewMap  — used for the existing measurement-power gate (unchanged).
+  // atcClickMap — new Phase B1 signal; used only for funnelLeakageScore below.
+  const _trafficLookback  = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000);
+  const _pdpEventWhere    = (event) => ({ productId: { in: productIds }, event, issuedAt: { gte: _trafficLookback } });
+  let pdpViewMap  = new Map();
+  let atcClickMap = new Map();
   try {
-    const pdpViewGroups = await prisma.pdpEvent.groupBy({
-      by:    ['productId'],
-      where: { productId: { in: productIds }, event: 'pdp_view', issuedAt: { gte: _trafficLookback } },
-      _count: { id: true },
-    });
-    pdpViewMap = new Map(pdpViewGroups.map(r => [r.productId, r._count.id]));
+    const [pdpViewGroups, atcClickGroups] = await Promise.all([
+      prisma.pdpEvent.groupBy({ by: ['productId'], where: _pdpEventWhere('pdp_view'),  _count: { id: true } }),
+      prisma.pdpEvent.groupBy({ by: ['productId'], where: _pdpEventWhere('atc_click'), _count: { id: true } }),
+    ]);
+    pdpViewMap  = new Map(pdpViewGroups.map(r => [r.productId, r._count.id]));
+    atcClickMap = new Map(atcClickGroups.map(r => [r.productId, r._count.id]));
   } catch (_) {}
 
   const candidates = [];
@@ -1514,6 +1669,11 @@ async function getTopDecisionActions(prisma, shop) {
     const actionResult = await getProductActions(raw, { prisma, storeId: store.id });
     const revenue      = revenueMap.get(raw.id) ?? 0;
 
+    // Phase B1: per-product funnel and role signals — computed once, applied to all actions.
+    const atcClicks = atcClickMap.get(raw.id) ?? 0;
+    const fScore    = funnelLeakageScore(pdpViewCount, atcClicks);
+    const pScore    = productRoleScore(revenue, storeRevenue);
+
     for (const action of actionResult.actions) {
       // ── Eligibility gates ────────────────────────────────────────────────
       // Exclude already-fixed pairs
@@ -1529,7 +1689,7 @@ async function getTopDecisionActions(prisma, shop) {
       const rScore    = decisionRevenueScore(revenue);
       const eScore    = DECISION_EFFORT_SCORE[action.effort]    ?? 0;
       const rBonus    = decisionReadinessBonus(action.canAutoApply, action.reviewStatus);
-      const baseTotal = sScore + rScore + eScore + rBonus;
+      const baseTotal = sScore + rScore + eScore + rBonus + fScore + pScore;
 
       const quickWin  = isQuickWin(action, revenue);
       const baseScore = quickWin ? Math.round(baseTotal * (1 + QUICK_WIN_SCORE_BOOST)) : baseTotal;
@@ -1561,7 +1721,7 @@ async function getTopDecisionActions(prisma, shop) {
         earlySignalEligible:   quickWin && revenue > 0,
 
         readyToApply,
-        whyNow:                buildWhyNow(action, revenue),
+        whyNow:                buildWhyNow(action, revenue, fScore),
         recommendedAction:     buildRecommendedAction(action),
         estimatedImpactLabel:  null, // set after rankingMode is determined
 
@@ -1573,6 +1733,8 @@ async function getTopDecisionActions(prisma, shop) {
           revenueScore:        rScore,
           effortScore:         eScore,
           readinessBonus:      rBonus,
+          funnelLeakageScore:  fScore,
+          productRoleScore:    pScore,
           confidenceAdj:       confAdj,
           openWindowAdj,
         },

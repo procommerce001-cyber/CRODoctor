@@ -447,13 +447,20 @@ function scoreParagraph(text) {
 
 // ---------------------------------------------------------------------------
 // generateDesireBlock — main export
+//
+// copyPlan (optional) — CopyPlan from copy-plan.js.
+// When provided, copyPlan.structureKey overrides the hash-derived primary
+// narrative arc so the paragraph sequence matches the identified buying barrier.
+// The secondary variant always uses the hash-derived arc to provide contrast.
+// All other generation logic (fragment pools, signals, hash) is unchanged.
+// When copyPlan is null (default), behavior is identical to the pre-B2 path.
 // ---------------------------------------------------------------------------
-function generateDesireBlock(product) {
+function generateDesireBlock(product, copyPlan = null) {
   const signals = extractSignals(product);
   const hash    = productHash(product);
 
   const structureKeys = ['A', 'B', 'C', 'D'];
-  const primaryKey    = structureKeys[hash % structureKeys.length];
+  const primaryKey    = copyPlan?.structureKey ?? structureKeys[hash % structureKeys.length];
   const secondaryKey  = structureKeys[(hash + 2) % structureKeys.length];
 
   let rawA = assembleVariant(signals, hash,      primaryKey);
@@ -474,6 +481,19 @@ function generateDesireBlock(product) {
       pain:      signals.pain,
       onset:     signals.onset,
     },
+    // CopyPlan annotation — present only when barrier-first generation was used.
+    // Downstream consumers (report, dashboard) can read this to surface WHY
+    // this structure was chosen. Never present on template-fallback variants.
+    ...(copyPlan ? {
+      copyPlan: {
+        barrier:        copyPlan.barrier,
+        proofStyle:     copyPlan.proofStyle,
+        emotionalFrame: copyPlan.emotionalFrame,
+        toneKey:        copyPlan.toneKey,
+        priceTier:      copyPlan.priceTier,
+        trafficQuality: copyPlan.trafficQuality,
+      },
+    } : {}),
   });
 
   const vA = makeVariant(rawA, primaryKey);
