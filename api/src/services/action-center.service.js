@@ -19,6 +19,10 @@ const { fetchOrderMetrics }                 = require('./shopify-admin.service')
 const { getLatestProductPerformanceProfile } = require('./product-performance.service');
 const { buildCopyPlan }                      = require('./cro/copy-plan');
 const { generateDesireBlock }                = require('./cro/generators/desire-block');
+const { generateDesireBlockWithLLM }         = require('./cro/generators/desire-block-llm');
+const { generateRiskReversalWithLLM }        = require('./cro/generators/risk-reversal-llm');
+const { generateTrustBulletsWithLLM }        = require('./cro/generators/trust-bullets-llm');
+const { fetchProductReviews }                = require('./cro/product-reviews');
 
 // Private — must only be called from applyContentChange or rollbackContentChange.
 // Every call MUST create a ContentExecution record in the same operation.
@@ -448,13 +452,75 @@ async function getProductActions(rawProduct, { prisma, storeId } = {}) {
         const profile  = await getLatestProductPerformanceProfile(prisma, rawProduct.id);
         const copyPlan = buildCopyPlan(rawProduct, profile);
         if (copyPlan) {
-          const enriched = generateDesireBlock(rawProduct, copyPlan);
+          // Fetch VOC excerpts only when the LLM will actually use them.
+          // Guard on ANTHROPIC_API_KEY so no Shopify call is made when the
+          // key is absent — avoids unnecessary latency in the template path.
+          let reviews = [];
+          if (process.env.ANTHROPIC_API_KEY && storeId) {
+            const store = await prisma.store.findUnique({
+              where:  { id: storeId },
+              select: { shopDomain: true, accessToken: true },
+            }).catch(() => null);
+            if (store) reviews = await fetchProductReviews(store, rawProduct).catch(() => []);
+          }
+
+          const enriched =
+            (await generateDesireBlockWithLLM(rawProduct, copyPlan, reviews))
+            ?? generateDesireBlock(rawProduct, copyPlan);
           const item     = actionableItems[wdcIdx];
           actionableItems[wdcIdx] = {
             ...item,
             generatedFix:    enriched,
             proposedContent: enriched.bestGuess?.content ?? item.proposedContent,
           };
+        }
+      } catch (_) { /* non-fatal — item keeps original template-generated fix */ }
+    }
+  }
+
+  // Barrier-first CopyPlan enrichment for no_risk_reversal.
+  // Same pattern as weak_desire_creation above. Non-fatal: any error leaves the
+  // item with the template-generated trust block already set by generateTrustBlock.
+  if (prisma) {
+    const nrrIdx = actionableItems.findIndex(i => i.issueId === 'no_risk_reversal');
+    if (nrrIdx !== -1) {
+      try {
+        const profile  = await getLatestProductPerformanceProfile(prisma, rawProduct.id);
+        const copyPlan = buildCopyPlan(rawProduct, profile);
+        if (copyPlan) {
+          const llmFix = await generateRiskReversalWithLLM(rawProduct, copyPlan);
+          if (llmFix) {
+            const item = actionableItems[nrrIdx];
+            actionableItems[nrrIdx] = {
+              ...item,
+              generatedFix:    llmFix,
+              proposedContent: llmFix.bestGuess?.content ?? item.proposedContent,
+            };
+          }
+        }
+      } catch (_) { /* non-fatal — item keeps original template-generated fix */ }
+    }
+  }
+
+  // Barrier-first CopyPlan enrichment for no_trust_bullets.
+  // Same pattern as no_risk_reversal above. Non-fatal: any error leaves the
+  // item with the template-generated bullets already set by generateTrustBullets.
+  if (prisma) {
+    const ntbIdx = actionableItems.findIndex(i => i.issueId === 'no_trust_bullets');
+    if (ntbIdx !== -1) {
+      try {
+        const profile  = await getLatestProductPerformanceProfile(prisma, rawProduct.id);
+        const copyPlan = buildCopyPlan(rawProduct, profile);
+        if (copyPlan) {
+          const llmFix = await generateTrustBulletsWithLLM(rawProduct, copyPlan);
+          if (llmFix) {
+            const item = actionableItems[ntbIdx];
+            actionableItems[ntbIdx] = {
+              ...item,
+              generatedFix:    llmFix,
+              proposedContent: llmFix.bestGuess?.content ?? item.proposedContent,
+            };
+          }
         }
       } catch (_) { /* non-fatal — item keeps original template-generated fix */ }
     }

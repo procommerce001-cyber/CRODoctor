@@ -328,8 +328,10 @@ router.get('/executions/:id/details', async (req, res) => {
       resultStatus:    result.success ? result.status             : null,
       insight:         result.success ? result.insight            : null,
       summary:         result.success ? result.summary            : null,
-      exposure:        result.success ? (result.exposure    ?? null) : null,
-      confoundedBy:    result.success ? (result.confoundedBy ?? null) : null,
+      exposure:        result.success ? (result.exposure       ?? null) : null,
+      exposureCount:   result.success ? (result.exposureCount  ?? null) : null,
+      exposureRate:    result.success ? (result.exposureRate   ?? null) : null,
+      confoundedBy:    result.success ? (result.confoundedBy  ?? null) : null,
       decisionSignal:  result.success ? (result.decisionSignal ?? null) : null,
     });
   } catch (err) {

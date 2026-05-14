@@ -153,6 +153,13 @@ export default function ExecutionDetailsPanel({ shop, executionId, onClose }: Pr
                           ? `7-day window closes on ${new Date(data.afterReadyAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}. Results will appear here automatically.`
                           : 'Collecting post-apply order data. Check back in a few days.'}
                       </p>
+                      {data.exposure &&
+                        data.exposure.blockViewedCount > 0 &&
+                        data.exposure.exposedSessionCount < 20 && (
+                        <p style={styles.measuringBody}>
+                          {data.exposure.exposedSessionCount} visitor{data.exposure.exposedSessionCount === 1 ? ' has' : 's have'} seen this change so far. Confidence assessment requires at least 20.
+                        </p>
+                      )}
                     </div>
                   </div>
                 )}

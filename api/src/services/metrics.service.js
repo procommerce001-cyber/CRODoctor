@@ -322,6 +322,12 @@ const MIN_ATC_PER_WINDOW        = 20;   // 'low'    floor
 const MIN_ATC_PER_WINDOW_MEDIUM = 60;   // 'medium' floor
 const MIN_ATC_PER_WINDOW_HIGH   = 150;  // 'high'   floor
 
+// Minimum distinct sessions that must have seen the changed block before
+// confidence is allowed to upgrade above 'insufficient'.
+// Only applied when exposureCount is non-null (tracker deployed and returning data).
+// Matches MIN_ATC_PER_WINDOW so the gate fires at the same floor as ATC-path 'low'.
+const MIN_EXPOSED_SESSIONS = 20;
+
 // Three-tier confidence evaluation:
 //   Path A — Shopify Analytics snapshot ATC counts (most plentiful; requires read_analytics)
 //   Path B — first-party PdpEvent ATC counts (tracker-based; no scope required)
@@ -827,6 +833,9 @@ async function getExecutionResultsSummary(prisma, executionId) {
     getExecutionExposure(prisma, executionId, execution.productId, execution.createdAt, execution.status),
   ]);
 
+  const exposureCount = (exposure?.blockViewedCount ?? 0) > 0 ? (exposure.exposedSessionCount ?? null) : null;
+  const exposureRate  = exposure?.exposureRate ?? null;
+
   if (!compare.success) {
     return {
       success:        true,
@@ -842,6 +851,8 @@ async function getExecutionResultsSummary(prisma, executionId) {
       },
       insight:        null,
       exposure,
+      exposureCount,
+      exposureRate,
       decisionSignal: 'still_measuring',
     };
   }
@@ -997,7 +1008,7 @@ async function getExecutionResultsSummary(prisma, executionId) {
     inventoryConfound,
   ].filter(Boolean);
 
-  const confidence     = deriveConfidence(
+  const rawConfidence  = deriveConfidence(
     before.productAtcCount,
     after.productAtcCount,
     fpBeforeAtc,
@@ -1005,6 +1016,9 @@ async function getExecutionResultsSummary(prisma, executionId) {
     before.orderCount,
     after.orderCount,
   );
+  const confidence     = (exposureCount !== null && exposureCount < MIN_EXPOSED_SESSIONS)
+    ? 'insufficient'
+    : rawConfidence;
   const decisionSignal = deriveDecisionSignal(
     'measured',
     confidence,
@@ -1035,6 +1049,8 @@ async function getExecutionResultsSummary(prisma, executionId) {
     confoundedBy,
     confoundSignals,
     exposure,
+    exposureCount,
+    exposureRate,
     decisionSignal,
     measurementSource,
   };
