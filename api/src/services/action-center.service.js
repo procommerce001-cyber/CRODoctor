@@ -22,6 +22,8 @@ const { generateDesireBlock }                = require('./cro/generators/desire-
 const { generateDesireBlockWithLLM }         = require('./cro/generators/desire-block-llm');
 const { generateRiskReversalWithLLM }        = require('./cro/generators/risk-reversal-llm');
 const { generateTrustBulletsWithLLM }        = require('./cro/generators/trust-bullets-llm');
+const { generateDescriptionWithLLM }         = require('./cro/generators/description-llm');
+const { generateShortDescriptionExpansionWithLLM } = require('./cro/generators/short-description-llm');
 const { fetchProductReviews }                = require('./cro/product-reviews');
 
 // Private — must only be called from applyContentChange or rollbackContentChange.
@@ -412,6 +414,10 @@ async function getProductActions(rawProduct, { prisma, storeId } = {}) {
     ...analysis.criticalBlockers,
     ...analysis.revenueOpportunities,
     ...analysis.quickWins,
+    // V1-allowlisted issues that are triggered but fall outside the three priority buckets
+    // (e.g. description_too_short: severity=medium, effort=medium, no scoreImpact).
+    // Dedup below removes any overlaps with the buckets above.
+    ...Object.values(analysis.categories).flatMap(c => c.issues).filter(i => V1_RULE_ALLOWLIST.has(i.issueId)),
   ];
 
   // De-duplicate across buckets
@@ -516,6 +522,57 @@ async function getProductActions(rawProduct, { prisma, storeId } = {}) {
           if (llmFix) {
             const item = actionableItems[ntbIdx];
             actionableItems[ntbIdx] = {
+              ...item,
+              generatedFix:    llmFix,
+              proposedContent: llmFix.bestGuess?.content ?? item.proposedContent,
+            };
+          }
+        }
+      } catch (_) { /* non-fatal — item keeps original template-generated fix */ }
+    }
+  }
+
+  // Barrier-first CopyPlan enrichment for no_description.
+  // Same pattern as no_risk_reversal and no_trust_bullets above. Non-fatal:
+  // any error leaves the item with the template-generated desire block already
+  // set by generateDesireBlock inside rules.js no_description.build().
+  if (prisma) {
+    const ndIdx = actionableItems.findIndex(i => i.issueId === 'no_description');
+    if (ndIdx !== -1) {
+      try {
+        const profile  = await getLatestProductPerformanceProfile(prisma, rawProduct.id);
+        const copyPlan = buildCopyPlan(rawProduct, profile);
+        if (copyPlan) {
+          const llmFix = await generateDescriptionWithLLM(rawProduct, copyPlan);
+          if (llmFix) {
+            const item = actionableItems[ndIdx];
+            actionableItems[ndIdx] = {
+              ...item,
+              generatedFix:    llmFix,
+              proposedContent: llmFix.bestGuess?.content ?? item.proposedContent,
+            };
+          }
+        }
+      } catch (_) { /* non-fatal — item keeps original template-generated fix */ }
+    }
+  }
+
+  // Barrier-first CopyPlan enrichment for description_too_short.
+  // Same pattern as no_description above. Non-fatal: any error leaves the item
+  // with the template-generated desire block set by rules.js build().
+  // Applied via insert_after_anchor — the LLM output is appended to the
+  // existing short description, never replacing it.
+  if (prisma) {
+    const dtsIdx = actionableItems.findIndex(i => i.issueId === 'description_too_short');
+    if (dtsIdx !== -1) {
+      try {
+        const profile  = await getLatestProductPerformanceProfile(prisma, rawProduct.id);
+        const copyPlan = buildCopyPlan(rawProduct, profile);
+        if (copyPlan) {
+          const llmFix = await generateShortDescriptionExpansionWithLLM(rawProduct, copyPlan);
+          if (llmFix) {
+            const item = actionableItems[dtsIdx];
+            actionableItems[dtsIdx] = {
               ...item,
               generatedFix:    llmFix,
               proposedContent: llmFix.bestGuess?.content ?? item.proposedContent,

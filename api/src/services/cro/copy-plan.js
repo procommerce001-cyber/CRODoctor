@@ -4,7 +4,7 @@
 // copy-plan.js
 //
 // Barrier-first copy planning layer — Phase B2 Part B.
-// Scope: weak_desire_creation only. Transient — never persisted.
+// Scope: all LLM-enriched issue types. Transient — never persisted.
 //
 // buildCopyPlan(product, profile) → CopyPlan | null
 //
