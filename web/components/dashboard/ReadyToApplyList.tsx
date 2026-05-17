@@ -34,6 +34,14 @@ const REVIEW_STATUS_LABEL: Record<string, string> = {
   rejected: 'Rejected',
 };
 
+const COPY_INTENT_NOTE: Record<string, string> = {
+  weak_desire_creation:  'Written to make buyers feel what owning this product is like — not to list features.',
+  no_description:        'Written as a complete description from scratch, based on what this product needs to say.',
+  description_too_short: 'Extends what you already have without repeating it — adds the persuasion layer that\'s missing.',
+  no_risk_reversal:      'Adds reassurance at the moment buyers hesitate — a guarantee or return signal.',
+  no_trust_bullets:      'Adds specific proof points that make buyers more confident before they decide.',
+};
+
 const ISSUE_WHY: Record<string, string> = {
   no_risk_reversal:            'Shoppers hesitate without a guarantee — adding one reduces drop-off.',
   no_trust_bullets:            'Missing proof points make buyers uncertain before purchasing.',
@@ -240,6 +248,9 @@ export default function ReadyToApplyList({
                     </div>
                     {ps.data.eligibleToApply ? (
                       <>
+                        {COPY_INTENT_NOTE[item.issueId] && (
+                          <p style={styles.copyIntentNote}>{COPY_INTENT_NOTE[item.issueId]}</p>
+                        )}
                         {ps.data.currentContent && (
                           <div style={{ ...styles.previewContent, marginBottom: 8 }}>
                             <div style={styles.previewLabel}>What&apos;s on your page now</div>
@@ -313,6 +324,7 @@ const styles: Record<string, React.CSSProperties> = {
   previewContext:     { display: 'flex', alignItems: 'baseline', gap: 12, marginBottom: 10, flexWrap: 'wrap' as const },
   previewContextText: { fontSize: 13, color: '#374151', fontWeight: 500 },
   previewDiffNote:    { fontSize: 11, color: '#9ca3af' },
+  copyIntentNote:     { fontSize: 12, color: '#374151', background: '#f0f9ff', border: '1px solid #bae6fd', borderRadius: 5, padding: '6px 10px', margin: '0 0 10px', lineHeight: 1.5 },
   previewContent:     {},
   previewLabel:       { fontSize: 11, fontWeight: 600, color: '#6b7280', textTransform: 'uppercase' as const, marginBottom: 4 },
   previewText:        { background: '#fff', border: '1px solid #e5e7eb', borderRadius: 6, padding: '8px 12px', color: '#111827', lineHeight: 1.5, whiteSpace: 'pre-wrap' as const },
