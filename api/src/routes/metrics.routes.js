@@ -3,7 +3,7 @@
 const express = require('express');
 const router  = express.Router();
 
-const { analyzeExecutionOutcome, getStoreCROSuggestions, captureProductMetricsSnapshot, compareProductMetrics, captureExecutionSnapshots, compareExecutionMetrics, getExecutionResultsSummary, getStoreResultsSummary, getStoreExecutionFeed, getStoreOverview, getRevenueDashboard, getAttributedRevenueSummary } = require('../services/metrics.service');
+const { analyzeExecutionOutcome, getStoreCROSuggestions, captureProductMetricsSnapshot, compareProductMetrics, captureExecutionSnapshots, compareExecutionMetrics, getExecutionResultsSummary, getStoreResultsSummary, getStoreExecutionFeed, getStoreOverview, getRevenueDashboard, getAttributedRevenueSummary, getMonthlyStatement } = require('../services/metrics.service');
 const { resolveStore }      = require('../lib/resolve-store');
 const { getProductActions } = require('../services/action-center.service');
 const { PRODUCT_INCLUDE }   = require('../lib/product-include');
@@ -558,6 +558,26 @@ router.get('/revenue-dashboard', async (req, res) => {
 //
 // windowDays defaults to 30. windowEnd is today UTC midnight.
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// GET /metrics/monthly-statement?shop=<shopDomain>
+//
+// Rolling 30-day revenue statement. Returns per-execution impact data for
+// content changes applied in the last 30 days only. Used by the in-app
+// monthly statement card.
+// ---------------------------------------------------------------------------
+router.get('/monthly-statement', async (req, res) => {
+  const prisma = req.app.get('prisma');
+  try {
+    if (!req.query.shop) return res.status(400).json({ error: 'shop is required' });
+    const result = await getMonthlyStatement(prisma, req.query.shop);
+    if (!result.success) return res.status(404).json(result);
+    res.json(result);
+  } catch (err) {
+    console.error('[Metrics] GET /monthly-statement error:', err.message);
+    res.status(500).json({ error: 'Internal error fetching monthly statement.' });
+  }
+});
+
 router.get('/store/attributed-revenue', async (req, res) => {
   const prisma = req.app.get('prisma');
   try {

@@ -209,8 +209,8 @@ async function getDashboardSelectionPayload(prisma, shop) {
       8000,
       EMPTY_REVIEW
     ),
-    prisma.contentExecution.count({ where: { storeId: store.id, status: 'applied' } }),
-    prisma.contentExecution.count({ where: { storeId: store.id, status: 'applied', afterReadyAt: { gt: new Date() } } }),
+    prisma.contentExecution.count({ where: { storeId: store.id, status: 'applied' } }).catch(() => 0),
+    prisma.contentExecution.count({ where: { storeId: store.id, status: 'applied', afterReadyAt: { gt: new Date() } } }).catch(() => 0),
   ]);
 
   const baseOverview = summaryResult?.summary ?? EMPTY_OVERVIEW.overview;

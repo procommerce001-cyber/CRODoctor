@@ -11,6 +11,7 @@ import RecentActivityList           from './RecentActivityList';
 import ExecutionDetailsPanel        from './ExecutionDetailsPanel';
 import RevenueDashboard             from './RevenueDashboard';
 import MerchantSummary              from './MerchantSummary';
+import MonthlyStatement             from './MonthlyStatement';
 import StoreSuggestionsList         from './StoreSuggestionsList';
 import DashboardStickySummaryBar    from './DashboardStickySummaryBar';
 import type { FilterValue }         from './StoreSuggestionsList';
@@ -192,6 +193,7 @@ export default function DashboardClient({ data }: Props) {
           recentActivity={data.recentActivity}
           demoMode={demoMode}
         />
+        <MonthlyStatement shop={SHOP} pendingCount={data.review.summary.readyToApplyCount} />
         <RevenueDashboard shop={SHOP} demoMode={demoMode} />
       </div>
       {topActions.length > 0 && (() => {

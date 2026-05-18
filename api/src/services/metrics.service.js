@@ -2049,6 +2049,103 @@ async function getAttributedRevenueSummary(prisma, storeId, windowStart, windowE
   };
 }
 
+// ---------------------------------------------------------------------------
+// getMonthlyStatement
+//
+// Rolling-window (default 30 days) revenue statement.
+// Only counts executions applied within the window. Delegates all per-execution
+// metric comparison to getExecutionResultsSummary — no new data sources.
+//
+// Aggregation rules mirror getRevenueDashboard:
+//   totalRevenueImpact — sum of revenue.diff for executions with confidence ≠ insufficient
+//   measuredCount      — windows that completed (confidence may be insufficient)
+//   waitingCount       — windows still open (waiting_for_more_data)
+//   insufficientDataCount — windows complete but below minimum order threshold
+// ---------------------------------------------------------------------------
+async function getMonthlyStatement(prisma, shop, windowDays = 30) {
+  const store = await prisma.store.findUnique({
+    where:  { shopDomain: shop },
+    select: { id: true },
+  });
+  if (!store) return { success: false, reason: 'store not found' };
+
+  const windowEnd = new Date();
+  windowEnd.setUTCHours(0, 0, 0, 0);
+  windowEnd.setUTCDate(windowEnd.getUTCDate() + 1); // include today
+  const windowStart = new Date(windowEnd);
+  windowStart.setUTCDate(windowStart.getUTCDate() - windowDays);
+
+  const executions = await prisma.contentExecution.findMany({
+    where:   { storeId: store.id, status: 'applied', createdAt: { gte: windowStart } },
+    select:  { id: true, productId: true, createdAt: true },
+    orderBy: { createdAt: 'desc' },
+  });
+
+  const emptyResult = {
+    success: true, shop, windowDays,
+    windowStart: windowStart.toISOString(), windowEnd: windowEnd.toISOString(),
+    executionsCount: 0, measuredCount: 0, waitingCount: 0,
+    insufficientDataCount: 0, totalRevenueImpact: 0, productsImproved: 0, topWins: [],
+  };
+  if (executions.length === 0) return emptyResult;
+
+  const productIds = [...new Set(executions.map(e => e.productId))];
+  const products   = await prisma.product.findMany({
+    where:  { id: { in: productIds } },
+    select: { id: true, title: true },
+  });
+  const titleMap = new Map(products.map(p => [p.id, p.title]));
+
+  let totalRevenueImpact    = 0;
+  let measuredCount         = 0;
+  let waitingCount          = 0;
+  let insufficientDataCount = 0;
+  const improvedProducts    = new Set();
+  const topWinCandidates    = [];
+
+  for (const exec of executions) {
+    const result = await getExecutionResultsSummary(prisma, exec.id);
+    if (!result.success) continue;
+
+    if (result.status === 'waiting_for_more_data') { waitingCount++; continue; }
+    if (result.status !== 'measured' || !result.summary) continue;
+
+    measuredCount++;
+    if (result.confidence === 'insufficient') { insufficientDataCount++; continue; }
+
+    const { revenue, orders, unitsSold } = result.summary;
+    totalRevenueImpact += revenue.diff;
+    if (revenue.diff > 0) improvedProducts.add(exec.productId);
+
+    topWinCandidates.push({
+      productTitle:  titleMap.get(exec.productId) ?? 'Unknown product',
+      revenueDelta:  parseFloat(revenue.diff.toFixed(2)),
+      ordersDelta:   orders.diff,
+      unitsSoldDelta: unitsSold.diff,
+      executedAt:    exec.createdAt,
+    });
+  }
+
+  const topWins = [...topWinCandidates]
+    .sort((a, b) => b.revenueDelta - a.revenueDelta)
+    .slice(0, 3);
+
+  return {
+    success:              true,
+    shop,
+    windowDays,
+    windowStart:          windowStart.toISOString(),
+    windowEnd:            windowEnd.toISOString(),
+    executionsCount:      executions.length,
+    measuredCount,
+    waitingCount,
+    insufficientDataCount,
+    totalRevenueImpact:   parseFloat(totalRevenueImpact.toFixed(2)),
+    productsImproved:     improvedProducts.size,
+    topWins,
+  };
+}
+
 module.exports = {
   analyzeExecutionOutcome,
   getStoreCROSuggestions,
@@ -2065,4 +2162,5 @@ module.exports = {
   getTopDecisionActions,
   getRevenueDashboard,
   getAttributedRevenueSummary,
+  getMonthlyStatement,
 };

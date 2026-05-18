@@ -570,6 +570,46 @@ export interface AttributedRevenueData {
   unattributedRevenue:    number;
 }
 
+// ---------------------------------------------------------------------------
+// Monthly Statement
+// ---------------------------------------------------------------------------
+
+export interface MonthlyStatementWin {
+  productTitle:   string;
+  revenueDelta:   number;
+  ordersDelta:    number;
+  unitsSoldDelta: number;
+  executedAt:     string;
+}
+
+export interface MonthlyStatementData {
+  windowDays:           number;
+  windowStart:          string;
+  windowEnd:            string;
+  executionsCount:      number;
+  measuredCount:        number;
+  waitingCount:         number;
+  insufficientDataCount: number;
+  totalRevenueImpact:   number;
+  productsImproved:     number;
+  topWins:              MonthlyStatementWin[];
+}
+
+export async function fetchMonthlyStatement(shop: string): Promise<MonthlyStatementData | null> {
+  try {
+    const res = await fetch(
+      `${API_BASE}/metrics/monthly-statement?shop=${encodeURIComponent(shop)}`,
+      { cache: 'no-store', credentials: 'include', headers: apiHeaders() }
+    );
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (!data.success) return null;
+    return data as MonthlyStatementData;
+  } catch {
+    return null;
+  }
+}
+
 export async function fetchAttributedRevenue(shop: string, windowDays = 30): Promise<AttributedRevenueData | null> {
   try {
     const res = await fetch(
