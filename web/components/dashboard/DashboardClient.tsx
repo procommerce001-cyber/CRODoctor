@@ -13,6 +13,7 @@ import RevenueDashboard             from './RevenueDashboard';
 import MerchantSummary              from './MerchantSummary';
 import MonthlyStatement             from './MonthlyStatement';
 import NewProductsDigest            from './NewProductsDigest';
+import MeasurementReadyDigest       from './MeasurementReadyDigest';
 import StoreSuggestionsList         from './StoreSuggestionsList';
 import DashboardStickySummaryBar    from './DashboardStickySummaryBar';
 import type { FilterValue }         from './StoreSuggestionsList';
@@ -196,6 +197,7 @@ export default function DashboardClient({ data }: Props) {
         />
         <MonthlyStatement shop={SHOP} pendingCount={data.review.summary.readyToApplyCount} />
         <NewProductsDigest shop={SHOP} />
+        <MeasurementReadyDigest shop={SHOP} />
         <RevenueDashboard shop={SHOP} demoMode={demoMode} />
       </div>
       {topActions.length > 0 && (() => {

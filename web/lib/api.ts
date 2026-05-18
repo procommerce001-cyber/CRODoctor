@@ -638,6 +638,38 @@ export async function fetchNewProductsDigest(shop: string): Promise<NewProductsD
   }
 }
 
+export interface MeasurementReadyDigestItem {
+  executionId:     string;
+  productId:       string;
+  productTitle:    string | null;
+  afterReadyAt:    string;
+  decisionSignal:  string | null;
+  confidence:      string | null;
+  revenueDelta:    number | null;
+  nextActionLabel: string;
+}
+
+export interface MeasurementReadyDigestData {
+  windowDays: number;
+  count:      number;
+  items:      MeasurementReadyDigestItem[];
+}
+
+export async function fetchMeasurementReadyDigest(shop: string): Promise<MeasurementReadyDigestData | null> {
+  try {
+    const res = await fetch(
+      `${API_BASE}/metrics/measurement-ready-digest?shop=${encodeURIComponent(shop)}`,
+      { cache: 'no-store', credentials: 'include', headers: apiHeaders() }
+    );
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (!data.success) return null;
+    return data as MeasurementReadyDigestData;
+  } catch {
+    return null;
+  }
+}
+
 export async function fetchAttributedRevenue(shop: string, windowDays = 30): Promise<AttributedRevenueData | null> {
   try {
     const res = await fetch(

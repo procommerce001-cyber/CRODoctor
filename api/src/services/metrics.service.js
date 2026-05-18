@@ -2201,6 +2201,110 @@ async function getNewProductsDigest(prisma, shop, windowDays = 30) {
   };
 }
 
+// ---------------------------------------------------------------------------
+// deriveNextActionLabel — pure, local helper for getMeasurementReadyDigest.
+// Maps existing decisionSignal + confidence to a merchant-facing action label.
+// Uses only values already produced by deriveDecisionSignal / getExecutionResultsSummary.
+// ---------------------------------------------------------------------------
+function deriveNextActionLabel(decisionSignal, confidence) {
+  if (confidence === 'insufficient') return 'Result ready — review carefully';
+  switch (decisionSignal) {
+    case 'rollback_candidate': return 'Underperforming — review for rollback';
+    case 'revise':             return 'Mixed result — review and revise';
+    case 'keep':               return 'Likely winner — review result';
+    default:                   return 'Result ready — review carefully';
+  }
+}
+
+// ---------------------------------------------------------------------------
+// getMeasurementReadyDigest
+//
+// Returns a compact list of applied ContentExecutions whose measurement window
+// has recently closed and whose results are ready for merchant review.
+//
+// Detection rule:
+//   ContentExecution.status = 'applied'
+//   afterReadyAt <= now  (window has elapsed)
+//   afterReadyAt >= now - windowDays  (within the lookback period)
+//   getExecutionResultsSummary returns status = 'measured'
+//
+// Calls getExecutionResultsSummary for each candidate — reuses existing logic
+// exactly, no new measurement or decision logic introduced.
+//
+// Never throws. Returns { success: false } when store is not found.
+// ---------------------------------------------------------------------------
+async function getMeasurementReadyDigest(prisma, shop, windowDays = 30, limit = 5) {
+  const store = await prisma.store.findUnique({
+    where:  { shopDomain: shop },
+    select: { id: true },
+  });
+  if (!store) return { success: false, reason: 'store not found' };
+
+  const now         = new Date();
+  const windowStart = new Date(now);
+  windowStart.setUTCDate(windowStart.getUTCDate() - windowDays);
+
+  // Over-fetch to allow for executions that are not yet measured
+  // (scheduler lag between afterReadyAt and after-snapshot capture).
+  const executions = await prisma.contentExecution.findMany({
+    where: {
+      storeId:      store.id,
+      status:       'applied',
+      afterReadyAt: { lte: now, gte: windowStart },
+    },
+    select:  { id: true, productId: true, afterReadyAt: true },
+    orderBy: { afterReadyAt: 'desc' },
+    take:    limit * 3,
+  });
+
+  if (executions.length === 0) {
+    return { success: true, shop, windowDays, count: 0, items: [] };
+  }
+
+  const productIds = [...new Set(executions.map(e => e.productId))];
+  const products   = await prisma.product.findMany({
+    where:  { id: { in: productIds } },
+    select: { id: true, title: true },
+  });
+  const titleMap = new Map(products.map(p => [p.id, p.title]));
+
+  const items = [];
+
+  for (const exec of executions) {
+    if (items.length >= limit) break;
+
+    let result;
+    try {
+      result = await getExecutionResultsSummary(prisma, exec.id);
+    } catch (_) {
+      continue;
+    }
+
+    if (!result.success || result.status !== 'measured') continue;
+
+    items.push({
+      executionId:     exec.id,
+      productId:       exec.productId,
+      productTitle:    titleMap.get(exec.productId) ?? null,
+      afterReadyAt:    exec.afterReadyAt,
+      decisionSignal:  result.decisionSignal,
+      confidence:      result.confidence,
+      revenueDelta:    result.summary?.revenue?.diff != null
+                         ? parseFloat(result.summary.revenue.diff.toFixed(2))
+                         : null,
+      nextActionLabel: deriveNextActionLabel(result.decisionSignal, result.confidence),
+    });
+  }
+
+  return {
+    success:    true,
+    shop,
+    windowDays,
+    count:      items.length,
+    items,
+  };
+}
+
 module.exports = {
   analyzeExecutionOutcome,
   getStoreCROSuggestions,
@@ -2219,4 +2323,5 @@ module.exports = {
   getAttributedRevenueSummary,
   getMonthlyStatement,
   getNewProductsDigest,
+  getMeasurementReadyDigest,
 };
