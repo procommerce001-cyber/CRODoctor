@@ -481,6 +481,25 @@ async function getProductActions(rawProduct, { prisma, storeId } = {}) {
           };
         }
       } catch (_) { /* non-fatal — item keeps original template-generated fix */ }
+
+      // Safeguard: detect whether prior weak_desire_creation inserted content is
+      // still physically present in bodyHtml. Applying a new desire block onto a
+      // page that already contains an older one produces overlapping copy.
+      // Defaults to false on any error so existing readyToApply behaviour is preserved.
+      let priorContentPresent = false;
+      try {
+        const priorInserts = await prisma.contentExecution.findMany({
+          where:  { productId: rawProduct.id, issueId: 'weak_desire_creation', patchMode: { not: 'rollback' } },
+          select: { newContent: true },
+        });
+        const bodyText = (rawProduct.bodyHtml || '')
+          .replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().toLowerCase();
+        priorContentPresent = priorInserts.some(row => {
+          const t = (row.newContent || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().toLowerCase();
+          return t.length > 20 && bodyText.includes(t);
+        });
+      } catch (_) { /* non-fatal — stays false */ }
+      actionableItems[wdcIdx] = { ...actionableItems[wdcIdx], priorContentPresent };
     }
   }
 
