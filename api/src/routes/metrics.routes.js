@@ -3,7 +3,7 @@
 const express = require('express');
 const router  = express.Router();
 
-const { analyzeExecutionOutcome, getStoreCROSuggestions, captureProductMetricsSnapshot, compareProductMetrics, captureExecutionSnapshots, compareExecutionMetrics, getExecutionResultsSummary, getStoreResultsSummary, getStoreExecutionFeed, getStoreOverview, getRevenueDashboard, getAttributedRevenueSummary, getMonthlyStatement } = require('../services/metrics.service');
+const { analyzeExecutionOutcome, getStoreCROSuggestions, captureProductMetricsSnapshot, compareProductMetrics, captureExecutionSnapshots, compareExecutionMetrics, getExecutionResultsSummary, getStoreResultsSummary, getStoreExecutionFeed, getStoreOverview, getRevenueDashboard, getAttributedRevenueSummary, getMonthlyStatement, getNewProductsDigest } = require('../services/metrics.service');
 const { resolveStore }      = require('../lib/resolve-store');
 const { getProductActions } = require('../services/action-center.service');
 const { PRODUCT_INCLUDE }   = require('../lib/product-include');
@@ -575,6 +575,25 @@ router.get('/monthly-statement', async (req, res) => {
   } catch (err) {
     console.error('[Metrics] GET /monthly-statement error:', err.message);
     res.status(500).json({ error: 'Internal error fetching monthly statement.' });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// GET /metrics/new-products-digest?shop=<shopDomain>
+//
+// Active products created in the last 30 days with no ActionItem rows —
+// i.e. never reviewed in the action center. Used by the dashboard digest chip.
+// ---------------------------------------------------------------------------
+router.get('/new-products-digest', async (req, res) => {
+  const prisma = req.app.get('prisma');
+  try {
+    if (!req.query.shop) return res.status(400).json({ error: 'shop is required' });
+    const result = await getNewProductsDigest(prisma, req.query.shop);
+    if (!result.success) return res.status(404).json(result);
+    res.json(result);
+  } catch (err) {
+    console.error('[Metrics] GET /new-products-digest error:', err.message);
+    res.status(500).json({ error: 'Internal error fetching new products digest.' });
   }
 });
 

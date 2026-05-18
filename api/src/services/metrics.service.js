@@ -2146,6 +2146,61 @@ async function getMonthlyStatement(prisma, shop, windowDays = 30) {
   };
 }
 
+// ---------------------------------------------------------------------------
+// getNewProductsDigest
+//
+// Returns active products created in the last windowDays that have never had
+// a review decision recorded (zero ActionItem rows for that productId).
+//
+// Detection rule:
+//   Product.status = 'active'
+//   Product.createdAt >= now - windowDays (UTC midnight boundary)
+//   No ActionItem rows exist for (storeId, productId)
+//
+// Never throws. Returns { success: false } when store is not found.
+// ---------------------------------------------------------------------------
+async function getNewProductsDigest(prisma, shop, windowDays = 30) {
+  const store = await prisma.store.findUnique({
+    where:  { shopDomain: shop },
+    select: { id: true },
+  });
+  if (!store) return { success: false, reason: 'store not found' };
+
+  const windowStart = new Date();
+  windowStart.setUTCHours(0, 0, 0, 0);
+  windowStart.setUTCDate(windowStart.getUTCDate() - windowDays);
+
+  const [newProducts, reviewedItems] = await Promise.all([
+    prisma.product.findMany({
+      where:   { storeId: store.id, status: 'active', createdAt: { gte: windowStart } },
+      select:  { id: true, shopifyProductId: true, title: true, createdAt: true },
+      orderBy: { createdAt: 'desc' },
+    }),
+    prisma.actionItem.findMany({
+      where:  { storeId: store.id },
+      select: { productId: true },
+    }),
+  ]);
+
+  const reviewedIds = new Set(reviewedItems.map(r => r.productId));
+  const products    = newProducts
+    .filter(p => !reviewedIds.has(p.id))
+    .map(p => ({
+      id:               p.id,
+      shopifyProductId: p.shopifyProductId,
+      title:            p.title,
+      createdAt:        p.createdAt,
+    }));
+
+  return {
+    success:    true,
+    shop,
+    windowDays,
+    count:      products.length,
+    products,
+  };
+}
+
 module.exports = {
   analyzeExecutionOutcome,
   getStoreCROSuggestions,
@@ -2163,4 +2218,5 @@ module.exports = {
   getRevenueDashboard,
   getAttributedRevenueSummary,
   getMonthlyStatement,
+  getNewProductsDigest,
 };

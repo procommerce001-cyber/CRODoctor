@@ -610,6 +610,34 @@ export async function fetchMonthlyStatement(shop: string): Promise<MonthlyStatem
   }
 }
 
+export interface NewProductsDigestItem {
+  id:               string;
+  shopifyProductId: string;
+  title:            string;
+  createdAt:        string;
+}
+
+export interface NewProductsDigestData {
+  windowDays: number;
+  count:      number;
+  products:   NewProductsDigestItem[];
+}
+
+export async function fetchNewProductsDigest(shop: string): Promise<NewProductsDigestData | null> {
+  try {
+    const res = await fetch(
+      `${API_BASE}/metrics/new-products-digest?shop=${encodeURIComponent(shop)}`,
+      { cache: 'no-store', credentials: 'include', headers: apiHeaders() }
+    );
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (!data.success) return null;
+    return data as NewProductsDigestData;
+  } catch {
+    return null;
+  }
+}
+
 export async function fetchAttributedRevenue(shop: string, windowDays = 30): Promise<AttributedRevenueData | null> {
   try {
     const res = await fetch(
