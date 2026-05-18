@@ -61,8 +61,10 @@ function truncateAtWord(text, maxLen) {
 // The existing body is included as read-only context so the LLM knows what
 // has already been said and can extend rather than repeat it.
 // It is NOT used as a source of barrier inference — CopyPlan owns that.
+// reviews: optional string[] from fetchProductReviews — enriches the prompt
+// when ≥ 2 excerpts are available; ignored otherwise (CopyPlan stays primary).
 // ---------------------------------------------------------------------------
-function buildExpansionPrompt(product, copyPlan) {
+function buildExpansionPrompt(product, copyPlan, reviews = []) {
   const title       = (product.title  || 'this product').trim();
   const vendor      = (product.vendor || '').trim();
   const price       = parseFloat(String(product.variants?.[0]?.price || 0));
@@ -82,21 +84,35 @@ function buildExpansionPrompt(product, copyPlan) {
     existing ? `Existing description: "${existing}"` : null,
   ].filter(Boolean);
 
-  return [
+  const hasVoices = Array.isArray(reviews) && reviews.length >= 2;
+
+  const parts = [
     'Write one short paragraph (3–5 sentences) that will be appended to an existing product page description to make it more persuasive.',
     '',
     lines.join('\n'),
-    '',
-    `Address the barrier "${copyPlan.barrier}" through a ${copyPlan.emotionalFrame} frame using a ${copyPlan.toneKey} voice. Follow the narrative arc order.`,
-    '',
-    'Rules:',
-    '- Plain text only. No HTML. No markdown. No labels. No quotes.',
-    '- Do not open with the product name.',
-    '- Do not use generic openers like "Introducing", "Experience", or "Discover".',
-    '- Do not repeat or paraphrase what the existing description already says.',
-    '- Build on it — add the persuasion layer that is currently missing.',
-    '- Output only the paragraph, nothing else.',
-  ].join('\n');
+  ];
+
+  if (hasVoices) {
+    parts.push('');
+    parts.push('Customer voices (use the vocabulary and emotional register — not these sentences verbatim):');
+    reviews.forEach(r => parts.push(`- "${r}"`));
+  }
+
+  parts.push('');
+  parts.push(
+    `Address the barrier "${copyPlan.barrier}" through a ${copyPlan.emotionalFrame} frame using a ${copyPlan.toneKey} voice. Follow the narrative arc order.`
+    + (hasVoices ? ' If customer voices are provided, mirror their language register and the specific outcomes they describe.' : '')
+  );
+  parts.push('');
+  parts.push('Rules:');
+  parts.push('- Plain text only. No HTML. No markdown. No labels. No quotes.');
+  parts.push('- Do not open with the product name.');
+  parts.push('- Do not use generic openers like "Introducing", "Experience", or "Discover".');
+  parts.push('- Do not repeat or paraphrase what the existing description already says.');
+  parts.push('- Build on it — add the persuasion layer that is currently missing.');
+  parts.push('- Output only the paragraph, nothing else.');
+
+  return parts.join('\n');
 }
 
 // ---------------------------------------------------------------------------
@@ -131,12 +147,13 @@ function validateOutput(raw) {
 
 // ---------------------------------------------------------------------------
 // generateShortDescriptionExpansionWithLLM — main export
+// reviews: optional string[] from fetchProductReviews — passed to buildExpansionPrompt.
 // ---------------------------------------------------------------------------
-async function generateShortDescriptionExpansionWithLLM(product, copyPlan) {
+async function generateShortDescriptionExpansionWithLLM(product, copyPlan, reviews = []) {
   if (!copyPlan)                      return null;
   if (!process.env.ANTHROPIC_API_KEY) return null;
 
-  const prompt     = buildExpansionPrompt(product, copyPlan);
+  const prompt     = buildExpansionPrompt(product, copyPlan, reviews);
   const controller = new AbortController();
   const timer      = setTimeout(() => controller.abort(), TIMEOUT_MS);
 

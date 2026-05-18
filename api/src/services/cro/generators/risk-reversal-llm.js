@@ -76,8 +76,10 @@ function buildHeadingAndB2(product) {
 
 // ---------------------------------------------------------------------------
 // buildRiskReversalPrompt — pure, deterministic
+// reviews: optional string[] from fetchProductReviews — enriches the prompt
+// when ≥ 2 excerpts are available; ignored otherwise (CopyPlan stays primary).
 // ---------------------------------------------------------------------------
-function buildRiskReversalPrompt(product, copyPlan) {
+function buildRiskReversalPrompt(product, copyPlan, reviews = []) {
   const title = (product.title || 'this product').trim();
   const type  = detectProductType(product);
   const price = parseFloat(String(product.variants?.[0]?.price || 0));
@@ -93,20 +95,34 @@ function buildRiskReversalPrompt(product, copyPlan) {
     `Traffic quality: ${copyPlan.trafficQuality}`,
   ].filter(Boolean);
 
-  return [
+  const hasVoices = Array.isArray(reviews) && reviews.length >= 2;
+
+  const parts = [
     'Write one to two sentences of guarantee copy for a product page.',
     '',
     lines.join('\n'),
-    '',
-    'The copy must directly address the stated barrier. Make the buyer feel that the purchase risk has been transferred away from them.',
-    '',
-    'Rules:',
-    '- Plain text only. No HTML. No markdown. No quotes around the output. No labels.',
-    '- Do not start with the product name.',
-    '- Do not use generic phrases like "100% satisfaction guaranteed".',
-    '- Do not invent specific return windows (e.g. "30 days") — keep the copy general.',
-    '- Output only the guarantee copy, nothing else.',
-  ].join('\n');
+  ];
+
+  if (hasVoices) {
+    parts.push('');
+    parts.push('Customer voices (use the vocabulary and emotional register — not these sentences verbatim):');
+    reviews.forEach(r => parts.push(`- "${r}"`));
+  }
+
+  parts.push('');
+  parts.push(
+    'The copy must directly address the stated barrier. Make the buyer feel that the purchase risk has been transferred away from them.'
+    + (hasVoices ? ' If customer voices are provided, mirror their language register and the specific hesitations they describe.' : '')
+  );
+  parts.push('');
+  parts.push('Rules:');
+  parts.push('- Plain text only. No HTML. No markdown. No quotes around the output. No labels.');
+  parts.push('- Do not start with the product name.');
+  parts.push('- Do not use generic phrases like "100% satisfaction guaranteed".');
+  parts.push('- Do not invent specific return windows (e.g. "30 days") — keep the copy general.');
+  parts.push('- Output only the guarantee copy, nothing else.');
+
+  return parts.join('\n');
 }
 
 // ---------------------------------------------------------------------------
@@ -152,12 +168,13 @@ function assembleHtml(heading, b1, b2) {
 
 // ---------------------------------------------------------------------------
 // generateRiskReversalWithLLM — main export
+// reviews: optional string[] from fetchProductReviews — passed to buildRiskReversalPrompt.
 // ---------------------------------------------------------------------------
-async function generateRiskReversalWithLLM(product, copyPlan) {
+async function generateRiskReversalWithLLM(product, copyPlan, reviews = []) {
   if (!copyPlan)                      return null;
   if (!process.env.ANTHROPIC_API_KEY) return null;
 
-  const prompt     = buildRiskReversalPrompt(product, copyPlan);
+  const prompt     = buildRiskReversalPrompt(product, copyPlan, reviews);
   const controller = new AbortController();
   const timer      = setTimeout(() => controller.abort(), TIMEOUT_MS);
 

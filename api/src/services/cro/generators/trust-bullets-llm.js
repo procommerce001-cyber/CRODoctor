@@ -89,8 +89,10 @@ function buildSupportBullets(product) {
 
 // ---------------------------------------------------------------------------
 // buildTrustBulletsPrompt — pure, deterministic
+// reviews: optional string[] from fetchProductReviews — enriches the prompt
+// when ≥ 2 excerpts are available; ignored otherwise (CopyPlan stays primary).
 // ---------------------------------------------------------------------------
-function buildTrustBulletsPrompt(product, copyPlan) {
+function buildTrustBulletsPrompt(product, copyPlan, reviews = []) {
   const title = (product.title || 'this product').trim();
   const type  = detectProductType(product);
   const price = parseFloat(String(product.variants?.[0]?.price || 0));
@@ -107,20 +109,34 @@ function buildTrustBulletsPrompt(product, copyPlan) {
     `Traffic quality: ${copyPlan.trafficQuality}`,
   ].filter(Boolean);
 
-  return [
+  const hasVoices = Array.isArray(reviews) && reviews.length >= 2;
+
+  const parts = [
     'Write one short pre-purchase trust bullet for a product page.',
     '',
     lines.join('\n'),
-    '',
-    'The bullet must speak to the stated trust angle. It must address a hesitation the buyer has before deciding — not after purchasing.',
-    '',
-    'Rules:',
-    '- Plain text only. No HTML. No markdown. No bullet character, dash, or asterisk prefix. No quotes around the output.',
-    '- One sentence only. Maximum 160 characters.',
-    '- Pre-purchase framing only. Do not mention returns, refunds, or post-purchase outcomes.',
-    '- Do not start with "We offer" or "We provide".',
-    '- Output only the bullet text, nothing else.',
-  ].join('\n');
+  ];
+
+  if (hasVoices) {
+    parts.push('');
+    parts.push('Customer voices (use the vocabulary and emotional register — not these sentences verbatim):');
+    reviews.forEach(r => parts.push(`- "${r}"`));
+  }
+
+  parts.push('');
+  parts.push(
+    'The bullet must speak to the stated trust angle. It must address a hesitation the buyer has before deciding — not after purchasing.'
+    + (hasVoices ? ' If customer voices are provided, mirror their language register and the specific pre-purchase concerns they describe.' : '')
+  );
+  parts.push('');
+  parts.push('Rules:');
+  parts.push('- Plain text only. No HTML. No markdown. No bullet character, dash, or asterisk prefix. No quotes around the output.');
+  parts.push('- One sentence only. Maximum 160 characters.');
+  parts.push('- Pre-purchase framing only. Do not mention returns, refunds, or post-purchase outcomes.');
+  parts.push('- Do not start with "We offer" or "We provide".');
+  parts.push('- Output only the bullet text, nothing else.');
+
+  return parts.join('\n');
 }
 
 // ---------------------------------------------------------------------------
@@ -162,12 +178,13 @@ function assembleHtml(b1, b2, b3) {
 
 // ---------------------------------------------------------------------------
 // generateTrustBulletsWithLLM — main export
+// reviews: optional string[] from fetchProductReviews — passed to buildTrustBulletsPrompt.
 // ---------------------------------------------------------------------------
-async function generateTrustBulletsWithLLM(product, copyPlan) {
+async function generateTrustBulletsWithLLM(product, copyPlan, reviews = []) {
   if (!copyPlan)                      return null;
   if (!process.env.ANTHROPIC_API_KEY) return null;
 
-  const prompt     = buildTrustBulletsPrompt(product, copyPlan);
+  const prompt     = buildTrustBulletsPrompt(product, copyPlan, reviews);
   const controller = new AbortController();
   const timer      = setTimeout(() => controller.abort(), TIMEOUT_MS);
 

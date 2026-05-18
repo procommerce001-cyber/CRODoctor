@@ -484,6 +484,24 @@ async function getProductActions(rawProduct, { prisma, storeId } = {}) {
     }
   }
 
+  // Shared VOC reviews for no_risk_reversal, no_trust_bullets, no_description,
+  // and description_too_short enrichment blocks below.
+  // Fetched once here — mirrors the WDC guard (key present + storeId known).
+  // Non-fatal: any error leaves sharedReviews as [] and generators fall back
+  // to the non-VOC prompt path cleanly.
+  let sharedReviews = [];
+  if (prisma && process.env.ANTHROPIC_API_KEY && storeId) {
+    try {
+      const storeForReviews = await prisma.store.findUnique({
+        where:  { id: storeId },
+        select: { shopDomain: true, accessToken: true },
+      }).catch(() => null);
+      if (storeForReviews) {
+        sharedReviews = await fetchProductReviews(storeForReviews, rawProduct).catch(() => []);
+      }
+    } catch (_) {}
+  }
+
   // Barrier-first CopyPlan enrichment for no_risk_reversal.
   // Same pattern as weak_desire_creation above. Non-fatal: any error leaves the
   // item with the template-generated trust block already set by generateTrustBlock.
@@ -494,7 +512,7 @@ async function getProductActions(rawProduct, { prisma, storeId } = {}) {
         const profile  = await getLatestProductPerformanceProfile(prisma, rawProduct.id);
         const copyPlan = buildCopyPlan(rawProduct, profile);
         if (copyPlan) {
-          const llmFix = await generateRiskReversalWithLLM(rawProduct, copyPlan);
+          const llmFix = await generateRiskReversalWithLLM(rawProduct, copyPlan, sharedReviews);
           if (llmFix) {
             const item = actionableItems[nrrIdx];
             actionableItems[nrrIdx] = {
@@ -518,7 +536,7 @@ async function getProductActions(rawProduct, { prisma, storeId } = {}) {
         const profile  = await getLatestProductPerformanceProfile(prisma, rawProduct.id);
         const copyPlan = buildCopyPlan(rawProduct, profile);
         if (copyPlan) {
-          const llmFix = await generateTrustBulletsWithLLM(rawProduct, copyPlan);
+          const llmFix = await generateTrustBulletsWithLLM(rawProduct, copyPlan, sharedReviews);
           if (llmFix) {
             const item = actionableItems[ntbIdx];
             actionableItems[ntbIdx] = {
@@ -543,7 +561,7 @@ async function getProductActions(rawProduct, { prisma, storeId } = {}) {
         const profile  = await getLatestProductPerformanceProfile(prisma, rawProduct.id);
         const copyPlan = buildCopyPlan(rawProduct, profile);
         if (copyPlan) {
-          const llmFix = await generateDescriptionWithLLM(rawProduct, copyPlan);
+          const llmFix = await generateDescriptionWithLLM(rawProduct, copyPlan, sharedReviews);
           if (llmFix) {
             const item = actionableItems[ndIdx];
             actionableItems[ndIdx] = {
@@ -569,7 +587,7 @@ async function getProductActions(rawProduct, { prisma, storeId } = {}) {
         const profile  = await getLatestProductPerformanceProfile(prisma, rawProduct.id);
         const copyPlan = buildCopyPlan(rawProduct, profile);
         if (copyPlan) {
-          const llmFix = await generateShortDescriptionExpansionWithLLM(rawProduct, copyPlan);
+          const llmFix = await generateShortDescriptionExpansionWithLLM(rawProduct, copyPlan, sharedReviews);
           if (llmFix) {
             const item = actionableItems[dtsIdx];
             actionableItems[dtsIdx] = {
