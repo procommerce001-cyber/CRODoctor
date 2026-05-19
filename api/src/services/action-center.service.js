@@ -542,6 +542,23 @@ async function getProductActions(rawProduct, { prisma, storeId } = {}) {
           }
         }
       } catch (_) { /* non-fatal — item keeps original template-generated fix */ }
+
+      // Safeguard: detect whether prior no_risk_reversal inserted content is
+      // still physically present in bodyHtml. Mirrors the weak_desire_creation pattern.
+      let nrrPriorContentPresent = false;
+      try {
+        const priorInserts = await prisma.contentExecution.findMany({
+          where:  { productId: rawProduct.id, issueId: 'no_risk_reversal', patchMode: { not: 'rollback' } },
+          select: { newContent: true },
+        });
+        const bodyText = (rawProduct.bodyHtml || '')
+          .replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().toLowerCase();
+        nrrPriorContentPresent = priorInserts.some(row => {
+          const t = (row.newContent || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().toLowerCase();
+          return t.length > 20 && bodyText.includes(t);
+        });
+      } catch (_) { /* non-fatal — stays false */ }
+      actionableItems[nrrIdx] = { ...actionableItems[nrrIdx], priorContentPresent: nrrPriorContentPresent };
     }
   }
 
@@ -566,6 +583,23 @@ async function getProductActions(rawProduct, { prisma, storeId } = {}) {
           }
         }
       } catch (_) { /* non-fatal — item keeps original template-generated fix */ }
+
+      // Safeguard: detect whether prior no_trust_bullets inserted content is
+      // still physically present in bodyHtml. Mirrors the weak_desire_creation pattern.
+      let ntbPriorContentPresent = false;
+      try {
+        const priorInserts = await prisma.contentExecution.findMany({
+          where:  { productId: rawProduct.id, issueId: 'no_trust_bullets', patchMode: { not: 'rollback' } },
+          select: { newContent: true },
+        });
+        const bodyText = (rawProduct.bodyHtml || '')
+          .replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().toLowerCase();
+        ntbPriorContentPresent = priorInserts.some(row => {
+          const t = (row.newContent || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().toLowerCase();
+          return t.length > 20 && bodyText.includes(t);
+        });
+      } catch (_) { /* non-fatal — stays false */ }
+      actionableItems[ntbIdx] = { ...actionableItems[ntbIdx], priorContentPresent: ntbPriorContentPresent };
     }
   }
 

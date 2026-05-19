@@ -118,7 +118,7 @@ async function getReviewSelectionPayload(prisma, storeId) {
         else if (!action.canAutoApply)               reason = 'canAutoApply is false';
         else if (action.riskLevel !== 'low')         reason = `riskLevel is ${action.riskLevel}`;
         else if (action.reviewStatus !== 'approved') reason = `reviewStatus is ${action.reviewStatus}`;
-        else if (action.priorContentPresent)         reason = 'prior weak_desire_creation content still present in page — cleanup required before re-applying';
+        else if (action.priorContentPresent)         reason = `prior ${action.issueId} content still present in page — cleanup required before re-applying`;
         else                                         reason = 'no proposedContent';
       }
 
