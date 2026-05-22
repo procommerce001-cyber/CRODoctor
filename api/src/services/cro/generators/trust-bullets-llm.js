@@ -19,7 +19,7 @@
 // expects a bare <ul> block, matching the contract of generateTrustBullets.
 // ---------------------------------------------------------------------------
 
-const { buildCopyRole } = require('../copy-role');
+const { buildCopyRole, detectCategory } = require('../copy-role');
 
 const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages';
 const MODEL             = 'claude-haiku-4-5-20251001';
@@ -69,14 +69,17 @@ function detectProductType(product) {
 // Kept here so assembly is self-contained and does not depend on rules.js.
 // ---------------------------------------------------------------------------
 function buildSupportBullets(product) {
+  const category   = detectCategory(product);
   const type       = detectProductType(product);
   const vendor     = (product.vendor || '').trim();
   const price      = parseFloat(String(product.variants?.[0]?.price || 0));
   const shortTitle = (product.title || '').replace(/\s*[-–]\s*(v\.?\d+|test|demo|new|old)\s*$/i, '').trim();
 
-  const b2 = vendor
-    ? `Questions about ${shortTitle}? The ${vendor} team is here — get in touch before you buy.`
-    : `Questions before you order? Get in touch — we'll give you a straight answer.`;
+  const b2 = category === 'baby_infant'
+    ? `Unsure whether this fits your baby's age or weight right now? Share their details before ordering and we'll confirm the right fit.`
+    : (vendor
+        ? `Questions about ${shortTitle}? The ${vendor} team is here — get in touch before you buy.`
+        : `Questions before you order? Get in touch — we'll give you a straight answer.`);
 
   const b3 =
     type === 'fashion'     ? `Not sure about sizing? Message us before you order and we'll help you get the right fit.` :

@@ -1,5 +1,5 @@
 'use strict';
-require('dotenv').config();
+require('dotenv').config({ path: require('path').join(__dirname, '.env') });
 
 const pass = (msg) => console.log(`  ✓ ${msg}`);
 const fail = (msg) => { console.log(`  ✗ FAIL: ${msg}`); process.exitCode = 1; };
