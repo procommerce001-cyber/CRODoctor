@@ -14,10 +14,10 @@
 // ---------------------------------------------------------------------------
 
 const { buildCopyRole, detectCategory } = require('../copy-role');
+const { callAnthropicWithRetry }        = require('./anthropic-fetch');
 
-const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages';
-const MODEL             = 'claude-haiku-4-5-20251001';
-const TIMEOUT_MS        = 10_000;
+const MODEL      = 'claude-haiku-4-5-20251001';
+const TIMEOUT_MS = 20_000;
 const MAX_TOKENS        = 120;
 
 const MIN_LENGTH        = 30;
@@ -204,28 +204,17 @@ async function generateRiskReversalWithLLM(product, copyPlan, reviews = []) {
   if (!copyPlan)                      return null;
   if (!process.env.ANTHROPIC_API_KEY) return null;
 
-  const copyRole   = buildCopyRole(product, copyPlan);
-  const prompt     = buildRiskReversalPrompt(product, copyPlan, reviews, copyRole);
-  const controller = new AbortController();
-  const timer      = setTimeout(() => controller.abort(), TIMEOUT_MS);
+  const copyRole = buildCopyRole(product, copyPlan);
+  const prompt   = buildRiskReversalPrompt(product, copyPlan, reviews, copyRole);
 
   try {
-    const res = await fetch(ANTHROPIC_API_URL, {
-      method:  'POST',
-      signal:  controller.signal,
-      headers: {
-        'Content-Type':      'application/json',
-        'x-api-key':         process.env.ANTHROPIC_API_KEY,
-        'anthropic-version': '2023-06-01',
-      },
-      body: JSON.stringify({
-        model:      MODEL,
-        max_tokens: MAX_TOKENS,
-        messages:   [{ role: 'user', content: prompt }],
-      }),
-    });
+    const res = await callAnthropicWithRetry({
+      model:      MODEL,
+      max_tokens: MAX_TOKENS,
+      messages:   [{ role: 'user', content: prompt }],
+    }, TIMEOUT_MS);
 
-    if (!res.ok) return null;
+    if (!res) return null;
 
     const data    = await res.json();
     const llmCopy = validateOutput(data?.content?.[0]?.text);
@@ -238,8 +227,6 @@ async function generateRiskReversalWithLLM(product, copyPlan, reviews = []) {
     return { bestGuess: variant, variants: [variant] };
   } catch (_) {
     return null;
-  } finally {
-    clearTimeout(timer);
   }
 }
 
