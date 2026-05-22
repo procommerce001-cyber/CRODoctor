@@ -13,6 +13,8 @@
 // template-generated trust block. Never throws.
 // ---------------------------------------------------------------------------
 
+const { buildCopyRole, detectCategory } = require('../copy-role');
+
 const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages';
 const MODEL             = 'claude-haiku-4-5-20251001';
 const TIMEOUT_MS        = 10_000;
@@ -53,12 +55,20 @@ function detectProductType(product) {
 // rules.js internals.
 // ---------------------------------------------------------------------------
 function buildHeadingAndB2(product) {
-  const title  = (product.title  || 'this product').trim();
-  const vendor = (product.vendor || '').trim();
-  const team   = vendor ? `the ${vendor} team` : 'our team';
-  const type   = detectProductType(product);
+  const category = detectCategory(product);
+  const title    = (product.title  || 'this product').trim();
+  const vendor   = (product.vendor || '').trim();
+  const team     = vendor ? `the ${vendor} team` : 'our team';
+  const type     = detectProductType(product);
 
   const shortTitle = title.replace(/\s*[-–]\s*(v\.?\d+|test|demo|new|old)\s*$/i, '').trim();
+
+  if (category === 'baby_infant') {
+    return {
+      heading: `Not the right fit for your baby's current size or stage? We'll make it right.`,
+      b2:      `Every baby grows differently — if the fit isn't right for your baby's current weight or age, we stand behind it and will sort it with you.`,
+    };
+  }
 
   const heading =
     type === 'health'      ? `Not seeing the improvement you expected? We want to hear from you.` :
@@ -79,7 +89,7 @@ function buildHeadingAndB2(product) {
 // reviews: optional string[] from fetchProductReviews — enriches the prompt
 // when ≥ 2 excerpts are available; ignored otherwise (CopyPlan stays primary).
 // ---------------------------------------------------------------------------
-function buildRiskReversalPrompt(product, copyPlan, reviews = []) {
+function buildRiskReversalPrompt(product, copyPlan, reviews = [], copyRole = null) {
   const title = (product.title || 'this product').trim();
   const type  = detectProductType(product);
   const price = parseFloat(String(product.variants?.[0]?.price || 0));
@@ -97,11 +107,28 @@ function buildRiskReversalPrompt(product, copyPlan, reviews = []) {
 
   const hasVoices = Array.isArray(reviews) && reviews.length >= 2;
 
-  const parts = [
-    'Write one to two sentences of guarantee copy for a product page.',
-    '',
-    lines.join('\n'),
-  ];
+  const parts = [];
+
+  // ── COPY ROLE block (prepended when a role contract is available) ──────────
+  if (copyRole) {
+    parts.push('COPY ROLE');
+    if (copyRole.avatar)            parts.push(`Buyer: ${copyRole.avatar}`);
+    if (copyRole.dailyFriction)     parts.push(`Daily friction: ${copyRole.dailyFriction}`);
+    if (copyRole.emotionalPayoff)   parts.push(`Emotional payoff: ${copyRole.emotionalPayoff}`);
+    if (copyRole.blockingObjection) parts.push(`Blocking objection: ${copyRole.blockingObjection}`);
+    if (copyRole.languageRegister)  parts.push(`Language register: ${copyRole.languageRegister}`);
+    if (Array.isArray(copyRole.forbiddenPhrases) && copyRole.forbiddenPhrases.length > 0) {
+      parts.push(`NEVER write any of these phrases: ${copyRole.forbiddenPhrases.map(p => `"${p}"`).join(', ')}`);
+    }
+    if (copyRole.categoryProof)     parts.push(`Category proof: ${copyRole.categoryProof}`);
+    parts.push('');
+    parts.push('---');
+    parts.push('');
+  }
+
+  parts.push('Write one to two sentences of guarantee copy for a product page.');
+  parts.push('');
+  parts.push(lines.join('\n'));
 
   if (hasVoices) {
     parts.push('');
@@ -120,6 +147,9 @@ function buildRiskReversalPrompt(product, copyPlan, reviews = []) {
   parts.push('- Do not start with the product name.');
   parts.push('- Do not use generic phrases like "100% satisfaction guaranteed".');
   parts.push('- Do not invent specific return windows (e.g. "30 days") — keep the copy general.');
+  if (copyRole && Array.isArray(copyRole.forbiddenPhrases) && copyRole.forbiddenPhrases.length > 0) {
+    parts.push(`- Do not write any of the following: ${copyRole.forbiddenPhrases.map(p => `"${p}"`).join(', ')}.`);
+  }
   parts.push('- Output only the guarantee copy, nothing else.');
 
   return parts.join('\n');
@@ -174,7 +204,8 @@ async function generateRiskReversalWithLLM(product, copyPlan, reviews = []) {
   if (!copyPlan)                      return null;
   if (!process.env.ANTHROPIC_API_KEY) return null;
 
-  const prompt     = buildRiskReversalPrompt(product, copyPlan, reviews);
+  const copyRole   = buildCopyRole(product, copyPlan);
+  const prompt     = buildRiskReversalPrompt(product, copyPlan, reviews, copyRole);
   const controller = new AbortController();
   const timer      = setTimeout(() => controller.abort(), TIMEOUT_MS);
 
