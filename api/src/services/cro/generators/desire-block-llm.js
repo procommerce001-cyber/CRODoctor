@@ -98,6 +98,7 @@ function buildLLMPrompt(product, copyPlan, reviews = [], copyRole = null) {
   if (copyRole && Array.isArray(copyRole.forbiddenPhrases) && copyRole.forbiddenPhrases.length > 0) {
     parts.push(`- Do not write any of the following: ${copyRole.forbiddenPhrases.map(p => `"${p}"`).join(', ')}.`);
   }
+  parts.push('- Do not state, invent, infer, round, convert, or imply a specific price or price range. Price is handled elsewhere on the page.');
   parts.push('- Output only the paragraph, nothing else.');
 
   return parts.join('\n');
