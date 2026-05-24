@@ -21,7 +21,7 @@ function proposedLabel(patchMode: string | null): string {
 }
 
 const SEVERITY_COLOR: Record<string, string> = {
-  critical: '#dc2626', high: '#ea580c', medium: '#d97706', low: '#65a30d',
+  critical: '#f87171', high: '#fb923c', medium: '#fbbf24', low: '#86efac',
 };
 
 const SEVERITY_LABEL: Record<string, string> = {
@@ -138,35 +138,41 @@ export default function ReadyToApplyList({
 
   return (
     <section>
-      {/* Heading + summary bar */}
-      <div style={styles.headingRow}>
-        <h2 style={styles.heading}>
-          Ready to Apply <span style={styles.badge}>{items.length}</span>
-        </h2>
-        <span style={styles.summary}>
-          {selectableCount} action{selectableCount !== 1 ? 's' : ''} ready
-          {' · '}
-          <strong>{selected.size}</strong> selected
-        </span>
-      </div>
-
-      {/* Controls */}
-      <div style={styles.controls}>
-        <button style={styles.btnSecondary} onClick={onSelectAll}  disabled={isApplying}>Select All</button>
-        <button style={styles.btnSecondary} onClick={onClearSelection} disabled={isApplying}>Clear</button>
-        <button
-          style={{ ...styles.btnPrimary, opacity: (selected.size === 0 || isApplying) ? 0.4 : 1 }}
-          onClick={onApply}
-          disabled={selected.size === 0 || isApplying}
-        >
-          {isApplying ? 'Applying…' : `Apply Selected (${selected.size})`}
-        </button>
-      </div>
-
-      {/* Table */}
       {items.length === 0 ? (
-        <p style={styles.empty}>No approved fixes queued. Open a product, review its suggested actions, and approve one to see it here.</p>
+        <div style={styles.emptyState}>
+          <span style={styles.emptyDot} />
+          <p style={styles.emptyText}>
+            No approvals needed right now. CRODoctor is continuously monitoring your store and will surface the next high-confidence improvement automatically.
+          </p>
+        </div>
       ) : (
+        <>
+        {/* Heading + summary bar */}
+        <div style={styles.headingRow}>
+          <h2 style={styles.heading}>
+            Ready to Apply <span style={styles.badge}>{items.length}</span>
+          </h2>
+          <span style={styles.summary}>
+            {selectableCount} action{selectableCount !== 1 ? 's' : ''} ready
+            {' · '}
+            <strong>{selected.size}</strong> selected
+          </span>
+        </div>
+
+        {/* Controls */}
+        <div style={styles.controls}>
+          <button style={styles.btnSecondary} onClick={onSelectAll}  disabled={isApplying}>Select All</button>
+          <button style={styles.btnSecondary} onClick={onClearSelection} disabled={isApplying}>Clear</button>
+          <button
+            style={{ ...styles.btnPrimary, opacity: (selected.size === 0 || isApplying) ? 0.4 : 1 }}
+            onClick={onApply}
+            disabled={selected.size === 0 || isApplying}
+          >
+            {isApplying ? 'Applying…' : `Apply Selected (${selected.size})`}
+          </button>
+        </div>
+
+        {/* Table */}
         <div style={styles.table}>
           <div style={styles.headerRow}>
             <span />
@@ -184,7 +190,7 @@ export default function ReadyToApplyList({
             return (
               <div key={item.selectionKey}>
                 <div
-                  style={{ ...styles.row, background: isChecked ? '#f0fdf4' : '#fff', opacity: isDisabled ? 0.5 : 1 }}
+                  style={{ ...styles.row, background: isChecked ? 'rgba(34,197,94,0.06)' : 'transparent', opacity: isDisabled ? 0.5 : 1 }}
                   onClick={() => !isDisabled && onToggle(item.selectionKey)}
                 >
                   <input
@@ -202,7 +208,7 @@ export default function ReadyToApplyList({
                       <span style={styles.issueWhy}>{ISSUE_WHY[item.issueId]}</span>
                     )}
                   </span>
-                  <span style={{ ...styles.pill, color: SEVERITY_COLOR[item.severity] ?? '#374151' }}>
+                  <span style={{ ...styles.pill, color: SEVERITY_COLOR[item.severity] ?? '#6b7280' }}>
                     {SEVERITY_LABEL[item.severity] ?? item.severity}
                   </span>
                   <span style={styles.safetyBadge}>{item.riskLevel === 'low' ? '✓ Safe' : item.riskLevel}</span>
@@ -219,7 +225,7 @@ export default function ReadyToApplyList({
                 </div>
                 {ps?.error && (
                   <div style={styles.previewPanel}>
-                    <span style={{ color: '#dc2626' }}>{ps.error}</span>
+                    <span style={{ color: '#f87171' }}>{ps.error}</span>
                   </div>
                 )}
                 {as?.applied && (
@@ -234,7 +240,7 @@ export default function ReadyToApplyList({
                       >
                         {as.rollingBack ? 'Undoing…' : 'Undo this change'}
                       </button>
-                      {as.error && <span style={{ color: '#dc2626', fontSize: 11 }}>{as.error}</span>}
+                      {as.error && <span style={{ color: '#f87171', fontSize: 11 }}>{as.error}</span>}
                     </div>
                   </div>
                 )}
@@ -254,14 +260,14 @@ export default function ReadyToApplyList({
                         {ps.data.currentContent && (
                           <div style={{ ...styles.previewContent, marginBottom: 8 }}>
                             <div style={styles.previewLabel}>What&apos;s on your page now</div>
-                            <div style={{ ...styles.previewText, color: '#6b7280', maxHeight: 72, overflow: 'hidden' }}>
+                            <div style={{ ...styles.previewText, color: '#4b5563', maxHeight: 72, overflow: 'hidden' }}>
                               {stripHtml(ps.data.currentContent)}
                             </div>
                           </div>
                         )}
                         <div style={styles.previewContent}>
-                          <div style={{ ...styles.previewLabel, color: '#16a34a' }}>{proposedLabel(ps.data.patchMode)}</div>
-                          <div style={{ ...styles.previewText, borderColor: '#bbf7d0', background: '#f0fdf4' }}>{ps.data.proposedContent}</div>
+                          <div style={{ ...styles.previewLabel, color: '#4ade80' }}>{proposedLabel(ps.data.patchMode)}</div>
+                          <div style={{ ...styles.previewText, borderColor: 'rgba(34,197,94,0.22)', background: 'rgba(34,197,94,0.05)' }}>{ps.data.proposedContent}</div>
                         </div>
                         <div style={styles.reversibilityNote}>
                           This change affects only this product. You can undo it instantly if needed.
@@ -281,11 +287,11 @@ export default function ReadyToApplyList({
                           >
                             Cancel
                           </button>
-                          {as?.error && <span style={{ color: '#dc2626', fontSize: 12 }}>{as.error}</span>}
+                          {as?.error && <span style={{ color: '#f87171', fontSize: 12 }}>{as.error}</span>}
                         </div>
                       </>
                     ) : (
-                      <div style={{ color: '#dc2626', fontSize: 12 }}>Not available: {ps.data.blockReason}</div>
+                      <div style={{ color: '#f87171', fontSize: 12 }}>Not available: {ps.data.blockReason}</div>
                     )}
                   </div>
                 )}
@@ -293,47 +299,51 @@ export default function ReadyToApplyList({
             );
           })}
         </div>
+        </>
       )}
     </section>
   );
 }
 
 const styles: Record<string, React.CSSProperties> = {
-  headingRow:       { display: 'flex', alignItems: 'baseline', gap: 16, marginBottom: 10 },
-  heading:          { fontSize: 16, fontWeight: 600, margin: 0 },
-  badge:            { background: '#dcfce7', color: '#166534', borderRadius: 12, padding: '1px 8px', fontSize: 12, fontWeight: 600, marginLeft: 8 },
-  summary:          { fontSize: 13, color: '#6b7280' },
+  emptyState: { display: 'flex', alignItems: 'flex-start', gap: 12, padding: '14px 0 4px' },
+  emptyDot:   { width: 7, height: 7, borderRadius: '50%', background: '#22c55e', boxShadow: '0 0 5px rgba(34,197,94,0.45)', flexShrink: 0, marginTop: 5 },
+  emptyText:  { fontSize: 13, color: '#6b7280', lineHeight: 1.65, margin: 0 },
+  headingRow:       { display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 },
+  heading:          { fontSize: 12, fontWeight: 700, margin: 0, color: '#6b7280', display: 'flex', alignItems: 'center', gap: 8 },
+  badge:            { background: 'rgba(34,197,94,0.12)', color: '#4ade80', borderRadius: 10, padding: '1px 8px', fontSize: 11, fontWeight: 700 },
+  summary:          { fontSize: 12, color: '#4b5563', marginLeft: 'auto' },
   controls:         { display: 'flex', gap: 8, marginBottom: 12, alignItems: 'center' },
-  btnSecondary:     { fontSize: 12, padding: '4px 12px', border: '1px solid #d1d5db', borderRadius: 6, background: '#fff', cursor: 'pointer', color: '#374151' },
-  btnPrimary:       { fontSize: 12, padding: '4px 14px', border: 'none', borderRadius: 6, background: '#16a34a', color: '#fff', cursor: 'pointer', fontWeight: 600, transition: 'opacity 0.15s' },
-  btnPreview:       { fontSize: 11, padding: '3px 10px', border: '1px solid #d1d5db', borderRadius: 5, background: '#fff', cursor: 'pointer', color: '#374151', whiteSpace: 'nowrap' },
-  btnPreviewActive: { background: '#eff6ff', borderColor: '#3b82f6', color: '#1d4ed8' },
-  empty:            { color: '#9ca3af', fontSize: 14 },
-  table:            { border: '1px solid #e5e7eb', borderRadius: 8, overflow: 'hidden' },
-  headerRow:        { display: 'grid', gridTemplateColumns: '32px 2fr 1fr 1fr 1fr 72px', gap: 8, padding: '8px 16px', background: '#f9fafb', fontSize: 11, fontWeight: 600, color: '#6b7280', textTransform: 'uppercase' },
-  row:              { display: 'grid', gridTemplateColumns: '32px 2fr 1fr 1fr 1fr 72px', gap: 8, padding: '10px 16px', borderTop: '1px solid #f3f4f6', fontSize: 13, alignItems: 'center', cursor: 'pointer' },
+  btnSecondary:     { fontSize: 12, padding: '5px 12px', border: '1px solid rgba(255,255,255,0.12)', borderRadius: 6, background: 'rgba(255,255,255,0.04)', cursor: 'pointer', color: '#d1d5db' },
+  btnPrimary:       { fontSize: 12, padding: '5px 16px', border: 'none', borderRadius: 6, background: '#15803d', color: '#fff', cursor: 'pointer', fontWeight: 700, transition: 'opacity 0.15s' },
+  btnPreview:       { fontSize: 11, padding: '3px 10px', border: '1px solid rgba(255,255,255,0.09)', borderRadius: 5, background: 'rgba(255,255,255,0.03)', cursor: 'pointer', color: '#6b7280', whiteSpace: 'nowrap' as const },
+  btnPreviewActive: { background: 'rgba(59,130,246,0.08)', borderColor: 'rgba(96,165,250,0.3)', color: '#60a5fa' },
+  empty:            { color: '#4b5563', fontSize: 13 },
+  table:            { border: '1px solid rgba(255,255,255,0.07)', borderRadius: 8, overflow: 'hidden' },
+  headerRow:        { display: 'grid', gridTemplateColumns: '32px 2fr 1fr 1fr 1fr 72px', gap: 8, padding: '8px 16px', background: 'rgba(255,255,255,0.03)', fontSize: 10, fontWeight: 700, color: '#374151', textTransform: 'uppercase' as const, letterSpacing: '0.06em' },
+  row:              { display: 'grid', gridTemplateColumns: '32px 2fr 1fr 1fr 1fr 72px', gap: 8, padding: '12px 16px', borderTop: '1px solid rgba(255,255,255,0.05)', fontSize: 13, alignItems: 'center', cursor: 'pointer' },
   titleCell:        { display: 'flex', flexDirection: 'column' as const, gap: 2 },
-  productName:      { fontSize: 11, fontWeight: 600, color: '#6b7280', textTransform: 'uppercase' as const, letterSpacing: '0.04em' },
-  title:            { color: '#111827', fontWeight: 500 },
-  issueWhy:         { fontSize: 11, color: '#9ca3af', lineHeight: 1.4 },
-  pill:             { fontWeight: 600, fontSize: 12 },
-  safetyBadge:      { fontSize: 12, color: '#16a34a' },
-  statusBadge:      { fontSize: 12, color: '#6b7280' },
-  statusReady:      { color: '#16a34a', fontWeight: 600 },
-  previewPanel:       { padding: '12px 16px 14px 48px', background: '#f8fafc', borderTop: '1px solid #e5e7eb', fontSize: 12 },
+  productName:      { fontSize: 10, fontWeight: 700, color: '#4b5563', textTransform: 'uppercase' as const, letterSpacing: '0.06em' },
+  title:            { color: '#e5e7eb', fontWeight: 500 },
+  issueWhy:         { fontSize: 11, color: '#4b5563', lineHeight: 1.4 },
+  pill:             { fontWeight: 700, fontSize: 11 },
+  safetyBadge:      { fontSize: 11, color: '#4ade80' },
+  statusBadge:      { fontSize: 11, color: '#4b5563' },
+  statusReady:      { color: '#4ade80', fontWeight: 700 },
+  previewPanel:       { padding: '14px 18px 16px 56px', background: '#0d120d', borderTop: '1px solid rgba(255,255,255,0.05)', fontSize: 12 },
   previewContext:     { display: 'flex', alignItems: 'baseline', gap: 12, marginBottom: 10, flexWrap: 'wrap' as const },
-  previewContextText: { fontSize: 13, color: '#374151', fontWeight: 500 },
-  previewDiffNote:    { fontSize: 11, color: '#9ca3af' },
-  copyIntentNote:     { fontSize: 12, color: '#374151', background: '#f0f9ff', border: '1px solid #bae6fd', borderRadius: 5, padding: '6px 10px', margin: '0 0 10px', lineHeight: 1.5 },
+  previewContextText: { fontSize: 13, color: '#9ca3af', fontWeight: 500 },
+  previewDiffNote:    { fontSize: 11, color: '#4b5563' },
+  copyIntentNote:     { fontSize: 12, color: '#9ca3af', background: 'rgba(59,130,246,0.06)', border: '1px solid rgba(96,165,250,0.15)', borderRadius: 5, padding: '6px 10px', margin: '0 0 10px', lineHeight: 1.5 },
   previewContent:     {},
-  previewLabel:       { fontSize: 11, fontWeight: 600, color: '#6b7280', textTransform: 'uppercase' as const, marginBottom: 4 },
-  previewText:        { background: '#fff', border: '1px solid #e5e7eb', borderRadius: 6, padding: '8px 12px', color: '#111827', lineHeight: 1.5, whiteSpace: 'pre-wrap' as const },
-  reversibilityNote:  { fontSize: 11, color: '#6b7280', margin: '10px 0 6px', fontStyle: 'italic' as const },
+  previewLabel:       { fontSize: 10, fontWeight: 700, color: '#4b5563', textTransform: 'uppercase' as const, letterSpacing: '0.06em', marginBottom: 4 },
+  previewText:        { background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 6, padding: '8px 12px', color: '#d1d5db', lineHeight: 1.5, whiteSpace: 'pre-wrap' as const },
+  reversibilityNote:  { fontSize: 11, color: '#374151', margin: '10px 0 6px', fontStyle: 'italic' as const },
   previewActions:     { display: 'flex', gap: 8, marginTop: 4, alignItems: 'center' },
-  btnApprove:         { fontSize: 12, padding: '6px 16px', border: 'none', borderRadius: 6, background: '#16a34a', color: '#fff', cursor: 'pointer', fontWeight: 600 },
-  btnCancel:          { fontSize: 12, padding: '5px 12px', border: '1px solid #d1d5db', borderRadius: 6, background: '#fff', cursor: 'pointer', color: '#374151' },
-  successPanel:       { padding: '14px 16px 14px 48px', background: '#f0fdf4', borderTop: '1px solid #bbf7d0', display: 'flex', flexDirection: 'column' as const, gap: 4 },
-  successMain:        { fontSize: 13, fontWeight: 600, color: '#15803d' },
-  successSub:         { fontSize: 11, color: '#166534' },
+  btnApprove:         { fontSize: 12, padding: '6px 18px', border: 'none', borderRadius: 6, background: '#15803d', color: '#fff', cursor: 'pointer', fontWeight: 700 },
+  btnCancel:          { fontSize: 12, padding: '5px 12px', border: '1px solid rgba(255,255,255,0.10)', borderRadius: 6, background: 'rgba(255,255,255,0.03)', cursor: 'pointer', color: '#9ca3af' },
+  successPanel:       { padding: '14px 18px 14px 56px', background: 'rgba(34,197,94,0.06)', borderTop: '1px solid rgba(34,197,94,0.14)', display: 'flex', flexDirection: 'column' as const, gap: 4 },
+  successMain:        { fontSize: 13, fontWeight: 600, color: '#4ade80' },
+  successSub:         { fontSize: 11, color: '#22c55e' },
   successFooter:      { display: 'flex', alignItems: 'center', gap: 8, marginTop: 6 },
 };

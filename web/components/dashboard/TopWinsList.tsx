@@ -1,4 +1,5 @@
 import type { TopWin } from '@/lib/api';
+import { issueLabel } from '@/lib/api';
 
 function pct(v: number | null) {
   if (v === null) return '—';
@@ -6,8 +7,8 @@ function pct(v: number | null) {
 }
 
 function pctColor(v: number | null): string {
-  if (v === null) return '#6b7280';
-  return v > 0 ? '#16a34a' : v < 0 ? '#dc2626' : '#6b7280';
+  if (v === null) return '#4b5563';
+  return v > 0 ? '#4ade80' : v < 0 ? '#f87171' : '#6b7280';
 }
 
 export default function TopWinsList({ items }: { items: TopWin[] }) {
@@ -26,7 +27,7 @@ export default function TopWinsList({ items }: { items: TopWin[] }) {
       <div style={styles.list}>
         {items.map((win) => (
           <div key={win.executionId} style={styles.card}>
-            <div style={styles.issueId}>{win.issueId}</div>
+            <div style={styles.issueId}>{issueLabel(win.issueId)}</div>
             <div style={styles.metrics}>
               <span style={{ color: pctColor(win.revenueChangePercent) }}>
                 Revenue {pct(win.revenueChangePercent)}
@@ -46,10 +47,10 @@ export default function TopWinsList({ items }: { items: TopWin[] }) {
 }
 
 const styles: Record<string, React.CSSProperties> = {
-  heading: { fontSize: 16, fontWeight: 600, marginBottom: 12 },
-  empty:   { color: '#9ca3af', fontSize: 14 },
-  list:    { display: 'flex', flexDirection: 'column', gap: 8 },
-  card:    { background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: 8, padding: '12px 16px' },
-  issueId: { fontSize: 13, fontWeight: 600, color: '#111827', marginBottom: 6 },
-  metrics: { display: 'flex', gap: 20, fontSize: 13, fontWeight: 500 },
+  heading: { fontSize: 12, fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase' as const, color: '#6b7280', marginBottom: 10 },
+  empty:   { color: '#4b5563', fontSize: 13 },
+  list:    { display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 20 },
+  card:    { background: 'rgba(34,197,94,0.05)', border: '1px solid rgba(34,197,94,0.14)', borderRadius: 8, padding: '12px 18px' },
+  issueId: { fontSize: 13, fontWeight: 600, color: '#e5e7eb', marginBottom: 6 },
+  metrics: { display: 'flex', gap: 20, fontSize: 12, fontWeight: 600 },
 };
