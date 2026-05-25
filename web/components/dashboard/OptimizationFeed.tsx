@@ -47,7 +47,9 @@ interface Props {
   onSelectAll:      () => void;
   onClearSelection: () => void;
   onApply:          () => void;
-  onFocus?:         (row: FeedRow) => void;
+  onSelect?:        (row: FeedRow) => void;
+  selectedKey?:     string | null;
+  narrow?:          boolean;
 }
 
 // ── Data helpers ───────────────────────────────────────────────────────────────
@@ -137,19 +139,20 @@ function stripHtml(html: string | null): string {
 
 // ── Presentational sub-components ─────────────────────────────────────────────
 
-function SectionBlock({ accent, label, count, sub, muted = false, children }: {
+function SectionBlock({ accent, label, count, sub, muted = false, narrow = false, children }: {
   accent:   string;
   label:    string;
   count:    number;
   sub:      string;
   muted?:   boolean;
+  narrow?:  boolean;
   children: React.ReactNode;
 }) {
   return (
     <div style={{ opacity: muted ? 0.65 : 1 }}>
-      <div style={{ borderTop: `2px solid ${accent}`, paddingTop: 12, marginBottom: 12 }}>
+      <div style={{ borderTop: `2px solid ${accent}`, paddingTop: narrow ? 8 : 12, marginBottom: narrow ? 7 : 12 }}>
         <div style={sb.titleRow}>
-          <span style={sb.label}>{label}</span>
+          <span style={{ ...sb.label, fontSize: narrow ? 10 : 13 }}>{label}</span>
           <span style={{
             fontSize: 10, fontWeight: 700, padding: '1px 7px', borderRadius: 10,
             color: accent, background: `${accent}18`, border: `1px solid ${accent}30`,
@@ -157,7 +160,7 @@ function SectionBlock({ accent, label, count, sub, muted = false, children }: {
             {count}
           </span>
         </div>
-        <p style={sb.sub}>{sub}</p>
+        {!narrow && <p style={sb.sub}>{sub}</p>}
       </div>
       {children}
     </div>
@@ -326,14 +329,15 @@ const FILTER_TABS: { key: SectionFilter; label: string; color: string }[] = [
 ];
 
 function FeedFilterBar({
-  active, onChange, counts,
+  active, onChange, counts, narrow,
 }: {
   active:   SectionFilter;
   onChange: (f: SectionFilter) => void;
   counts:   Record<SectionFilter, number>;
+  narrow?:  boolean;
 }) {
   return (
-    <div style={ff.bar}>
+    <div style={{ ...ff.bar, marginBottom: narrow ? 14 : 24 }}>
       {FILTER_TABS.map(tab => {
         const isActive = active === tab.key;
         const count    = counts[tab.key];
@@ -343,6 +347,8 @@ function FeedFilterBar({
             key={tab.key}
             style={{
               ...ff.tab,
+              fontSize:     narrow ? 10 : 13,
+              padding:      narrow ? '5px 8px 6px' : '8px 14px 9px',
               color:        isActive ? tab.color : isEmpty ? '#374151' : '#6b7280',
               borderBottom: isActive ? `2px solid ${tab.color}` : '2px solid transparent',
               opacity:      isEmpty ? 0.45 : 1,
@@ -372,7 +378,7 @@ function FeedFilterBar({
 export default function OptimizationFeed({
   shop, readyItems, topActions, recentActivity,
   executing, selected, isApplying, applyResult, applyError,
-  onRunAction, onToggle, onSelectAll, onClearSelection, onApply, onFocus,
+  onRunAction, onToggle, onSelectAll, onClearSelection, onApply, onSelect, selectedKey, narrow,
 }: Props) {
   const [previews,    setPreviews]    = useState<Record<string, PreviewState>>({});
   const [applyStates, setApplyStates] = useState<Record<string, ApplyState>>({});
@@ -382,6 +388,9 @@ export default function OptimizationFeed({
 
   const rows = buildRows(readyItems, topActions, recentActivity);
   const { ready, wins, measuring, upnext, protection } = groupRows(rows);
+
+  const rowStyle       = narrow ? { ...s.row, padding: '8px 12px' }      : s.row;
+  const rowActionsStyle = narrow ? { ...s.rowActions, minWidth: 68 }       : s.rowActions;
   const selectableCount = readyItems.filter(i => i.selectable).length;
   const totalRows       = ready.length + wins.length + measuring.length + upnext.length + protection.length;
 
@@ -451,14 +460,20 @@ export default function OptimizationFeed({
     const pvState   = previews[item.selectionKey];
     const apState   = applyStates[item.selectionKey];
     const applied   = apState?.applied;
-    const isHovered = hoveredKey === row.key;
-    const rowBg = isChecked ? 'rgba(34,197,94,0.07)' : isHovered ? 'rgba(255,255,255,0.025)' : '#0f140f';
+    const isHovered  = hoveredKey === row.key;
+    const isSelected = row.key === selectedKey;
+    const rowBg = isSelected
+      ? 'rgba(34,197,94,0.12)'
+      : isChecked ? 'rgba(34,197,94,0.07)'
+      : isHovered ? 'rgba(255,255,255,0.03)'
+      : '#0f140f';
+    const rowShadow = isSelected ? 'inset 3px 0 0 #22c55e' : undefined;
     return (
       <div key={row.key} style={{ ...s.rowWrap, opacity: applied ? 0.5 : 1 }}>
         <div
-          style={{ ...s.row, background: rowBg, cursor: item.selectable ? 'pointer' : 'default' }}
-          onClick={() => item.selectable && !applied && onToggle(item.selectionKey)}
-          onMouseEnter={() => { setHoveredKey(row.key); onFocus?.(row); }}
+          style={{ ...rowStyle, background: rowBg, boxShadow: rowShadow, cursor: 'pointer' }}
+          onClick={() => { onSelect?.(row); item.selectable && !applied && onToggle(item.selectionKey); }}
+          onMouseEnter={() => setHoveredKey(row.key)}
           onMouseLeave={() => setHoveredKey(null)}
         >
           <input
@@ -471,10 +486,10 @@ export default function OptimizationFeed({
           />
           <Pill status="ready" />
           <div style={s.rowMain}>
-            {item.productTitle && <span style={s.product}>{item.productTitle}</span>}
-            <span style={s.issue}>{issueLabel(item.issueId)}</span>
+            {item.productTitle && <span style={{ ...s.product, ...(narrow ? s.truncate : {}) }}>{item.productTitle}</span>}
+            <span style={{ ...s.issue, ...(narrow ? s.truncate : {}) }}>{issueLabel(item.issueId)}</span>
           </div>
-          <div style={s.rowActions}>
+          <div style={rowActionsStyle}>
             {applied ? (
               <span style={s.appliedBadge}>Live ✓</span>
             ) : (
@@ -511,17 +526,19 @@ export default function OptimizationFeed({
       const isLive = row.feedStatus === 'live';
       return (
         <div key={row.key} style={s.rowWrap}>
-          <div style={{ ...s.row, background: hoveredKey === row.key ? 'rgba(255,255,255,0.025)' : '#0f140f', cursor: 'default' }}
-               onMouseEnter={() => { setHoveredKey(row.key); onFocus?.(row); }} onMouseLeave={() => setHoveredKey(null)}>
+          <div style={{ ...rowStyle,
+            background: row.key === selectedKey ? 'rgba(34,197,94,0.12)' : hoveredKey === row.key ? 'rgba(255,255,255,0.03)' : '#0f140f',
+            boxShadow:  row.key === selectedKey ? 'inset 3px 0 0 #22c55e' : undefined,
+            cursor: 'pointer' }}
+               onClick={() => onSelect?.(row)}
+               onMouseEnter={() => setHoveredKey(row.key)} onMouseLeave={() => setHoveredKey(null)}>
             <Pill status={row.feedStatus} />
             <div style={s.rowMain}>
-              {item.productTitle && <span style={s.product}>{item.productTitle}</span>}
-              <span style={s.issue}>{issueLabel(item.issueId)}</span>
-              <span style={s.sub}>
-                {isLive ? 'Applied — tracking begins automatically' : 'Measuring — 7-day window'}
-              </span>
+              {item.productTitle && <span style={{ ...s.product, ...(narrow ? s.truncate : {}) }}>{item.productTitle}</span>}
+              <span style={{ ...s.issue, ...(narrow ? s.truncate : {}) }}>{issueLabel(item.issueId)}</span>
+              {!narrow && <span style={s.sub}>{isLive ? 'Applied — tracking begins automatically' : 'Measuring — 7-day window'}</span>}
             </div>
-            <div style={s.rowActions}>
+            <div style={rowActionsStyle}>
               <span style={s.meta}>{formatDate(item.createdAt)}</span>
               {isLive && !rb?.done && (
                 <button
@@ -544,16 +561,20 @@ export default function OptimizationFeed({
       const action = row.topAction;
       return (
         <div key={row.key} style={s.rowWrap}>
-          <div style={{ ...s.row, background: hoveredKey === row.key ? 'rgba(255,255,255,0.025)' : '#0f140f' }}
-               onMouseEnter={() => { setHoveredKey(row.key); onFocus?.(row); }} onMouseLeave={() => setHoveredKey(null)}>
+          <div style={{ ...rowStyle,
+            background: row.key === selectedKey ? 'rgba(34,197,94,0.12)' : hoveredKey === row.key ? 'rgba(255,255,255,0.03)' : '#0f140f',
+            boxShadow:  row.key === selectedKey ? 'inset 3px 0 0 #22c55e' : undefined,
+            cursor: 'pointer' }}
+               onClick={() => onSelect?.(row)}
+               onMouseEnter={() => setHoveredKey(row.key)} onMouseLeave={() => setHoveredKey(null)}>
             <Pill status="measuring" />
             <div style={s.rowMain}>
-              <span style={s.product}>{action.productTitle}</span>
-              <span style={s.issue}>{action.recommendedAction}</span>
-              <span style={s.sub}>Measuring — 7-day window</span>
+              <span style={{ ...s.product, ...(narrow ? s.truncate : {}) }}>{action.productTitle}</span>
+              <span style={{ ...s.issue, ...(narrow ? s.truncate : {}) }}>{issueLabel(action.issueId)}</span>
+              {!narrow && <span style={s.sub}>Measuring — 7-day window</span>}
             </div>
             {action.openMeasurementWindowReadyAt && (
-              <div style={s.rowActions}>
+              <div style={rowActionsStyle}>
                 <span style={s.meta}>Results {formatReadyAt(action.openMeasurementWindowReadyAt)}</span>
               </div>
             )}
@@ -567,7 +588,10 @@ export default function OptimizationFeed({
   function renderUpnextRow(row: FeedRow, isHero: boolean) {
     if (isHero) {
       return (
-        <div key={row.key} onMouseEnter={() => onFocus?.(row)}>
+        <div key={row.key}
+          onClick={() => onSelect?.(row)}
+          style={row.key === selectedKey ? { boxShadow: 'inset 3px 0 0 #22c55e' } : {}}
+        >
           <HeroNextCard row={row} executing={executing} onRunAction={onRunAction} />
         </div>
       );
@@ -576,15 +600,19 @@ export default function OptimizationFeed({
     const isRunning = executing.has(action.actionKey);
     return (
       <div key={row.key} style={s.rowWrap}>
-        <div style={{ ...s.row, background: hoveredKey === row.key ? 'rgba(255,255,255,0.025)' : '#0f140f' }}
-             onMouseEnter={() => { setHoveredKey(row.key); onFocus?.(row); }} onMouseLeave={() => setHoveredKey(null)}>
+        <div style={{ ...rowStyle,
+          background: row.key === selectedKey ? 'rgba(34,197,94,0.12)' : hoveredKey === row.key ? 'rgba(255,255,255,0.03)' : '#0f140f',
+          boxShadow:  row.key === selectedKey ? 'inset 3px 0 0 #22c55e' : undefined,
+          cursor: 'pointer' }}
+             onClick={() => onSelect?.(row)}
+             onMouseEnter={() => setHoveredKey(row.key)} onMouseLeave={() => setHoveredKey(null)}>
           <Pill status="queued" />
           <div style={s.rowMain}>
-            <span style={s.product}>{action.productTitle}</span>
-            <span style={s.issue}>{action.recommendedAction}</span>
-            {action.whyNow && <span style={s.sub}>{action.whyNow}</span>}
+            <span style={{ ...s.product, ...(narrow ? s.truncate : {}) }}>{action.productTitle}</span>
+            <span style={{ ...s.issue, ...(narrow ? s.truncate : {}) }}>{issueLabel(action.issueId)}</span>
+            {!narrow && action.whyNow && <span style={s.sub}>{action.whyNow}</span>}
           </div>
-          <div style={s.rowActions}>
+          <div style={rowActionsStyle}>
             {action.estimatedImpactLabel && <span style={s.meta}>{action.estimatedImpactLabel}</span>}
             <button
               style={{ ...s.runBtn, opacity: isRunning ? 0.6 : 1 }}
@@ -599,6 +627,35 @@ export default function OptimizationFeed({
     );
   }
 
+  function renderCompactWinRow(row: FeedRow) {
+    const item       = row.activityItem!;
+    const pct        = item.revenueChangePercent ?? 0;
+    const isSelected = row.key === selectedKey;
+    const isHovered  = hoveredKey === row.key;
+    return (
+      <div key={row.key} style={s.rowWrap}>
+        <div
+          style={{ ...rowStyle,
+            background: isSelected ? 'rgba(34,197,94,0.12)' : isHovered ? 'rgba(255,255,255,0.03)' : '#0f140f',
+            boxShadow:  isSelected ? 'inset 3px 0 0 #22c55e' : undefined,
+            cursor: 'pointer' }}
+          onClick={() => onSelect?.(row)}
+          onMouseEnter={() => setHoveredKey(row.key)}
+          onMouseLeave={() => setHoveredKey(null)}
+        >
+          <Pill status={row.feedStatus} />
+          <div style={s.rowMain}>
+            {item.productTitle && <span style={{ ...s.product, ...s.truncate }}>{item.productTitle}</span>}
+            <span style={{ ...s.issue, ...s.truncate }}>{issueLabel(item.issueId)}</span>
+          </div>
+          <span style={{ fontSize: 13, fontWeight: 800, color: '#4ade80', flexShrink: 0, letterSpacing: '-0.01em' }}>
+            +{Math.round(pct)}%
+          </span>
+        </div>
+      </div>
+    );
+  }
+
   function renderProtectionRow(row: FeedRow) {
     if (!row.activityItem) return null;
     const item = row.activityItem;
@@ -608,23 +665,23 @@ export default function OptimizationFeed({
     const pct  = item.revenueChangePercent ?? 0;
     const liftColor = pct > 0 ? '#4ade80' : pct < 0 ? '#f87171' : '#6b7280';
     return (
-      <div key={row.key} style={s.rowWrap} onMouseEnter={() => onFocus?.(row)}>
-        <div style={{ ...s.row, opacity: 0.65 }}>
+      <div key={row.key} style={{ ...s.rowWrap, cursor: 'pointer' }} onClick={() => onSelect?.(row)}>
+        <div style={{ ...rowStyle, opacity: 0.65, boxShadow: row.key === selectedKey ? 'inset 3px 0 0 rgba(255,255,255,0.35)' : undefined }}>
           <Pill status={isRolledBack ? 'rolled_back' : 'measured'} />
           <div style={s.rowMain}>
             {item.productTitle && <span style={s.product}>{item.productTitle}</span>}
             <span style={{ ...s.issue, color: '#6b7280' }}>{issueLabel(item.issueId)}</span>
-            {isRolledBack && <span style={s.sub}>Reverted automatically</span>}
+            {!narrow && isRolledBack && <span style={s.sub}>Reverted automatically</span>}
             {showLift && (
-              <span style={{ ...s.sub, color: liftColor }}>
-                {pct > 0 ? '+' : ''}{Math.round(pct)}% revenue · 7-day
+              <span style={{ ...s.sub, color: liftColor, ...(narrow ? s.truncate : {}) }}>
+                {pct > 0 ? '+' : ''}{Math.round(pct)}%{!narrow && ' revenue · 7-day'}
               </span>
             )}
-            {row.feedStatus === 'measured' && item.measurementConfidence === 'insufficient' && (
+            {!narrow && row.feedStatus === 'measured' && item.measurementConfidence === 'insufficient' && (
               <span style={s.sub}>Window complete — not enough orders for a result</span>
             )}
           </div>
-          <div style={s.rowActions}>
+          <div style={rowActionsStyle}>
             <span style={s.meta}>{formatDate(item.createdAt)}</span>
           </div>
         </div>
@@ -651,8 +708,8 @@ export default function OptimizationFeed({
 
   return (
     <div>
-      <FeedFilterBar active={activeSection} onChange={setActiveSection} counts={filterCounts} />
-      <div style={s.sections}>
+      <FeedFilterBar active={activeSection} onChange={setActiveSection} counts={filterCounts} narrow={narrow} />
+      <div style={{ ...s.sections, gap: narrow ? 20 : 28 }}>
 
       {/* ── WINS: proof the system delivers ──────────────────────────────── */}
       {showSection('wins') && wins.length > 0 && (
@@ -661,14 +718,24 @@ export default function OptimizationFeed({
           label="Proven wins"
           count={wins.length}
           sub="Confirmed revenue lift. Already live and working on your store."
+          narrow={narrow}
         >
-          <div style={{ ...s.list, borderColor: 'rgba(34,197,94,0.14)' }}>
-            {wins.map(row => (
-              <div key={row.key} onMouseEnter={() => onFocus?.(row)}>
-                <WinCard row={row} />
-              </div>
-            ))}
-          </div>
+          {narrow ? (
+            <div style={s.list}>
+              {wins.map(row => renderCompactWinRow(row))}
+            </div>
+          ) : (
+            <div style={{ ...s.list, borderColor: 'rgba(34,197,94,0.14)' }}>
+              {wins.map(row => (
+                <div key={row.key}
+                  onClick={() => onSelect?.(row)}
+                  style={row.key === selectedKey ? { boxShadow: 'inset 3px 0 0 rgba(74,222,128,0.65)' } : {}}
+                >
+                  <WinCard row={row} />
+                </div>
+              ))}
+            </div>
+          )}
         </SectionBlock>
       )}
 
@@ -679,6 +746,7 @@ export default function OptimizationFeed({
           label="Measuring now"
           count={measuring.length}
           sub="Live on your store. Revenue data collecting — results within 7 days."
+          narrow={narrow}
         >
           <div style={s.list}>{measuring.map(row => renderMeasuringRow(row))}</div>
         </SectionBlock>
@@ -691,6 +759,7 @@ export default function OptimizationFeed({
           label="Ready to apply"
           count={ready.length}
           sub="Reviewed and ready. Goes live instantly — reversible any time."
+          narrow={narrow}
         >
           {selectableCount > 0 && (
             <div style={s.batchBar}>
@@ -723,9 +792,10 @@ export default function OptimizationFeed({
           label="Highest upside next"
           count={upnext.length}
           sub="Highest commercial upside surfaced. Ranked by expected revenue impact."
+          narrow={narrow}
         >
           <div>
-            {renderUpnextRow(upnext[0], true)}
+            {renderUpnextRow(upnext[0], !narrow)}
             {upnext.length > 1 && (
               <div style={{ ...s.list, marginTop: 8 }}>
                 {upnext.slice(1).map(row => renderUpnextRow(row, false))}
@@ -743,6 +813,7 @@ export default function OptimizationFeed({
           count={protection.length}
           sub="Underperformed — reverted automatically. Your store is protected."
           muted={true}
+          narrow={narrow}
         >
           <div style={s.list}>{protection.map(row => renderProtectionRow(row))}</div>
         </SectionBlock>
@@ -778,6 +849,7 @@ const s: Record<string, React.CSSProperties> = {
   product:        { fontSize: 10, fontWeight: 700, color: '#6b7280', textTransform: 'uppercase' as const, letterSpacing: '0.06em' },
   issue:          { fontSize: 13, fontWeight: 600, color: '#e5e7eb' },
   sub:            { fontSize: 11, color: '#6b7280', lineHeight: 1.4 },
+  truncate:       { overflow: 'hidden', whiteSpace: 'nowrap' as const, textOverflow: 'ellipsis' },
   meta:           { fontSize: 11, color: '#6b7280', whiteSpace: 'nowrap' as const },
 
   previewBtn:       { fontSize: 11, padding: '4px 12px', border: '1px solid rgba(255,255,255,0.12)', borderRadius: 5, background: 'rgba(255,255,255,0.04)', cursor: 'pointer', color: '#9ca3af', whiteSpace: 'nowrap' as const, fontWeight: 500 },

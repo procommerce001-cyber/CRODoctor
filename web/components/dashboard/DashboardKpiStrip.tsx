@@ -22,9 +22,59 @@ function fmtPct(n: number): string {
   return `${n >= 0 ? '+' : ''}${Math.round(n)}%`;
 }
 
+// ── Hero number waterfall: show highest-value real signal available ──────────
+function resolveHero(
+  improved: number,
+  waiting:  number,
+  scanned:  number,
+  liftPct:  number | null,
+  revAdded: number | null,
+  loading:  boolean,
+): { value: string; label: string; sub: string | null; color: string } {
+
+  if (!loading && revAdded !== null && Math.abs(revAdded) >= 1) {
+    return {
+      value: fmtRevenue(revAdded),
+      label: revAdded >= 0 ? 'measured revenue impact' : 'revenue change measured',
+      sub:   improved > 0 ? `${improved} improvement${improved !== 1 ? 's' : ''} live on store` : null,
+      color: revAdded >= 0 ? '#4ade80' : '#f87171',
+    };
+  }
+  if (!loading && liftPct !== null && Math.abs(liftPct) >= 1) {
+    return {
+      value: fmtPct(liftPct),
+      label: 'orders lift measured',
+      sub:   waiting > 0 ? `${waiting} still validating` : (improved > 0 ? `${improved} live` : null),
+      color: liftPct >= 0 ? '#4ade80' : '#f87171',
+    };
+  }
+  if (improved > 0) {
+    return {
+      value: String(improved),
+      label: `improvement${improved !== 1 ? 's' : ''} live on store`,
+      sub:   waiting > 0 ? `${waiting} measuring impact now` : 'tracking revenue impact',
+      color: '#22c55e',
+    };
+  }
+  if (scanned > 0) {
+    return {
+      value: String(scanned),
+      label: 'products in active optimization',
+      sub:   'First improvements ready to apply',
+      color: '#9ca3af',
+    };
+  }
+  return {
+    value: '—',
+    label: 'Monitoring active',
+    sub:   'Improvements loading',
+    color: '#6b7280',
+  };
+}
+
 export default function DashboardKpiStrip({ shop, overview, review }: Props) {
-  const [revenue, setRevenue]   = useState<RevenueDashboardData | null>(null);
-  const [loading, setLoading]   = useState(true);
+  const [revenue, setRevenue] = useState<RevenueDashboardData | null>(null);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     fetchRevenueDashboard(shop)
@@ -33,147 +83,183 @@ export default function DashboardKpiStrip({ shop, overview, review }: Props) {
       .finally(() => setLoading(false));
   }, [shop]);
 
-  const scanned  = review.summary.requestedProductCount ?? 0;
   const improved = overview.totalAppliedExecutions;
+  const waiting  = overview.waitingExecutions;
+  const scanned  = review.summary.requestedProductCount ?? 0;
   const hasData  = !loading && revenue !== null && !revenue.empty;
 
-  const liftPct  = hasData ? (revenue!.ordersGrowthPercent  ?? null) : null;
-  const revAdded = hasData ? (revenue!.totalRevenueImpact   ?? null) : null;
+  const liftPct  = hasData ? (revenue!.ordersGrowthPercent ?? null) : null;
+  const revAdded = hasData ? (revenue!.totalRevenueImpact  ?? null) : null;
 
-  const summary =
-    improved === 0
-      ? `${scanned} product${scanned === 1 ? '' : 's'} scanned — your first improvements are ready to review.`
-      : hasData && liftPct !== null
-      ? `${improved} improvement${improved === 1 ? '' : 's'} live · ${fmtPct(liftPct)} orders growth measured so far.`
-      : `${improved} improvement${improved === 1 ? '' : 's'} live on your store · measuring commercial impact now.`;
+  const hero = resolveHero(improved, waiting, scanned, liftPct, revAdded, loading);
 
   return (
     <div style={s.wrap}>
-      <p style={s.summary}>{summary}</p>
-      <div style={s.grid}>
+      <div style={s.heroLayout}>
 
-        <KpiCard
-          label="Products Monitored"
-          value={scanned > 0 ? String(scanned) : '—'}
-          sub="in optimization scope"
-          state="ready"
-          positive={null}
-        />
+        {/* ── Left: hero outcome number ──────────────────────────────────── */}
+        <div style={s.heroLeft}>
+          <div style={{ ...s.heroNumber, color: hero.color }}>{hero.value}</div>
+          <div style={s.heroLabel}>{hero.label}</div>
+          {hero.sub && <div style={s.heroSub}>{hero.sub}</div>}
+        </div>
 
-        <KpiCard
-          label="Improvements Live"
-          value={improved > 0 ? String(improved) : '—'}
-          sub={improved > 0 ? 'live on store' : 'none yet'}
-          state="ready"
-          positive={improved > 0 ? true : null}
-        />
+        <div style={s.divider} />
 
-        <KpiCard
-          label="Conversion Lift"
-          value={liftPct !== null ? fmtPct(liftPct) : null}
-          sub={liftPct !== null ? 'orders growth measured' : null}
-          state={loading ? 'loading' : !hasData ? 'pending' : liftPct === null ? 'pending' : 'ready'}
-          positive={liftPct !== null ? liftPct >= 0 : null}
-          pendingLabel="Collecting data"
-        />
+        {/* ── Right: 4 compact supporting stats in 2×2 ──────────────────── */}
+        <div style={s.statsGrid}>
+          <StatCell
+            label="Live on Store"
+            value={improved > 0 ? String(improved) : null}
+            pending="None yet"
+            color={improved > 0 ? '#22c55e' : undefined}
+          />
+          <StatCell
+            label="Measuring Now"
+            value={waiting > 0 ? String(waiting) : null}
+            pending="None active"
+            color={waiting > 0 ? '#fbbf24' : undefined}
+          />
+          <StatCell
+            label="Orders Lift"
+            value={liftPct !== null ? fmtPct(liftPct) : null}
+            pending={loading ? '—' : 'Collecting'}
+            color={liftPct !== null ? (liftPct >= 0 ? '#4ade80' : '#f87171') : undefined}
+          />
+          <StatCell
+            label="Revenue Impact"
+            value={revAdded !== null ? fmtRevenue(revAdded) : null}
+            pending={loading ? '—' : 'Measuring'}
+            color={revAdded !== null ? (revAdded >= 0 ? '#4ade80' : '#f87171') : undefined}
+          />
+        </div>
 
-        <KpiCard
-          label="Revenue Added"
-          value={revAdded !== null ? fmtRevenue(revAdded) : null}
-          sub={revAdded !== null ? 'measured impact' : null}
-          state={loading ? 'loading' : !hasData ? 'pending' : revAdded === null ? 'pending' : 'ready'}
-          positive={revAdded !== null ? revAdded >= 0 : null}
-          pendingLabel="Building baseline"
-        />
+      </div>
 
+      {/* ── Trust bar ──────────────────────────────────────────────────────── */}
+      <div style={s.trustBar}>
+        <span style={s.trustDot} />
+        <span style={s.trustText}>
+          System active · All changes reversible · Store auto-protected
+        </span>
       </div>
     </div>
   );
 }
 
-function KpiCard({ label, value, sub, state, positive, pendingLabel }: {
-  label:         string;
-  value:         string | null;
-  sub:           string | null;
-  state:         'ready' | 'loading' | 'pending';
-  positive:      boolean | null;
-  pendingLabel?: string;
+function StatCell({ label, value, pending, color }: {
+  label:   string;
+  value:   string | null;
+  pending: string;
+  color?:  string;
 }) {
-  const valueColor =
-    positive === true  ? '#4ade80' :
-    positive === false ? '#f87171' :
-    '#ffffff';
-
+  const isReal = value !== null;
   return (
-    <div style={s.card}>
-      <div style={s.cardLabel}>{label}</div>
-      {state === 'loading' ? (
-        <div style={s.cardPending}>Measuring…</div>
-      ) : state === 'pending' || value === null ? (
-        <div style={s.cardPending}>{pendingLabel ?? 'Tracking now'}</div>
-      ) : (
-        <>
-          <div style={{ ...s.cardValue, color: valueColor }}>{value}</div>
-          {sub && <div style={s.cardSub}>{sub}</div>}
-        </>
-      )}
+    <div style={sc.cell}>
+      <span style={sc.label}>{label}</span>
+      <span style={{ ...sc.value, color: isReal ? (color ?? '#ffffff') : '#374151' }}>
+        {isReal ? value : pending}
+      </span>
     </div>
   );
 }
 
+// ── Styles ──────────────────────────────────────────────────────────────────
+
 const s: Record<string, React.CSSProperties> = {
-  wrap:       {
+  wrap: {
     background:   '#0f140f',
-    border:       '1px solid rgba(255,255,255,0.07)',
-    borderTop:    '2px solid rgba(34,197,94,0.35)',
+    border:       '1px solid rgba(255,255,255,0.09)',
+    borderTop:    '2px solid rgba(34,197,94,0.45)',
     borderRadius: 14,
-    padding:      '20px 24px',
+    padding:      '20px 24px 16px',
     marginBottom: 4,
   },
-  summary:    {
-    margin:        '0 0 18px',
-    fontSize:      14,
+  heroLayout: {
+    display:     'flex',
+    alignItems:  'center',
+    gap:         28,
+  },
+  heroLeft: {
+    width:     200,
+    flexShrink: 0,
+  },
+  heroNumber: {
+    fontSize:      42,
+    fontWeight:    800,
+    lineHeight:    1,
+    letterSpacing: '-0.04em',
+    marginBottom:  8,
+  },
+  heroLabel: {
+    fontSize:      13,
+    fontWeight:    600,
     color:         '#d1d5db',
-    lineHeight:    1.6,
-    letterSpacing: '0.01em',
-    fontWeight:    400,
+    letterSpacing: '-0.01em',
+    lineHeight:    1.3,
   },
-  grid:       {
+  heroSub: {
+    fontSize:  11,
+    color:     '#4b5563',
+    marginTop: 5,
+    lineHeight: 1.4,
+  },
+  divider: {
+    width:      1,
+    height:     72,
+    background: 'rgba(255,255,255,0.07)',
+    flexShrink: 0,
+  },
+  statsGrid: {
+    flex:                1,
     display:             'grid',
-    gridTemplateColumns: 'repeat(4, 1fr)',
-    gap:                 10,
+    gridTemplateColumns: '1fr 1fr',
+    gap:                 2,
   },
-  card:       {
-    background:    'rgba(255,255,255,0.03)',
-    border:        '1px solid rgba(255,255,255,0.07)',
-    borderRadius:  10,
-    padding:       '16px 14px',
+  trustBar: {
+    display:     'flex',
+    alignItems:  'center',
+    gap:         8,
+    marginTop:   16,
+    paddingTop:  12,
+    borderTop:   '1px solid rgba(255,255,255,0.04)',
+  },
+  trustDot: {
+    width:        5,
+    height:       5,
+    borderRadius: '50%',
+    background:   '#22c55e',
+    boxShadow:    '0 0 4px rgba(34,197,94,0.5)',
+    flexShrink:   0,
+  },
+  trustText: {
+    fontSize:      11,
+    color:         '#4b5563',
+    letterSpacing: '0.01em',
+  },
+};
+
+const sc: Record<string, React.CSSProperties> = {
+  cell: {
+    padding:       '8px 14px',
     display:       'flex',
-    flexDirection: 'column',
-    gap:           5,
+    flexDirection: 'column' as const,
+    gap:           4,
+    background:    'rgba(255,255,255,0.015)',
+    border:        '1px solid rgba(255,255,255,0.05)',
+    borderRadius:  8,
   },
-  cardLabel:  {
-    fontSize:      10,
+  label: {
+    fontSize:      9,
     fontWeight:    700,
     letterSpacing: '0.10em',
     textTransform: 'uppercase' as const,
-    color:         '#6b7280',
+    color:         '#4b5563',
   },
-  cardValue:  {
-    fontSize:      26,
+  value: {
+    fontSize:      18,
     fontWeight:    800,
     lineHeight:    1,
-    letterSpacing: '-0.03em',
-  },
-  cardSub:    {
-    fontSize:  11,
-    color:     '#9ca3af',
-    marginTop: 2,
-  },
-  cardPending: {
-    fontSize:   12,
-    color:      '#6b7280',
-    fontStyle:  'italic',
-    paddingTop: 4,
+    letterSpacing: '-0.02em',
   },
 };

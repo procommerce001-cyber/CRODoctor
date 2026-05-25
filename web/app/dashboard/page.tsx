@@ -63,9 +63,9 @@ const styles: Record<string, React.CSSProperties> = {
     borderTop:  '2px solid rgba(34,197,94,0.22)',
   },
   main:     {
-    maxWidth:   960,
+    maxWidth:   1280,
     margin:     '0 auto',
-    padding:    '0 28px 72px',
+    padding:    '0 40px 72px',
     fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
     color:      '#f9fafb',
   },
