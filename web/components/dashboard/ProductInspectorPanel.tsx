@@ -1,5 +1,10 @@
+'use client';
+
+import { useState } from 'react';
 import type { FeedRow } from './OptimizationFeed';
-import { issueLabel } from '@/lib/api';
+import { fetchContentPreview } from '@/lib/api';
+import type { ContentPreview } from '@/lib/api';
+import { blockReasonLabel, PREVIEW_UNAVAILABLE_MSG, proposedContentLabel } from './previewCopy';
 
 const ISSUE_CATEGORY: Record<string, string> = {
   weak_desire_creation:         'Desire & copy',
@@ -64,6 +69,10 @@ function fmtReadyAt(iso: string | null): string {
   return new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 }
 
+function stripHtml(html: string): string {
+  return html.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
 // ── Small metric block used in measurement sections ──────────────────────────
 function MetricBlock({ value, label, color }: { value: string; label: string; color: string }) {
   return (
@@ -85,13 +94,20 @@ const mb: Record<string, React.CSSProperties> = {
 
 export default function ProductInspectorPanel({
   row,
+  shop,
   onRunAction,
   executing,
+  executeErrors,
 }: {
-  row:           FeedRow | null;
-  onRunAction?:  (key: string) => void;
-  executing?:    Set<string>;
+  row:            FeedRow | null;
+  shop:           string;
+  onRunAction?:   (key: string) => void;
+  executing?:     Set<string>;
+  executeErrors?: Record<string, string | null>;
 }) {
+  type PvState = { data: ContentPreview | null; phase: 'idle' | 'loading' | 'ready'; error: string | null };
+  const [pv, setPv] = useState<PvState>({ data: null, phase: 'idle', error: null });
+
   if (!row) {
     return (
       <div style={p.wrap}>
@@ -109,6 +125,17 @@ export default function ProductInspectorPanel({
   const status   = STATUS_CFG[row.feedStatus] ?? { label: row.feedStatus, color: '#9ca3af', bg: 'transparent' };
   const category = ISSUE_CATEGORY[row.issueId] ?? 'Optimization';
   const isRunning = action ? (executing?.has(action.actionKey) ?? false) : false;
+
+  async function loadPreview() {
+    if (!action) return;
+    setPv(s => ({ ...s, phase: 'loading', error: null }));
+    try {
+      const data = await fetchContentPreview(shop, action.productId, action.issueId);
+      setPv({ data, phase: 'ready', error: null });
+    } catch (err) {
+      setPv({ data: null, phase: 'idle', error: (err as Error).message });
+    }
+  }
 
   return (
     <div style={p.wrap}>
@@ -129,9 +156,6 @@ export default function ProductInspectorPanel({
       {/* ══ ACTION PATH — topAction ════════════════════════════════════════ */}
       {action && (
         <div style={p.decisionBlock}>
-
-          {/* Issue type label */}
-          <div style={p.issueLine}>{issueLabel(row.issueId)}</div>
 
           {/* Recommendation — the decision headline */}
           {action.recommendedAction && (
@@ -160,30 +184,82 @@ export default function ProductInspectorPanel({
             </div>
           )}
 
-          {/* Secondary meta */}
-          {(action.opportunityScore > 0 || action.expectedTimeToImpact) && (
-            <div style={p.metaRow}>
-              {action.opportunityScore > 0 && (
-                <span style={p.metaItem}>Score {action.opportunityScore}</span>
-              )}
-              {action.expectedTimeToImpact && (
-                <span style={p.metaItem}>Impact in {action.expectedTimeToImpact}</span>
-              )}
-            </div>
-          )}
-
-          {/* CTA — queued items only */}
+          {/* CTA — queued items: preview-first flow */}
           {row.feedStatus === 'queued' && onRunAction && (
-            <button
-              style={{ ...p.ctaBtn, opacity: isRunning ? 0.6 : 1 }}
-              disabled={isRunning}
-              onClick={() => onRunAction(action.actionKey)}
-            >
-              {isRunning ? 'Running…' : 'Run this improvement'}
-            </button>
+            action.openMeasurementWindow ? (
+              <div style={p.guardNote}>
+                A change is already measuring on this product
+                {action.openMeasurementWindowReadyAt
+                  ? ` — results due ${fmtReadyAt(action.openMeasurementWindowReadyAt)}.`
+                  : '.'}
+                {' '}Apply this after the measurement completes.
+              </div>
+            ) : pv.phase === 'idle' ? (
+              action.applyType && action.applyType !== 'content_change' ? (
+                <div style={p.guardNote}>This recommendation requires manual setup — it can&apos;t be applied automatically.</div>
+              ) : action.applyType === 'content_change' && action.readyToApply === false ? (
+                <div style={p.guardNote}>
+                  This fix is still being reviewed before it can be applied. Once it&apos;s approved, you&apos;ll be able to preview and apply it here.
+                </div>
+              ) : (
+                <button style={p.ctaBtn} onClick={loadPreview}>
+                  Preview fix
+                </button>
+              )
+            ) : pv.phase === 'loading' ? (
+              <div style={p.pvLoading}>Generating preview…</div>
+            ) : pv.data !== null ? (
+              <div style={p.pvBlock}>
+                {!pv.data.eligibleToApply ? (
+                  <div style={p.guardNote}>{blockReasonLabel(pv.data.blockReason)}</div>
+                ) : (
+                  <>
+                    {pv.data.currentContent && (
+                      <div>
+                        <div style={p.pvLabel}>Current version on your product page</div>
+                        <div style={p.pvContent}>{stripHtml(pv.data.currentContent)}</div>
+                      </div>
+                    )}
+                    {typeof pv.data.proposedContent === 'string' && pv.data.proposedContent.trim().length > 0 ? (
+                      <>
+                        <div>
+                          <div style={{ ...p.pvLabel, color: '#4ade80' }}>
+                            {proposedContentLabel(pv.data.patchMode)}
+                          </div>
+                          <div style={{ ...p.pvContent, borderColor: 'rgba(34,197,94,0.22)', background: 'rgba(34,197,94,0.05)' }}>
+                            {pv.data.proposedContent}
+                          </div>
+                        </div>
+                        <div style={p.pvReversibility}>You can undo this change anytime.</div>
+                        <button
+                          style={{ ...p.ctaBtn, opacity: isRunning ? 0.6 : 1 }}
+                          disabled={isRunning}
+                          onClick={() => onRunAction(action.actionKey)}
+                        >
+                          {isRunning ? 'Applying…' : 'Apply this change'}
+                        </button>
+                        {executeErrors?.[action.actionKey] && (
+                          <div style={p.pvError}>{executeErrors[action.actionKey]}</div>
+                        )}
+                      </>
+                    ) : (
+                      <div style={p.guardNote}>{PREVIEW_UNAVAILABLE_MSG}</div>
+                    )}
+                  </>
+                )}
+                {!isRunning && (
+                  <button style={p.pvBackBtn} onClick={() => setPv({ data: null, phase: 'idle', error: null })}>
+                    ← Back
+                  </button>
+                )}
+              </div>
+            ) : null
+          )}
+          {pv.error && row.feedStatus === 'queued' && (
+            <div style={p.pvError}>{pv.error}</div>
           )}
 
-          {/* Measuring state — no CTA, show result eta */}
+          {/* Measuring state — results ETA */}
           {row.feedStatus === 'measuring' && action.openMeasurementWindowReadyAt && (
             <div style={p.measuringNote}>
               Results by {fmtReadyAt(action.openMeasurementWindowReadyAt)}
@@ -195,10 +271,8 @@ export default function ProductInspectorPanel({
 
       {/* ══ ACTIVITY PATH — measuring / measured / live / rolled_back ═════ */}
       {activity && (
-        <>
-          <div style={p.decisionBlock}>
-            <div style={p.issueLine}>{issueLabel(row.issueId)}</div>
-            <div style={p.metricsRow}>
+        <div style={p.decisionBlock}>
+          <div style={p.metricsRow}>
               <MetricBlock
                 value={pctStr(activity.revenueChangePercent)}
                 label="Revenue"
@@ -230,14 +304,12 @@ export default function ProductInspectorPanel({
                 <span style={p.metaItem}>Applied {fmtDate(activity.createdAt)}</span>
               </div>
             )}
-          </div>
-        </>
+        </div>
       )}
 
       {/* ══ READY PATH — ready item with no topAction or activity ══════════ */}
       {ready && !action && !activity && (
         <div style={p.decisionBlock}>
-          <div style={p.issueLine}>{issueLabel(row.issueId)}</div>
           {(ready.severity || ready.score !== null || ready.riskLevel) && (
             <div style={p.metricsRow}>
               {ready.severity && (
@@ -286,7 +358,7 @@ const p: Record<string, React.CSSProperties> = {
   emptyBody:  { padding: '52px 32px', display: 'flex', flexDirection: 'column' as const,
                 gap: 10, alignItems: 'center', textAlign: 'center' as const },
   emptyDot:   { width: 8, height: 8, borderRadius: '50%', background: 'rgba(255,255,255,0.06)' },
-  emptyText:  { fontSize: 13, color: '#374151' },
+  emptyText:  { fontSize: 13, color: '#4b5563' },
 
   // Identity band
   identityBand: { padding: '18px 24px 16px' },
@@ -302,11 +374,11 @@ const p: Record<string, React.CSSProperties> = {
   divider:      { height: 1, background: 'rgba(255,255,255,0.05)' },
 
   // Decision block — shared by all paths
-  decisionBlock: { padding: '20px 24px', display: 'flex', flexDirection: 'column' as const, gap: 14 },
+  decisionBlock: { padding: '18px 24px', display: 'flex', flexDirection: 'column' as const, gap: 12 },
 
   // Issue type label — small ALLCAPS above headline
   issueLine:  { fontSize: 9, fontWeight: 700, letterSpacing: '0.10em',
-                textTransform: 'uppercase' as const, color: '#4b5563' },
+                textTransform: 'uppercase' as const, color: '#6b7280' },
 
   // The decision headline — largest text in the decision block
   headline:   { fontSize: 19, fontWeight: 800, color: '#f9fafb', lineHeight: 1.3,
@@ -329,7 +401,7 @@ const p: Record<string, React.CSSProperties> = {
 
   // Meta row — opportunity score, time to impact
   metaRow:    { display: 'flex', gap: 14, alignItems: 'center' },
-  metaItem:   { fontSize: 11, color: '#374151' },
+  metaItem:   { fontSize: 11, color: '#6b7280' },
 
   // CTA button — full width, prominent green
   ctaBtn: {
@@ -348,7 +420,25 @@ const p: Record<string, React.CSSProperties> = {
   },
 
   // Measuring state note
-  measuringNote: { fontSize: 12, color: '#4b5563', fontStyle: 'italic' as const },
+  measuringNote: { fontSize: 12, color: '#6b7280', fontStyle: 'italic' as const },
+
+  // Guard note — shown when apply is blocked
+  guardNote:   { fontSize: 12, color: '#d97706', background: 'rgba(217,119,6,0.06)',
+                 border: '1px solid rgba(217,119,6,0.18)', borderRadius: 6,
+                 padding: '10px 12px', lineHeight: 1.5 },
+
+  // Preview block — inline preview content
+  pvLoading:       { fontSize: 12, color: '#6b7280', fontStyle: 'italic' as const },
+  pvBlock:         { display: 'flex', flexDirection: 'column' as const, gap: 12 },
+  pvLabel:         { fontSize: 9, fontWeight: 700, textTransform: 'uppercase' as const,
+                     letterSpacing: '0.08em', color: '#6b7280', marginBottom: 4 },
+  pvContent:       { fontSize: 12, color: '#d1d5db', lineHeight: 1.6, maxHeight: 96,
+                     overflow: 'hidden' as const, border: '1px solid rgba(255,255,255,0.08)',
+                     borderRadius: 6, padding: '8px 10px', background: 'rgba(255,255,255,0.02)' },
+  pvReversibility: { fontSize: 11, color: '#4b5563', fontStyle: 'italic' as const },
+  pvBackBtn:       { background: 'none', border: 'none', color: '#4b5563', cursor: 'pointer',
+                     fontSize: 12, padding: '0', textAlign: 'left' as const, textDecoration: 'underline' },
+  pvError:         { fontSize: 12, color: '#f87171' },
 
   // Measurement metrics row
   metricsRow: { display: 'flex', gap: 20, alignItems: 'flex-end' },
@@ -359,12 +449,12 @@ const p: Record<string, React.CSSProperties> = {
                 borderRadius: 4, padding: '3px 10px' },
 
   // Ready path hint
-  readyHint:  { fontSize: 11, color: '#374151', fontStyle: 'italic' as const },
+  readyHint:  { fontSize: 11, color: '#6b7280', fontStyle: 'italic' as const },
 
   // Behavior tracking disclosure
-  detailsSummary: { fontSize: 10, color: '#374151', padding: '9px 24px',
+  detailsSummary: { fontSize: 10, color: '#4b5563', padding: '9px 24px',
                     cursor: 'pointer', letterSpacing: '0.02em' },
   detailsBody:    { padding: '0 24px 10px' },
-  unavailable:    { fontSize: 10, color: '#374151', lineHeight: 1.5, marginBottom: 3,
+  unavailable:    { fontSize: 10, color: '#4b5563', lineHeight: 1.5, marginBottom: 3,
                     fontStyle: 'italic' as const },
 };

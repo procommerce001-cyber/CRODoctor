@@ -33,23 +33,38 @@ export default function DashboardClient({ data }: Props) {
   const [applyError,      setApplyError]      = useState<string | null>(null);
 
   const [topActions,  setTopActions]  = useState<TopAction[]>([]);
-  const [executing,   setExecuting]   = useState<Set<string>>(new Set());
-  const [focusedRow,  setFocusedRow]  = useState<FeedRow | null>(null);
+  const [executing,     setExecuting]     = useState<Set<string>>(new Set());
+  const [executeErrors, setExecuteErrors] = useState<Record<string, string | null>>({});
+  const [focusedRow,    setFocusedRow]    = useState<FeedRow | null>(null);
 
   useEffect(() => {
     fetchTopActions(SHOP).then(setTopActions).catch(() => {});
   }, []);
 
   const handleExecute = async (actionKey: string) => {
+    setExecuteErrors(prev => { const n = { ...prev }; delete n[actionKey]; return n; });
     setExecuting(prev => new Set(prev).add(actionKey));
+
+    let applied = false;
+
     try {
       await executeAction(SHOP, actionKey);
-      const refreshed = await fetchTopActions(SHOP);
-      setTopActions(refreshed);
+      applied = true;
     } catch (_) {
-      // silently keep existing state on error
+      setExecuteErrors(prev => ({
+        ...prev,
+        [actionKey]: "We couldn't apply this change right now. Please try again.",
+      }));
     } finally {
       setExecuting(prev => { const n = new Set(prev); n.delete(actionKey); return n; });
+    }
+
+    if (applied) {
+      fetchTopActions(SHOP)
+        .then(setTopActions)
+        .catch(() => {
+          // Apply already succeeded. Do not surface refresh failure as apply failure.
+        });
     }
   };
 
@@ -135,6 +150,7 @@ export default function DashboardClient({ data }: Props) {
             isApplying={isApplying}
             applyResult={applyResult}
             applyError={applyError}
+            executeErrors={executeErrors}
             onRunAction={handleExecute}
             onToggle={toggle}
             onSelectAll={selectAll}
@@ -147,9 +163,12 @@ export default function DashboardClient({ data }: Props) {
         </div>
         <div style={{ flex: 1, minWidth: 0 }}>
           <ProductInspectorPanel
+              key={(focusedRow ?? defaultFocusRow)?.key ?? 'empty'}
               row={focusedRow ?? defaultFocusRow}
+              shop={SHOP}
               onRunAction={handleExecute}
               executing={executing}
+              executeErrors={executeErrors}
             />
         </div>
       </section>

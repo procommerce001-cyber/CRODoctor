@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import type { ReviewItem, TopAction, ActivityItem, ContentPreview, ApplyResponse } from '@/lib/api';
 import { fetchContentPreview, applySelected, issueLabel, API_BASE, apiHeaders } from '@/lib/api';
+import { blockReasonLabel, isManualBlockReason, PREVIEW_UNAVAILABLE_MSG, proposedContentLabel } from './previewCopy';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -50,6 +51,7 @@ interface Props {
   onSelect?:        (row: FeedRow) => void;
   selectedKey?:     string | null;
   narrow?:          boolean;
+  executeErrors?:   Record<string, string | null>;
 }
 
 // ── Data helpers ───────────────────────────────────────────────────────────────
@@ -126,10 +128,6 @@ function patchDescription(mode: string | null): string {
   if (mode === 'insert_after_anchor')   return 'This will add new content to your product description.';
   if (mode === 'replace_matched_block') return 'This will update a section of your product description.';
   return 'This will update your product description.';
-}
-
-function proposedLabel(mode: string | null): string {
-  return mode === 'replace_full_body' ? 'What will replace it' : 'What will be added';
 }
 
 function stripHtml(html: string | null): string {
@@ -210,10 +208,14 @@ function WinCard({ row }: { row: FeedRow }) {
 }
 
 // Hero card for the #1 "Up next" action
-function HeroNextCard({ row, executing, onRunAction }: {
-  row:         FeedRow;
-  executing:   Set<string>;
-  onRunAction: (key: string) => void;
+function HeroNextCard({ row, executing, onRunAction, previewState, onPreview, onClosePreview, executeError }: {
+  row:            FeedRow;
+  executing:      Set<string>;
+  onRunAction:    (key: string) => void;
+  previewState:   PreviewState | null;
+  onPreview:      () => void;
+  onClosePreview: () => void;
+  executeError?:  string | null;
 }) {
   const action    = row.topAction!;
   const isRunning = executing.has(action.actionKey);
@@ -227,24 +229,47 @@ function HeroNextCard({ row, executing, onRunAction }: {
       <span style={un.heroCategory}>{issueLabel(action.issueId)}</span>
       <span style={un.heroAction}>{action.recommendedAction}</span>
       {action.whyNow && <span style={un.heroWhy}>{action.whyNow}</span>}
-      <button
-        style={{ ...un.heroBtn, opacity: isRunning ? 0.6 : 1 }}
-        disabled={isRunning}
-        onClick={() => onRunAction(action.actionKey)}
-      >
-        {isRunning ? 'Running…' : 'Run this improvement'}
-      </button>
+      {action.applyType && action.applyType !== 'content_change' ? (
+        <div style={un.heroManualNote}>
+          <span>This recommendation requires manual implementation — it can&apos;t be applied automatically. The steps are in the description above.</span>
+        </div>
+      ) : action.applyType === 'content_change' && action.readyToApply === false ? (
+        <div style={un.heroManualNote}>
+          <span>This fix is still being reviewed before it can be applied. Once it&apos;s approved, you&apos;ll be able to preview and apply it here.</span>
+        </div>
+      ) : previewState?.loading ? (
+        <div style={un.heroPreviewNote}>Generating preview…</div>
+      ) : previewState?.data ? (
+        <PreviewPanel
+          issueId={action.issueId}
+          preview={previewState.data}
+          applyState={executeError ? { applying: false, applied: false, error: executeError } : null}
+          isApplying={isRunning}
+          onApply={() => onRunAction(action.actionKey)}
+          onClose={onClosePreview}
+        />
+      ) : (
+        <button style={un.heroBtn} onClick={onPreview}>
+          Review change before applying
+        </button>
+      )}
+      {previewState?.error && (
+        <div style={un.heroPreviewNote}>{PREVIEW_UNAVAILABLE_MSG}</div>
+      )}
     </div>
   );
 }
 
-function PreviewPanel({ item, preview, applyState, onApply, onClose }: {
-  item:       ReviewItem;
-  preview:    ContentPreview;
-  applyState: ApplyState | null;
-  onApply:    () => void;
-  onClose:    () => void;
+function PreviewPanel({ issueId, preview, applyState, isApplying, onApply, onClose }: {
+  issueId:     string;
+  preview:     ContentPreview;
+  applyState:  ApplyState | null;
+  isApplying?: boolean;
+  onApply:     () => void;
+  onClose:     () => void;
 }) {
+  const applying = applyState?.applying || isApplying;
+  const hasProposedContent = typeof preview.proposedContent === 'string' && preview.proposedContent.trim().length > 0;
   return (
     <div style={pp.wrap}>
       <div style={pp.contextRow}>
@@ -253,40 +278,50 @@ function PreviewPanel({ item, preview, applyState, onApply, onClose }: {
       </div>
       {preview.eligibleToApply ? (
         <>
-          {COPY_INTENT_NOTE[item.issueId] && (
-            <p style={pp.intentNote}>{COPY_INTENT_NOTE[item.issueId]}</p>
+          {COPY_INTENT_NOTE[issueId] && (
+            <p style={pp.intentNote}>{COPY_INTENT_NOTE[issueId]}</p>
           )}
           {preview.currentContent && (
             <div style={{ marginBottom: 8 }}>
-              <div style={pp.label}>What&apos;s on your page now</div>
+              <div style={pp.label}>Current version on your product page</div>
               <div style={{ ...pp.text, color: '#4b5563', maxHeight: 60, overflow: 'hidden' }}>
                 {stripHtml(preview.currentContent)}
               </div>
             </div>
           )}
-          <div>
-            <div style={{ ...pp.label, color: '#4ade80' }}>{proposedLabel(preview.patchMode)}</div>
-            <div style={{ ...pp.text, borderColor: 'rgba(34,197,94,0.22)', background: 'rgba(34,197,94,0.05)' }}>
-              {preview.proposedContent}
+          {hasProposedContent ? (
+            <>
+              <div>
+                <div style={{ ...pp.label, color: '#4ade80' }}>
+                  {proposedContentLabel(preview.patchMode)}
+                </div>
+                <div style={{ ...pp.text, borderColor: 'rgba(34,197,94,0.22)', background: 'rgba(34,197,94,0.05)' }}>
+                  {preview.proposedContent}
+                </div>
+              </div>
+              <div style={pp.reversibility}>You can undo this change anytime.</div>
+              <div style={pp.actions}>
+                <button
+                  style={{ ...pp.btnApply, opacity: applying ? 0.6 : 1 }}
+                  disabled={applying}
+                  onClick={onApply}
+                >
+                  {applying ? 'Applying…' : 'Apply this change'}
+                </button>
+                <button style={pp.btnCancel} onClick={onClose} disabled={applying}>
+                  Cancel
+                </button>
+                {applyState?.error && <span style={{ color: '#f87171', fontSize: 12 }}>{applyState.error}</span>}
+              </div>
+            </>
+          ) : (
+            <div style={{ color: '#d97706', fontSize: 12, padding: '6px 0' }}>
+              {PREVIEW_UNAVAILABLE_MSG}
             </div>
-          </div>
-          <div style={pp.reversibility}>This change affects only this product. You can undo it instantly if needed.</div>
-          <div style={pp.actions}>
-            <button
-              style={{ ...pp.btnApply, opacity: applyState?.applying ? 0.6 : 1 }}
-              disabled={applyState?.applying}
-              onClick={onApply}
-            >
-              {applyState?.applying ? 'Applying…' : 'Apply this change'}
-            </button>
-            <button style={pp.btnCancel} onClick={onClose} disabled={applyState?.applying}>
-              Cancel
-            </button>
-            {applyState?.error && <span style={{ color: '#f87171', fontSize: 12 }}>{applyState.error}</span>}
-          </div>
+          )}
         </>
       ) : (
-        <div style={{ color: '#f87171', fontSize: 12 }}>Not available: {preview.blockReason}</div>
+        <div style={{ color: '#f87171', fontSize: 12 }}>{blockReasonLabel(preview.blockReason)}</div>
       )}
     </div>
   );
@@ -337,7 +372,7 @@ function FeedFilterBar({
   narrow?:  boolean;
 }) {
   return (
-    <div style={{ ...ff.bar, marginBottom: narrow ? 14 : 24 }}>
+    <div style={{ ...ff.bar, marginBottom: narrow ? 14 : 24, overflowX: narrow ? 'hidden' : 'auto' }}>
       {FILTER_TABS.map(tab => {
         const isActive = active === tab.key;
         const count    = counts[tab.key];
@@ -348,7 +383,7 @@ function FeedFilterBar({
             style={{
               ...ff.tab,
               fontSize:     narrow ? 10 : 13,
-              padding:      narrow ? '5px 8px 6px' : '8px 14px 9px',
+              padding:      narrow ? '4px 6px 5px' : '8px 14px 9px',
               color:        isActive ? tab.color : isEmpty ? '#374151' : '#6b7280',
               borderBottom: isActive ? `2px solid ${tab.color}` : '2px solid transparent',
               opacity:      isEmpty ? 0.45 : 1,
@@ -356,7 +391,7 @@ function FeedFilterBar({
             onClick={() => onChange(tab.key)}
           >
             {tab.label}
-            {count > 0 && (
+            {count > 0 && !narrow && (
               <span style={{
                 ...ff.badge,
                 color:      isActive ? tab.color     : '#4b5563',
@@ -379,12 +414,15 @@ export default function OptimizationFeed({
   shop, readyItems, topActions, recentActivity,
   executing, selected, isApplying, applyResult, applyError,
   onRunAction, onToggle, onSelectAll, onClearSelection, onApply, onSelect, selectedKey, narrow,
+  executeErrors,
 }: Props) {
-  const [previews,    setPreviews]    = useState<Record<string, PreviewState>>({});
-  const [applyStates, setApplyStates] = useState<Record<string, ApplyState>>({});
-  const [rollbacks,    setRollbacks]    = useState<Record<string, RollbackState>>({});
-  const [activeSection, setActiveSection] = useState<SectionFilter>('all');
-  const [hoveredKey,   setHoveredKey]   = useState<string | null>(null);
+  const [previews,         setPreviews]         = useState<Record<string, PreviewState>>({});
+  const [applyStates,      setApplyStates]      = useState<Record<string, ApplyState>>({});
+  const [rollbacks,        setRollbacks]        = useState<Record<string, RollbackState>>({});
+  const [actionPreviews,   setActionPreviews]   = useState<Record<string, PreviewState>>({});
+  const [activeSection,    setActiveSection]    = useState<SectionFilter>('all');
+  const [hoveredKey,       setHoveredKey]       = useState<string | null>(null);
+  const [confirmingBatch,  setConfirmingBatch]  = useState(false);
 
   const rows = buildRows(readyItems, topActions, recentActivity);
   const { ready, wins, measuring, upnext, protection } = groupRows(rows);
@@ -417,6 +455,21 @@ export default function OptimizationFeed({
       setPreviews(p => ({ ...p, [key]: { loading: false, data, error: null } }));
     } catch (err) {
       setPreviews(p => ({ ...p, [key]: { loading: false, data: null, error: (err as Error).message } }));
+    }
+  }
+
+  async function toggleActionPreview(action: TopAction) {
+    const key = action.actionKey;
+    if (actionPreviews[key]?.data) {
+      setActionPreviews(p => { const n = { ...p }; delete n[key]; return n; });
+      return;
+    }
+    setActionPreviews(p => ({ ...p, [key]: { loading: true, data: null, error: null } }));
+    try {
+      const data = await fetchContentPreview(shop, action.productId, action.issueId);
+      setActionPreviews(p => ({ ...p, [key]: { loading: false, data, error: null } }));
+    } catch (err) {
+      setActionPreviews(p => ({ ...p, [key]: { loading: false, data: null, error: (err as Error).message } }));
     }
   }
 
@@ -463,11 +516,11 @@ export default function OptimizationFeed({
     const isHovered  = hoveredKey === row.key;
     const isSelected = row.key === selectedKey;
     const rowBg = isSelected
-      ? 'rgba(34,197,94,0.12)'
+      ? 'rgba(34,197,94,0.16)'
       : isChecked ? 'rgba(34,197,94,0.07)'
       : isHovered ? 'rgba(255,255,255,0.03)'
       : '#0f140f';
-    const rowShadow = isSelected ? 'inset 3px 0 0 #22c55e' : undefined;
+    const rowShadow = isSelected ? 'inset 4px 0 0 #22c55e' : undefined;
     return (
       <div key={row.key} style={{ ...s.rowWrap, opacity: applied ? 0.5 : 1 }}>
         <div
@@ -507,7 +560,7 @@ export default function OptimizationFeed({
         {apState?.error && !pvState?.data && <div style={s.panelError}>{apState.error}</div>}
         {pvState?.data && !applied && (
           <PreviewPanel
-            item={item}
+            issueId={item.issueId}
             preview={pvState.data}
             applyState={apState ?? null}
             onApply={() => singleApply(item)}
@@ -527,8 +580,8 @@ export default function OptimizationFeed({
       return (
         <div key={row.key} style={s.rowWrap}>
           <div style={{ ...rowStyle,
-            background: row.key === selectedKey ? 'rgba(34,197,94,0.12)' : hoveredKey === row.key ? 'rgba(255,255,255,0.03)' : '#0f140f',
-            boxShadow:  row.key === selectedKey ? 'inset 3px 0 0 #22c55e' : undefined,
+            background: row.key === selectedKey ? 'rgba(34,197,94,0.16)' : hoveredKey === row.key ? 'rgba(255,255,255,0.03)' : '#0f140f',
+            boxShadow:  row.key === selectedKey ? 'inset 4px 0 0 #22c55e' : undefined,
             cursor: 'pointer' }}
                onClick={() => onSelect?.(row)}
                onMouseEnter={() => setHoveredKey(row.key)} onMouseLeave={() => setHoveredKey(null)}>
@@ -562,8 +615,8 @@ export default function OptimizationFeed({
       return (
         <div key={row.key} style={s.rowWrap}>
           <div style={{ ...rowStyle,
-            background: row.key === selectedKey ? 'rgba(34,197,94,0.12)' : hoveredKey === row.key ? 'rgba(255,255,255,0.03)' : '#0f140f',
-            boxShadow:  row.key === selectedKey ? 'inset 3px 0 0 #22c55e' : undefined,
+            background: row.key === selectedKey ? 'rgba(34,197,94,0.16)' : hoveredKey === row.key ? 'rgba(255,255,255,0.03)' : '#0f140f',
+            boxShadow:  row.key === selectedKey ? 'inset 4px 0 0 #22c55e' : undefined,
             cursor: 'pointer' }}
                onClick={() => onSelect?.(row)}
                onMouseEnter={() => setHoveredKey(row.key)} onMouseLeave={() => setHoveredKey(null)}>
@@ -587,22 +640,32 @@ export default function OptimizationFeed({
 
   function renderUpnextRow(row: FeedRow, isHero: boolean) {
     if (isHero) {
+      const heroAction = row.topAction!;
       return (
         <div key={row.key}
           onClick={() => onSelect?.(row)}
-          style={row.key === selectedKey ? { boxShadow: 'inset 3px 0 0 #22c55e' } : {}}
+          style={row.key === selectedKey ? { boxShadow: 'inset 4px 0 0 #22c55e' } : {}}
         >
-          <HeroNextCard row={row} executing={executing} onRunAction={onRunAction} />
+          <HeroNextCard
+            row={row}
+            executing={executing}
+            onRunAction={onRunAction}
+            previewState={actionPreviews[heroAction.actionKey] ?? null}
+            onPreview={() => toggleActionPreview(heroAction)}
+            onClosePreview={() => setActionPreviews(p => { const n = { ...p }; delete n[heroAction.actionKey]; return n; })}
+            executeError={executeErrors?.[heroAction.actionKey] ?? null}
+          />
         </div>
       );
     }
-    const action    = row.topAction!;
-    const isRunning = executing.has(action.actionKey);
+    const action     = row.topAction!;
+    const isRunning  = executing.has(action.actionKey);
+    const upPvState  = actionPreviews[action.actionKey] ?? null;
     return (
       <div key={row.key} style={s.rowWrap}>
         <div style={{ ...rowStyle,
-          background: row.key === selectedKey ? 'rgba(34,197,94,0.12)' : hoveredKey === row.key ? 'rgba(255,255,255,0.03)' : '#0f140f',
-          boxShadow:  row.key === selectedKey ? 'inset 3px 0 0 #22c55e' : undefined,
+          background: row.key === selectedKey ? 'rgba(34,197,94,0.16)' : hoveredKey === row.key ? 'rgba(255,255,255,0.03)' : '#0f140f',
+          boxShadow:  row.key === selectedKey ? 'inset 4px 0 0 #22c55e' : undefined,
           cursor: 'pointer' }}
              onClick={() => onSelect?.(row)}
              onMouseEnter={() => setHoveredKey(row.key)} onMouseLeave={() => setHoveredKey(null)}>
@@ -614,15 +677,45 @@ export default function OptimizationFeed({
           </div>
           <div style={rowActionsStyle}>
             {action.estimatedImpactLabel && <span style={s.meta}>{action.estimatedImpactLabel}</span>}
-            <button
-              style={{ ...s.runBtn, opacity: isRunning ? 0.6 : 1 }}
-              disabled={isRunning}
-              onClick={() => onRunAction(action.actionKey)}
-            >
-              {isRunning ? 'Running…' : 'Run'}
-            </button>
+            {action.applyType && action.applyType !== 'content_change' ? (
+              <span style={s.meta}>Manual setup</span>
+            ) : action.applyType === 'content_change' && action.readyToApply === false ? (
+              <span style={s.meta}>Pending review</span>
+            ) : upPvState?.loading ? (
+              <span style={{ ...s.meta, fontStyle: 'italic' as const }}>Loading…</span>
+            ) : upPvState?.data ? (
+              <span style={s.meta}>Review below ↓</span>
+            ) : (
+              <button
+                style={s.runBtn}
+                onClick={e => { e.stopPropagation(); toggleActionPreview(action); }}
+              >
+                Review
+              </button>
+            )}
           </div>
         </div>
+        {upPvState?.error && (
+          <div style={s.panelError}>{PREVIEW_UNAVAILABLE_MSG}</div>
+        )}
+        {upPvState?.data && (isManualBlockReason(upPvState.data.blockReason) || (action.applyType && action.applyType !== 'content_change')) ? (
+          <div style={s.manualNote}>
+            <span>This recommendation requires manual setup — it can&apos;t be applied automatically.</span>
+            {action.recommendedAction && <span style={s.manualNoteDetail}>{action.recommendedAction}</span>}
+            <button style={s.manualNoteClose} onClick={() => setActionPreviews(p => { const n = { ...p }; delete n[action.actionKey]; return n; })}>
+              Dismiss
+            </button>
+          </div>
+        ) : upPvState?.data && (
+          <PreviewPanel
+            issueId={action.issueId}
+            preview={upPvState.data}
+            applyState={executeErrors?.[action.actionKey] ? { applying: false, applied: false, error: executeErrors[action.actionKey]! } : null}
+            isApplying={isRunning}
+            onApply={() => onRunAction(action.actionKey)}
+            onClose={() => setActionPreviews(p => { const n = { ...p }; delete n[action.actionKey]; return n; })}
+          />
+        )}
       </div>
     );
   }
@@ -636,8 +729,8 @@ export default function OptimizationFeed({
       <div key={row.key} style={s.rowWrap}>
         <div
           style={{ ...rowStyle,
-            background: isSelected ? 'rgba(34,197,94,0.12)' : isHovered ? 'rgba(255,255,255,0.03)' : '#0f140f',
-            boxShadow:  isSelected ? 'inset 3px 0 0 #22c55e' : undefined,
+            background: isSelected ? 'rgba(34,197,94,0.16)' : isHovered ? 'rgba(255,255,255,0.03)' : '#0f140f',
+            boxShadow:  isSelected ? 'inset 4px 0 0 #22c55e' : undefined,
             cursor: 'pointer' }}
           onClick={() => onSelect?.(row)}
           onMouseEnter={() => setHoveredKey(row.key)}
@@ -762,21 +855,46 @@ export default function OptimizationFeed({
           narrow={narrow}
         >
           {selectableCount > 0 && (
-            <div style={s.batchBar}>
-              <button style={s.batchBtn} onClick={onSelectAll}      disabled={isApplying}>Select all</button>
-              <button style={s.batchBtn} onClick={onClearSelection} disabled={isApplying}>Clear</button>
-              <span style={s.batchCount}>
-                {selected.size > 0
-                  ? `${selected.size} of ${selectableCount} selected`
-                  : `${selectableCount} improvement${selectableCount !== 1 ? 's' : ''} ready`}
-              </span>
-              <button
-                style={{ ...s.batchApply, opacity: (selected.size === 0 || isApplying) ? 0.4 : 1 }}
-                disabled={selected.size === 0 || isApplying}
-                onClick={onApply}
-              >
-                {isApplying ? 'Applying…' : `Apply selected (${selected.size})`}
-              </button>
+            <div>
+              <div style={s.batchBar}>
+                <button style={s.batchBtn} onClick={onSelectAll}      disabled={isApplying || confirmingBatch}>Select all</button>
+                <button style={s.batchBtn} onClick={onClearSelection} disabled={isApplying || confirmingBatch}>Clear</button>
+                <span style={s.batchCount}>
+                  {selected.size > 0
+                    ? `${selected.size} of ${selectableCount} selected`
+                    : `${selectableCount} improvement${selectableCount !== 1 ? 's' : ''} ready`}
+                </span>
+                <button
+                  style={{ ...s.batchApply, opacity: (selected.size === 0 || isApplying || confirmingBatch) ? 0.4 : 1 }}
+                  disabled={selected.size === 0 || isApplying || confirmingBatch}
+                  onClick={() => selected.size > 0 && setConfirmingBatch(true)}
+                >
+                  {isApplying ? 'Applying…' : `Apply selected (${selected.size})`}
+                </button>
+              </div>
+              {confirmingBatch && (
+                <div style={s.batchConfirm}>
+                  <div style={s.batchConfirmText}>
+                    You&apos;re about to apply {selected.size} approved change{selected.size !== 1 ? 's' : ''} to your store.
+                    These changes were reviewed by the system, but you won&apos;t preview each change individually in this batch action.
+                  </div>
+                  <div style={s.batchConfirmSub}>
+                    To review changes one by one, cancel and open each recommendation separately.
+                  </div>
+                  <div style={s.batchConfirmActions}>
+                    <button
+                      style={{ ...s.batchApply, opacity: isApplying ? 0.6 : 1 }}
+                      disabled={isApplying}
+                      onClick={() => { setConfirmingBatch(false); onApply(); }}
+                    >
+                      {isApplying ? 'Applying…' : 'Apply approved changes'}
+                    </button>
+                    <button style={s.batchBtn} onClick={() => setConfirmingBatch(false)} disabled={isApplying}>
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           )}
           {applyError  && <div style={s.errorBox}>{applyError}</div>}
@@ -833,10 +951,14 @@ const s: Record<string, React.CSSProperties> = {
   emptyDot:       { width: 7, height: 7, borderRadius: '50%', background: '#22c55e', boxShadow: '0 0 5px rgba(34,197,94,0.45)', flexShrink: 0, marginTop: 5 },
   emptyText:      { fontSize: 13, color: '#6b7280', lineHeight: 1.65, margin: 0 },
 
-  batchBar:       { display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 },
-  batchBtn:       { fontSize: 12, padding: '4px 10px', border: '1px solid rgba(255,255,255,0.10)', borderRadius: 5, background: 'rgba(255,255,255,0.04)', cursor: 'pointer', color: '#9ca3af' },
-  batchCount:     { fontSize: 12, color: '#4b5563', flex: 1 },
-  batchApply:     { fontSize: 12, fontWeight: 700, padding: '6px 18px', border: 'none', borderRadius: 6, background: '#16a34a', color: '#fff', cursor: 'pointer', transition: 'opacity 0.15s', letterSpacing: '0.01em' },
+  batchBar:         { display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 },
+  batchBtn:         { fontSize: 12, padding: '4px 10px', border: '1px solid rgba(255,255,255,0.10)', borderRadius: 5, background: 'rgba(255,255,255,0.04)', cursor: 'pointer', color: '#9ca3af' },
+  batchCount:       { fontSize: 12, color: '#4b5563', flex: 1 },
+  batchApply:       { fontSize: 12, fontWeight: 700, padding: '6px 18px', border: 'none', borderRadius: 6, background: '#16a34a', color: '#fff', cursor: 'pointer', transition: 'opacity 0.15s', letterSpacing: '0.01em' },
+  batchConfirm:        { display: 'flex', flexDirection: 'column' as const, gap: 6, padding: '10px 12px', marginBottom: 10, background: 'rgba(22,163,74,0.06)', border: '1px solid rgba(34,197,94,0.18)', borderRadius: 7 },
+  batchConfirmText:    { fontSize: 12, color: '#d1d5db', lineHeight: 1.5 },
+  batchConfirmSub:     { fontSize: 11, color: '#4b5563', lineHeight: 1.4 },
+  batchConfirmActions: { display: 'flex', gap: 8, alignItems: 'center', marginTop: 2 },
 
   errorBox:       { padding: '10px 14px', background: 'rgba(239,68,68,0.07)', border: '1px solid rgba(239,68,68,0.18)', borderRadius: 7, color: '#f87171', fontSize: 13, marginBottom: 8 },
 
@@ -846,7 +968,7 @@ const s: Record<string, React.CSSProperties> = {
   rowMain:        { display: 'flex', flexDirection: 'column', gap: 2, flex: 1, minWidth: 0 },
   rowActions:     { display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0, paddingTop: 1, minWidth: 96, justifyContent: 'flex-end' },
 
-  product:        { fontSize: 10, fontWeight: 700, color: '#6b7280', textTransform: 'uppercase' as const, letterSpacing: '0.06em' },
+  product:        { fontSize: 10, fontWeight: 600, color: '#6b7280', textTransform: 'uppercase' as const, letterSpacing: '0.05em' },
   issue:          { fontSize: 13, fontWeight: 600, color: '#e5e7eb' },
   sub:            { fontSize: 11, color: '#6b7280', lineHeight: 1.4 },
   truncate:       { overflow: 'hidden', whiteSpace: 'nowrap' as const, textOverflow: 'ellipsis' },
@@ -857,6 +979,9 @@ const s: Record<string, React.CSSProperties> = {
   appliedBadge:     { fontSize: 11, fontWeight: 700, color: '#4ade80' },
   panelError:       { padding: '8px 16px 8px 52px', fontSize: 12, color: '#f87171', background: '#0d120d', borderTop: '1px solid rgba(255,255,255,0.04)' },
 
+  manualNote:       { padding: '10px 16px 10px 52px', fontSize: 12, color: '#d97706', background: '#0d120d', borderTop: '1px solid rgba(255,255,255,0.04)', display: 'flex', flexDirection: 'column' as const, gap: 5 },
+  manualNoteDetail: { color: '#9ca3af', lineHeight: 1.5 },
+  manualNoteClose:  { background: 'none', border: 'none', color: '#6b7280', cursor: 'pointer', fontSize: 11, padding: 0, textAlign: 'left' as const, textDecoration: 'underline', alignSelf: 'flex-start' as const },
   runBtn:   { fontSize: 11, fontWeight: 700, padding: '5px 14px', border: 'none', borderRadius: 5, background: '#16a34a', color: '#fff', cursor: 'pointer', whiteSpace: 'nowrap' as const },
   undoBtn:  { fontSize: 11, padding: '3px 10px', border: '1px solid rgba(255,255,255,0.10)', borderRadius: 4, background: 'rgba(255,255,255,0.04)', color: '#9ca3af', cursor: 'pointer', whiteSpace: 'nowrap' as const },
   undoDone: { fontSize: 11, color: '#4ade80',  whiteSpace: 'nowrap' as const },
@@ -866,7 +991,7 @@ const s: Record<string, React.CSSProperties> = {
 // Section block header styles
 const sb: Record<string, React.CSSProperties> = {
   titleRow: { display: 'flex', alignItems: 'center', gap: 8, marginBottom: 5 },
-  label:    { fontSize: 13, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase' as const, color: '#e5e7eb' },
+  label:    { fontSize: 13, fontWeight: 600, letterSpacing: '0.05em', textTransform: 'uppercase' as const, color: '#9ca3af' },
   sub:      { fontSize: 12, color: '#6b7280', margin: 0, lineHeight: 1.4 },
 };
 
@@ -902,10 +1027,13 @@ const un: Record<string, React.CSSProperties> = {
   heroWhy:    { fontSize: 12, color: '#6b7280', lineHeight: 1.55, display: 'block', marginBottom: 14 },
   heroBtn:      { fontSize: 12, fontWeight: 700, padding: '7px 18px', border: 'none', borderRadius: 6,
                   background: '#15803d', color: '#fff', cursor: 'pointer' },
-  heroCategory: { fontSize: 10, fontWeight: 700, color: '#6b7280', letterSpacing: '0.06em',
-                  textTransform: 'uppercase' as const, display: 'inline-block', marginBottom: 8,
-                  background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.09)',
-                  borderRadius: 3, padding: '2px 7px' },
+  heroCategory:     { fontSize: 10, fontWeight: 700, color: '#6b7280', letterSpacing: '0.06em',
+                      textTransform: 'uppercase' as const, display: 'inline-block', marginBottom: 8,
+                      background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.09)',
+                      borderRadius: 3, padding: '2px 7px' },
+  heroPreviewNote:  { fontSize: 12, color: '#6b7280', fontStyle: 'italic' as const, marginTop: 2 },
+  heroManualNote:   { fontSize: 12, color: '#d97706', lineHeight: 1.55, display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10, padding: '8px 12px', background: 'rgba(217,119,6,0.06)', border: '1px solid rgba(217,119,6,0.15)', borderRadius: 6, marginTop: 8 },
+  heroManualClose:  { background: 'none', border: 'none', color: '#6b7280', cursor: 'pointer', fontSize: 11, padding: 0, whiteSpace: 'nowrap' as const, flexShrink: 0 },
 };
 
 // Feed filter bar styles

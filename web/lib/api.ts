@@ -375,6 +375,8 @@ export interface TopAction {
   confidenceSampleSize:  number | null;
   openMeasurementWindow:        boolean;
   openMeasurementWindowReadyAt: string | null;
+  applyType?:                   'content_change' | 'manual' | 'theme_change';
+  readyToApply:                 boolean;
 }
 
 export async function fetchTopActions(shop: string): Promise<TopAction[]> {

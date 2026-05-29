@@ -157,7 +157,7 @@ function StatCell({ label, value, pending, color }: {
   return (
     <div style={sc.cell}>
       <span style={sc.label}>{label}</span>
-      <span style={{ ...sc.value, color: isReal ? (color ?? '#ffffff') : '#374151' }}>
+      <span style={{ ...sc.value, color: isReal ? (color ?? '#ffffff') : '#4b5563' }}>
         {isReal ? value : pending}
       </span>
     </div>
@@ -181,7 +181,7 @@ const s: Record<string, React.CSSProperties> = {
     gap:         28,
   },
   heroLeft: {
-    width:     200,
+    width:      180,
     flexShrink: 0,
   },
   heroNumber: {
@@ -193,14 +193,14 @@ const s: Record<string, React.CSSProperties> = {
   },
   heroLabel: {
     fontSize:      13,
-    fontWeight:    600,
-    color:         '#d1d5db',
+    fontWeight:    500,
+    color:         '#9ca3af',
     letterSpacing: '-0.01em',
     lineHeight:    1.3,
   },
   heroSub: {
     fontSize:  11,
-    color:     '#4b5563',
+    color:     '#6b7280',
     marginTop: 5,
     lineHeight: 1.4,
   },
@@ -214,7 +214,8 @@ const s: Record<string, React.CSSProperties> = {
     flex:                1,
     display:             'grid',
     gridTemplateColumns: '1fr 1fr',
-    gap:                 2,
+    gap:                 3,
+    maxWidth:            480,
   },
   trustBar: {
     display:     'flex',
@@ -234,19 +235,19 @@ const s: Record<string, React.CSSProperties> = {
   },
   trustText: {
     fontSize:      11,
-    color:         '#4b5563',
+    color:         '#6b7280',
     letterSpacing: '0.01em',
   },
 };
 
 const sc: Record<string, React.CSSProperties> = {
   cell: {
-    padding:       '8px 14px',
+    padding:       '10px 14px',
     display:       'flex',
     flexDirection: 'column' as const,
-    gap:           4,
-    background:    'rgba(255,255,255,0.015)',
-    border:        '1px solid rgba(255,255,255,0.05)',
+    gap:           5,
+    background:    'rgba(255,255,255,0.03)',
+    border:        '1px solid rgba(255,255,255,0.06)',
     borderRadius:  8,
   },
   label: {
@@ -254,7 +255,7 @@ const sc: Record<string, React.CSSProperties> = {
     fontWeight:    700,
     letterSpacing: '0.10em',
     textTransform: 'uppercase' as const,
-    color:         '#4b5563',
+    color:         '#6b7280',
   },
   value: {
     fontSize:      18,

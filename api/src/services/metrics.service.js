@@ -1758,6 +1758,8 @@ async function getTopDecisionActions(prisma, shop) {
         // internal tie-break only — not exposed at top level
         _scoreImpact: action.scoreImpact ?? null,
 
+        applyType: action.applyType,
+
         archetype:     profile?.archetype     ?? null,
         archetypeConf: profile?.archetypeConf ?? null,
 
