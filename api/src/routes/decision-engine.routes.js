@@ -76,18 +76,13 @@ router.post('/actions/execute', async (req, res) => {
       });
     }
 
-    // Validate against live Decision Engine output.
-    const decisionResult = await getTopDecisionActions(prisma, req.query.shop);
-    if (!decisionResult.success) {
-      return res.status(400).json({ error: 'No eligible actions found for this store.' });
-    }
-    const isEligible = decisionResult.topActions.some(
-      a => a.productId === productId && a.issueId === issueId
-    );
-    if (!isEligible) {
-      return res.status(400).json({
-        error: `actionKey "${actionKey}" is not in the current top actions. Only ranked actions can be executed.`,
-      });
+    // Eligibility: require a persisted ActionItem with reviewStatus === 'approved'.
+    const actionItemRecord = await prisma.actionItem.findUnique({
+      where:  { storeId_productId_issueId: { storeId: store.id, productId, issueId } },
+      select: { reviewStatus: true },
+    });
+    if (!actionItemRecord || actionItemRecord.reviewStatus !== 'approved') {
+      return res.status(400).json({ success: false, error: 'This action is not approved yet.' });
     }
 
     // Fetch full product (needed by applyContentChange and generatedFix).
@@ -105,15 +100,7 @@ router.post('/actions/execute', async (req, res) => {
     const hasGeneratedContent = !!action?.generatedFix?.bestGuess?.content;
 
     if (action?.applyType === 'content_change' && action.canAutoApply && hasGeneratedContent) {
-      // The user clicking "Fix this now" counts as approval.
-      await prisma.actionItem.upsert({
-        where:  { storeId_productId_issueId: { storeId: store.id, productId, issueId } },
-        update: { reviewStatus: 'approved' },
-        create: { storeId: store.id, productId, issueId, reviewStatus: 'approved' },
-      });
-
-      const approvedAction = { ...action, reviewStatus: 'approved' };
-      const applyResult = await applyContentChange(prisma, store, rawProduct, approvedAction);
+      const applyResult = await applyContentChange(prisma, store, rawProduct, action);
 
       if (!applyResult.applied) {
         // Gate blocked or already applied — surface a clear reason.
