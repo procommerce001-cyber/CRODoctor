@@ -112,7 +112,7 @@ app.get('/health', (req, res) => {
   res.json({ status: 'ok' });
 });
 
-app.get('/stores', async (req, res) => {
+app.get('/stores', requireDev, async (req, res) => {
   try {
     const stores = await prisma.store.findMany({
       orderBy: { createdAt: 'desc' }
@@ -124,7 +124,7 @@ app.get('/stores', async (req, res) => {
   }
 });
 
-app.post('/stores', async (req, res) => {
+app.post('/stores', requireDev, async (req, res) => {
   try {
     const { name } = req.body;
 
