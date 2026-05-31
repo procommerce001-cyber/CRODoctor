@@ -59,21 +59,7 @@ router.post('/actions/execute', async (req, res) => {
     const store = await resolveStore(prisma, req.query.shop, res);
     if (!store) return;
 
-    // Validate against live Decision Engine output.
-    const decisionResult = await getTopDecisionActions(prisma, req.query.shop);
-    if (!decisionResult.success) {
-      return res.status(400).json({ error: 'No eligible actions found for this store.' });
-    }
-    const isEligible = decisionResult.topActions.some(
-      a => a.productId === productId && a.issueId === issueId
-    );
-    if (!isEligible) {
-      return res.status(400).json({
-        error: `actionKey "${actionKey}" is not in the current top actions. Only ranked actions can be executed.`,
-      });
-    }
-
-    // Idempotency — return existing record if already applied or completed.
+    // Idempotency first — skip the expensive LLM eligibility check if already applied.
     const existing = await prisma.contentExecution.findFirst({
       where:  { storeId: store.id, productId, issueId, status: { in: ['applied', 'completed'] } },
       select: { id: true, createdAt: true, status: true },
@@ -87,6 +73,20 @@ router.post('/actions/execute', async (req, res) => {
         executedBy:      'user',
         executedAt:      existing.createdAt,
         executionId:     existing.id,
+      });
+    }
+
+    // Validate against live Decision Engine output.
+    const decisionResult = await getTopDecisionActions(prisma, req.query.shop);
+    if (!decisionResult.success) {
+      return res.status(400).json({ error: 'No eligible actions found for this store.' });
+    }
+    const isEligible = decisionResult.topActions.some(
+      a => a.productId === productId && a.issueId === issueId
+    );
+    if (!isEligible) {
+      return res.status(400).json({
+        error: `actionKey "${actionKey}" is not in the current top actions. Only ranked actions can be executed.`,
       });
     }
 

@@ -3,7 +3,7 @@
 import { useState, useCallback, useEffect, useMemo } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import type { DashboardPayload, ApplyResponse, TopAction } from '@/lib/api';
-import { applySelected, fetchTopActions, executeAction } from '@/lib/api';
+import { applySelected, fetchTopActions, executeAction, rollbackAction } from '@/lib/api';
 import TopWinsList               from './TopWinsList';
 import ExecutionDetailsPanel     from './ExecutionDetailsPanel';
 import StoreSuggestionsList      from './StoreSuggestionsList';
@@ -32,10 +32,14 @@ export default function DashboardClient({ data }: Props) {
   const [applyResult,     setApplyResult]     = useState<ApplyResponse | null>(null);
   const [applyError,      setApplyError]      = useState<string | null>(null);
 
-  const [topActions,  setTopActions]  = useState<TopAction[]>([]);
-  const [executing,     setExecuting]     = useState<Set<string>>(new Set());
-  const [executeErrors, setExecuteErrors] = useState<Record<string, string | null>>({});
-  const [focusedRow,    setFocusedRow]    = useState<FeedRow | null>(null);
+  const [topActions,       setTopActions]       = useState<TopAction[]>([]);
+  const [executing,        setExecuting]        = useState<Set<string>>(new Set());
+  const [executeErrors,    setExecuteErrors]    = useState<Record<string, string | null>>({});
+  const [executeSuccesses, setExecuteSuccesses] = useState<Record<string, string>>({});
+  const [focusedRow,       setFocusedRow]       = useState<FeedRow | null>(null);
+  const [rollingBack,       setRollingBack]       = useState<Set<string>>(new Set());
+  const [rollbackErrors,    setRollbackErrors]    = useState<Record<string, string | null>>({});
+  const [rollbackSuccesses, setRollbackSuccesses] = useState<Record<string, string>>({});
 
   useEffect(() => {
     fetchTopActions(SHOP).then(setTopActions).catch(() => {});
@@ -43,6 +47,7 @@ export default function DashboardClient({ data }: Props) {
 
   const handleExecute = async (actionKey: string) => {
     setExecuteErrors(prev => { const n = { ...prev }; delete n[actionKey]; return n; });
+    setExecuteSuccesses(prev => { const n = { ...prev }; delete n[actionKey]; return n; });
     setExecuting(prev => new Set(prev).add(actionKey));
 
     let applied = false;
@@ -50,21 +55,41 @@ export default function DashboardClient({ data }: Props) {
     try {
       await executeAction(SHOP, actionKey);
       applied = true;
-    } catch (_) {
+    } catch (err) {
       setExecuteErrors(prev => ({
         ...prev,
-        [actionKey]: "We couldn't apply this change right now. Please try again.",
+        [actionKey]: err instanceof Error ? err.message : "We couldn't apply this change right now. Please try again.",
       }));
     } finally {
       setExecuting(prev => { const n = new Set(prev); n.delete(actionKey); return n; });
     }
 
     if (applied) {
+      setExecuteSuccesses(prev => ({ ...prev, [actionKey]: '✓ Change applied successfully.' }));
       fetchTopActions(SHOP)
         .then(setTopActions)
         .catch(() => {
           // Apply already succeeded. Do not surface refresh failure as apply failure.
         });
+      router.refresh();
+    }
+  };
+
+  const handleRollback = async (productId: string, issueId: string) => {
+    const key = `${productId}::${issueId}`;
+    setRollbackErrors(prev => { const n = { ...prev }; delete n[key]; return n; });
+    setRollingBack(prev => new Set(prev).add(key));
+    try {
+      await rollbackAction(SHOP, productId, issueId);
+      setRollbackSuccesses(prev => ({ ...prev, [key]: '✓ Change reverted successfully.' }));
+      router.refresh();
+    } catch (err) {
+      setRollbackErrors(prev => ({
+        ...prev,
+        [key]: err instanceof Error ? err.message : "Couldn't revert this change. Please try again.",
+      }));
+    } finally {
+      setRollingBack(prev => { const n = new Set(prev); n.delete(key); return n; });
     }
   };
 
@@ -151,6 +176,7 @@ export default function DashboardClient({ data }: Props) {
             applyResult={applyResult}
             applyError={applyError}
             executeErrors={executeErrors}
+            executeSuccesses={executeSuccesses}
             onRunAction={handleExecute}
             onToggle={toggle}
             onSelectAll={selectAll}
@@ -158,6 +184,7 @@ export default function DashboardClient({ data }: Props) {
             onApply={handleApply}
             onSelect={(row) => setFocusedRow(row)}
             selectedKey={(focusedRow ?? defaultFocusRow)?.key ?? null}
+            onRollbackDone={() => router.refresh()}
             narrow
           />
         </div>
@@ -169,6 +196,11 @@ export default function DashboardClient({ data }: Props) {
               onRunAction={handleExecute}
               executing={executing}
               executeErrors={executeErrors}
+              executeSuccesses={executeSuccesses}
+              onRollback={handleRollback}
+              rollingBack={rollingBack}
+              rollbackErrors={rollbackErrors}
+              rollbackSuccesses={rollbackSuccesses}
             />
         </div>
       </section>

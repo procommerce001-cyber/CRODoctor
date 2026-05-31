@@ -98,15 +98,26 @@ export default function ProductInspectorPanel({
   onRunAction,
   executing,
   executeErrors,
+  executeSuccesses,
+  onRollback,
+  rollingBack,
+  rollbackErrors,
+  rollbackSuccesses,
 }: {
-  row:            FeedRow | null;
-  shop:           string;
-  onRunAction?:   (key: string) => void;
-  executing?:     Set<string>;
-  executeErrors?: Record<string, string | null>;
+  row:              FeedRow | null;
+  shop:             string;
+  onRunAction?:     (key: string) => void;
+  executing?:       Set<string>;
+  executeErrors?:   Record<string, string | null>;
+  executeSuccesses?: Record<string, string>;
+  onRollback?:        (productId: string, issueId: string) => void;
+  rollingBack?:       Set<string>;
+  rollbackErrors?:    Record<string, string | null>;
+  rollbackSuccesses?: Record<string, string>;
 }) {
   type PvState = { data: ContentPreview | null; phase: 'idle' | 'loading' | 'ready'; error: string | null };
   const [pv, setPv] = useState<PvState>({ data: null, phase: 'idle', error: null });
+  const [confirmingRollback, setConfirmingRollback] = useState(false);
 
   if (!row) {
     return (
@@ -124,7 +135,13 @@ export default function ProductInspectorPanel({
   const ready    = row.readyItem;
   const status   = STATUS_CFG[row.feedStatus] ?? { label: row.feedStatus, color: '#9ca3af', bg: 'transparent' };
   const category = ISSUE_CATEGORY[row.issueId] ?? 'Optimization';
-  const isRunning = action ? (executing?.has(action.actionKey) ?? false) : false;
+  const isRunning      = action ? (executing?.has(action.actionKey) ?? false) : false;
+  const executeSuccess = action ? (executeSuccesses?.[action.actionKey] ?? null) : null;
+
+  const rbKey     = activity ? `${activity.productId}::${activity.issueId}` : null;
+  const isRolling = rbKey ? (rollingBack?.has(rbKey) ?? false) : false;
+  const rbError   = rbKey ? (rollbackErrors?.[rbKey] ?? null) : null;
+  const rbSuccess = rbKey ? (rollbackSuccesses?.[rbKey] ?? null) : null;
 
   async function loadPreview() {
     if (!action) return;
@@ -184,8 +201,16 @@ export default function ProductInspectorPanel({
             </div>
           )}
 
-          {/* CTA — queued items: preview-first flow */}
-          {row.feedStatus === 'queued' && onRunAction && (
+          {/* Success confirmation — shown immediately after apply, persists across feedStatus transitions */}
+          {executeSuccess && (
+            <div style={p.successBlock}>
+              <div style={p.successText}>✓ Change applied successfully.</div>
+              <div style={p.successSub}>We&apos;re measuring its impact now.</div>
+            </div>
+          )}
+
+          {/* CTA — queued items: preview-first flow (hidden once success is confirmed) */}
+          {!executeSuccess && row.feedStatus === 'queued' && onRunAction && (
             action.openMeasurementWindow ? (
               <div style={p.guardNote}>
                 A change is already measuring on this product
@@ -255,12 +280,12 @@ export default function ProductInspectorPanel({
               </div>
             ) : null
           )}
-          {pv.error && row.feedStatus === 'queued' && (
+          {pv.error && !executeSuccess && row.feedStatus === 'queued' && (
             <div style={p.pvError}>{pv.error}</div>
           )}
 
           {/* Measuring state — results ETA */}
-          {row.feedStatus === 'measuring' && action.openMeasurementWindowReadyAt && (
+          {!executeSuccess && row.feedStatus === 'measuring' && action.openMeasurementWindowReadyAt && (
             <div style={p.measuringNote}>
               Results by {fmtReadyAt(action.openMeasurementWindowReadyAt)}
             </div>
@@ -302,6 +327,39 @@ export default function ProductInspectorPanel({
             {activity.createdAt && (
               <div style={p.metaRow}>
                 <span style={p.metaItem}>Applied {fmtDate(activity.createdAt)}</span>
+              </div>
+            )}
+
+            {/* Rollback — available while change is still live/measuring */}
+            {activity.status === 'applied' && onRollback && rbSuccess && (
+              <div style={p.rbSuccess}>{rbSuccess}</div>
+            )}
+            {activity.status === 'applied' && onRollback && !rbSuccess && !confirmingRollback && (
+              <>
+                <button style={p.rbBtn} onClick={() => setConfirmingRollback(true)}>
+                  Undo this change
+                </button>
+                {rbError && <div style={p.pvError}>{rbError}</div>}
+              </>
+            )}
+            {activity.status === 'applied' && onRollback && !rbSuccess && confirmingRollback && (
+              <div style={p.rbConfirm}>
+                <div style={p.rbConfirmText}>
+                  This reverts the change on your store and restores your original content immediately.
+                </div>
+                <div style={p.rbConfirmActions}>
+                  <button
+                    style={{ ...p.rbConfirmBtn, opacity: isRolling ? 0.6 : 1 }}
+                    disabled={isRolling}
+                    onClick={() => onRollback(activity.productId, activity.issueId)}
+                  >
+                    {isRolling ? 'Reverting…' : 'Confirm revert'}
+                  </button>
+                  <button style={p.rbCancelBtn} disabled={isRolling} onClick={() => setConfirmingRollback(false)}>
+                    Cancel
+                  </button>
+                </div>
+                {rbError && <div style={p.pvError}>{rbError}</div>}
               </div>
             )}
         </div>
@@ -439,6 +497,9 @@ const p: Record<string, React.CSSProperties> = {
   pvBackBtn:       { background: 'none', border: 'none', color: '#4b5563', cursor: 'pointer',
                      fontSize: 12, padding: '0', textAlign: 'left' as const, textDecoration: 'underline' },
   pvError:         { fontSize: 12, color: '#f87171' },
+  successBlock:    { padding: '10px 14px', background: 'rgba(34,197,94,0.08)', border: '1px solid rgba(34,197,94,0.22)', borderRadius: 8 },
+  successText:     { fontSize: 13, fontWeight: 700, color: '#4ade80' },
+  successSub:      { fontSize: 12, color: '#6b7280', marginTop: 4 },
 
   // Measurement metrics row
   metricsRow: { display: 'flex', gap: 20, alignItems: 'flex-end' },
@@ -450,6 +511,21 @@ const p: Record<string, React.CSSProperties> = {
 
   // Ready path hint
   readyHint:  { fontSize: 11, color: '#6b7280', fontStyle: 'italic' as const },
+
+  // Rollback section
+  rbBtn:          { background: 'none', border: '1px solid rgba(255,255,255,0.10)', borderRadius: 6,
+                    color: '#9ca3af', cursor: 'pointer', fontSize: 12, padding: '7px 14px',
+                    textAlign: 'left' as const, letterSpacing: '0.01em' },
+  rbSuccess:      { fontSize: 12, color: '#4ade80', padding: '6px 0' },
+  rbConfirm:      { display: 'flex', flexDirection: 'column' as const, gap: 8, padding: '10px 14px',
+                    background: 'rgba(248,113,113,0.05)', border: '1px solid rgba(248,113,113,0.18)',
+                    borderRadius: 7 },
+  rbConfirmText:  { fontSize: 12, color: '#d1d5db', lineHeight: 1.5 },
+  rbConfirmActions: { display: 'flex', gap: 8, alignItems: 'center' },
+  rbConfirmBtn:   { fontSize: 12, fontWeight: 700, padding: '6px 14px', border: 'none', borderRadius: 6,
+                    background: 'rgba(239,68,68,0.75)', color: '#fff', cursor: 'pointer' },
+  rbCancelBtn:    { fontSize: 12, padding: '5px 10px', border: '1px solid rgba(255,255,255,0.10)',
+                    borderRadius: 6, background: 'rgba(255,255,255,0.03)', cursor: 'pointer', color: '#9ca3af' },
 
   // Behavior tracking disclosure
   detailsSummary: { fontSize: 10, color: '#4b5563', padding: '9px 24px',

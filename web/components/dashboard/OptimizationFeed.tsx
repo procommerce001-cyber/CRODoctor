@@ -48,10 +48,12 @@ interface Props {
   onSelectAll:      () => void;
   onClearSelection: () => void;
   onApply:          () => void;
-  onSelect?:        (row: FeedRow) => void;
-  selectedKey?:     string | null;
-  narrow?:          boolean;
-  executeErrors?:   Record<string, string | null>;
+  onSelect?:         (row: FeedRow) => void;
+  selectedKey?:      string | null;
+  narrow?:           boolean;
+  executeErrors?:    Record<string, string | null>;
+  executeSuccesses?: Record<string, string>;
+  onRollbackDone?:   () => void;
 }
 
 // ── Data helpers ───────────────────────────────────────────────────────────────
@@ -208,14 +210,15 @@ function WinCard({ row }: { row: FeedRow }) {
 }
 
 // Hero card for the #1 "Up next" action
-function HeroNextCard({ row, executing, onRunAction, previewState, onPreview, onClosePreview, executeError }: {
-  row:            FeedRow;
-  executing:      Set<string>;
-  onRunAction:    (key: string) => void;
-  previewState:   PreviewState | null;
-  onPreview:      () => void;
-  onClosePreview: () => void;
-  executeError?:  string | null;
+function HeroNextCard({ row, executing, onRunAction, previewState, onPreview, onClosePreview, executeError, executeSuccess }: {
+  row:             FeedRow;
+  executing:       Set<string>;
+  onRunAction:     (key: string) => void;
+  previewState:    PreviewState | null;
+  onPreview:       () => void;
+  onClosePreview:  () => void;
+  executeError?:   string | null;
+  executeSuccess?: string | null;
 }) {
   const action    = row.topAction!;
   const isRunning = executing.has(action.actionKey);
@@ -243,7 +246,11 @@ function HeroNextCard({ row, executing, onRunAction, previewState, onPreview, on
         <PreviewPanel
           issueId={action.issueId}
           preview={previewState.data}
-          applyState={executeError ? { applying: false, applied: false, error: executeError } : null}
+          applyState={
+            executeSuccess ? { applying: false, applied: true,  error: null } :
+            executeError   ? { applying: false, applied: false, error: executeError } :
+            null
+          }
           isApplying={isRunning}
           onApply={() => onRunAction(action.actionKey)}
           onClose={onClosePreview}
@@ -300,19 +307,26 @@ function PreviewPanel({ issueId, preview, applyState, isApplying, onApply, onClo
                 </div>
               </div>
               <div style={pp.reversibility}>You can undo this change anytime.</div>
-              <div style={pp.actions}>
-                <button
-                  style={{ ...pp.btnApply, opacity: applying ? 0.6 : 1 }}
-                  disabled={applying}
-                  onClick={onApply}
-                >
-                  {applying ? 'Applying…' : 'Apply this change'}
-                </button>
-                <button style={pp.btnCancel} onClick={onClose} disabled={applying}>
-                  Cancel
-                </button>
-                {applyState?.error && <span style={{ color: '#f87171', fontSize: 12 }}>{applyState.error}</span>}
-              </div>
+              {applyState?.applied ? (
+                <div style={pp.successBlock}>
+                  <div style={pp.successText}>✓ Change applied successfully.</div>
+                  <div style={pp.successSub}>We&apos;re measuring its impact now.</div>
+                </div>
+              ) : (
+                <div style={pp.actions}>
+                  <button
+                    style={{ ...pp.btnApply, opacity: applying ? 0.6 : 1 }}
+                    disabled={applying}
+                    onClick={onApply}
+                  >
+                    {applying ? 'Applying…' : 'Apply this change'}
+                  </button>
+                  <button style={pp.btnCancel} onClick={onClose} disabled={applying}>
+                    Cancel
+                  </button>
+                  {applyState?.error && <span style={{ color: '#f87171', fontSize: 12 }}>{applyState.error}</span>}
+                </div>
+              )}
             </>
           ) : (
             <div style={{ color: '#d97706', fontSize: 12, padding: '6px 0' }}>
@@ -414,15 +428,16 @@ export default function OptimizationFeed({
   shop, readyItems, topActions, recentActivity,
   executing, selected, isApplying, applyResult, applyError,
   onRunAction, onToggle, onSelectAll, onClearSelection, onApply, onSelect, selectedKey, narrow,
-  executeErrors,
+  executeErrors, executeSuccesses, onRollbackDone,
 }: Props) {
-  const [previews,         setPreviews]         = useState<Record<string, PreviewState>>({});
-  const [applyStates,      setApplyStates]      = useState<Record<string, ApplyState>>({});
-  const [rollbacks,        setRollbacks]        = useState<Record<string, RollbackState>>({});
-  const [actionPreviews,   setActionPreviews]   = useState<Record<string, PreviewState>>({});
-  const [activeSection,    setActiveSection]    = useState<SectionFilter>('all');
-  const [hoveredKey,       setHoveredKey]       = useState<string | null>(null);
-  const [confirmingBatch,  setConfirmingBatch]  = useState(false);
+  const [previews,             setPreviews]             = useState<Record<string, PreviewState>>({});
+  const [applyStates,          setApplyStates]          = useState<Record<string, ApplyState>>({});
+  const [rollbacks,            setRollbacks]            = useState<Record<string, RollbackState>>({});
+  const [confirmingRollbacks,  setConfirmingRollbacks]  = useState<Record<string, boolean>>({});
+  const [actionPreviews,       setActionPreviews]       = useState<Record<string, PreviewState>>({});
+  const [activeSection,        setActiveSection]        = useState<SectionFilter>('all');
+  const [hoveredKey,           setHoveredKey]           = useState<string | null>(null);
+  const [confirmingBatch,      setConfirmingBatch]      = useState(false);
 
   const rows = buildRows(readyItems, topActions, recentActivity);
   const { ready, wins, measuring, upnext, protection } = groupRows(rows);
@@ -498,8 +513,12 @@ export default function OptimizationFeed({
         { method: 'POST', credentials: 'include', headers: apiHeaders({ 'Content-Type': 'application/json' }),
           body: JSON.stringify({ shop, issueId: issId }) },
       );
-      if (!res.ok) throw new Error(await res.text());
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error ?? `Rollback failed: ${res.status}`);
+      }
       setRollbacks(r => ({ ...r, [execId]: { rolling: false, done: true,  error: null } }));
+      onRollbackDone?.();
     } catch (err) {
       setRollbacks(r => ({ ...r, [execId]: { rolling: false, done: false, error: (err as Error).message } }));
     }
@@ -574,9 +593,11 @@ export default function OptimizationFeed({
   function renderMeasuringRow(row: FeedRow) {
     // Activity item (live or measuring)
     if (row.activityItem) {
-      const item = row.activityItem;
-      const rb   = rollbacks[item.executionId];
-      const isLive = row.feedStatus === 'live';
+      const item        = row.activityItem;
+      const rb          = rollbacks[item.executionId];
+      const isLive      = row.feedStatus === 'live';
+      const canUndo     = (isLive || row.feedStatus === 'measuring') && item.status === 'applied';
+      const confirmingRb = confirmingRollbacks[item.executionId];
       return (
         <div key={row.key} style={s.rowWrap}>
           <div style={{ ...rowStyle,
@@ -593,19 +614,39 @@ export default function OptimizationFeed({
             </div>
             <div style={rowActionsStyle}>
               <span style={s.meta}>{formatDate(item.createdAt)}</span>
-              {isLive && !rb?.done && (
+              {canUndo && !rb?.done && !confirmingRb && (
                 <button
-                  style={{ ...s.undoBtn, opacity: rb?.rolling ? 0.6 : 1 }}
+                  style={s.undoBtn}
+                  onClick={e => { e.stopPropagation(); setConfirmingRollbacks(r => ({ ...r, [item.executionId]: true })); }}
+                >
+                  Undo
+                </button>
+              )}
+              {rb?.done && <span style={s.undoDone}>Undone ✓</span>}
+            </div>
+          </div>
+          {confirmingRb && !rb?.done && (
+            <div style={s.rbConfirmPanel}>
+              <span style={s.rbConfirmText}>This reverts the change on your store immediately.</span>
+              <div style={s.rbConfirmActions}>
+                <button
+                  style={{ ...s.undoBtn, color: '#f87171', borderColor: 'rgba(248,113,113,0.25)', opacity: rb?.rolling ? 0.6 : 1 }}
                   disabled={rb?.rolling}
                   onClick={() => doRollback(item.productId, item.issueId, item.executionId)}
                 >
-                  {rb?.rolling ? 'Undoing…' : 'Undo'}
+                  {rb?.rolling ? 'Reverting…' : 'Yes, revert'}
                 </button>
-              )}
-              {rb?.done  && <span style={s.undoDone}>Undone</span>}
-              {rb?.error && <span style={s.undoError}>{rb.error}</span>}
+                <button
+                  style={s.undoBtn}
+                  disabled={rb?.rolling}
+                  onClick={() => setConfirmingRollbacks(r => ({ ...r, [item.executionId]: false }))}
+                >
+                  Cancel
+                </button>
+              </div>
+              {rb?.error && <div style={s.undoError}>{rb.error}</div>}
             </div>
-          </div>
+          )}
         </div>
       );
     }
@@ -654,6 +695,7 @@ export default function OptimizationFeed({
             onPreview={() => toggleActionPreview(heroAction)}
             onClosePreview={() => setActionPreviews(p => { const n = { ...p }; delete n[heroAction.actionKey]; return n; })}
             executeError={executeErrors?.[heroAction.actionKey] ?? null}
+            executeSuccess={executeSuccesses?.[heroAction.actionKey] ?? null}
           />
         </div>
       );
@@ -710,7 +752,11 @@ export default function OptimizationFeed({
           <PreviewPanel
             issueId={action.issueId}
             preview={upPvState.data}
-            applyState={executeErrors?.[action.actionKey] ? { applying: false, applied: false, error: executeErrors[action.actionKey]! } : null}
+            applyState={
+              executeSuccesses?.[action.actionKey] ? { applying: false, applied: true,  error: null } :
+              executeErrors?.[action.actionKey]    ? { applying: false, applied: false, error: executeErrors[action.actionKey]! } :
+              null
+            }
             isApplying={isRunning}
             onApply={() => onRunAction(action.actionKey)}
             onClose={() => setActionPreviews(p => { const n = { ...p }; delete n[action.actionKey]; return n; })}
@@ -986,6 +1032,9 @@ const s: Record<string, React.CSSProperties> = {
   undoBtn:  { fontSize: 11, padding: '3px 10px', border: '1px solid rgba(255,255,255,0.10)', borderRadius: 4, background: 'rgba(255,255,255,0.04)', color: '#9ca3af', cursor: 'pointer', whiteSpace: 'nowrap' as const },
   undoDone: { fontSize: 11, color: '#4ade80',  whiteSpace: 'nowrap' as const },
   undoError:{ fontSize: 11, color: '#f87171' },
+  rbConfirmPanel:   { padding: '8px 14px 10px 42px', background: '#0d120d', borderTop: '1px solid rgba(255,255,255,0.04)', display: 'flex', flexDirection: 'column' as const, gap: 6 },
+  rbConfirmText:    { fontSize: 11, color: '#9ca3af', lineHeight: 1.4 },
+  rbConfirmActions: { display: 'flex', gap: 8, alignItems: 'center', marginTop: 2 },
 };
 
 // Section block header styles
@@ -1062,4 +1111,7 @@ const pp: Record<string, React.CSSProperties> = {
   actions:     { display: 'flex', gap: 8, marginTop: 4, alignItems: 'center' },
   btnApply:    { fontSize: 12, padding: '6px 18px', border: 'none', borderRadius: 6, background: '#15803d', color: '#fff', cursor: 'pointer', fontWeight: 700 },
   btnCancel:   { fontSize: 12, padding: '5px 12px', border: '1px solid rgba(255,255,255,0.10)', borderRadius: 6, background: 'rgba(255,255,255,0.03)', cursor: 'pointer', color: '#9ca3af' },
+  successBlock:{ padding: '10px 14px', background: 'rgba(34,197,94,0.08)', border: '1px solid rgba(34,197,94,0.22)', borderRadius: 8 },
+  successText: { fontSize: 13, fontWeight: 700, color: '#4ade80' },
+  successSub:  { fontSize: 12, color: '#6b7280', marginTop: 4 },
 };

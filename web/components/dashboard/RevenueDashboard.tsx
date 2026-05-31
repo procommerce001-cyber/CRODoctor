@@ -31,10 +31,10 @@ function fmtDate(iso: string) {
 function useCountUp(target: number, duration = 1200): number {
   const [value, setValue] = useState(0);
   useEffect(() => {
-    if (target === 0) { setValue(0); return; }
     const start = performance.now();
     let raf: number;
     const tick = (now: number) => {
+      if (target === 0) { setValue(0); return; }
       const t = Math.min((now - start) / duration, 1);
       setValue(Math.round(target * (1 - Math.pow(1 - t, 3))));
       if (t < 1) raf = requestAnimationFrame(tick);

@@ -410,21 +410,55 @@ export async function fetchEarlySignal(shop: string, productId: string): Promise
 }
 
 export async function executeAction(shop: string, actionKey: string): Promise<string> {
+  const controller = new AbortController();
+  // 150s covers the full LLM pipeline (30-120s) + Shopify write + response body read.
+  // The timer stays armed through both fetch() and res.json() — cleared only in the outer finally.
+  const timer = setTimeout(() => controller.abort(), 150_000);
+
+  try {
+    const res = await fetch(
+      `${API_BASE}/decision-engine/actions/execute?shop=${encodeURIComponent(shop)}`,
+      {
+        method:      'POST',
+        credentials: 'include',
+        headers:     apiHeaders({ 'Content-Type': 'application/json' }),
+        body:        JSON.stringify({ actionKey }),
+        signal:      controller.signal,
+      }
+    );
+
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error ?? `Execute failed: ${res.status}`);
+    }
+    const data = await res.json();
+    return data.executionId as string;
+  } catch (err) {
+    if (err instanceof Error && err.name === 'AbortError') {
+      throw new Error(
+        'This is taking longer than expected. The change may still be applying — check back in a moment.'
+      );
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+export async function rollbackAction(shop: string, productId: string, issueId: string): Promise<void> {
   const res = await fetch(
-    `${API_BASE}/decision-engine/actions/execute?shop=${encodeURIComponent(shop)}`,
+    `${API_BASE}/action-center/products/${encodeURIComponent(productId)}/rollback`,
     {
       method:      'POST',
       credentials: 'include',
       headers:     apiHeaders({ 'Content-Type': 'application/json' }),
-      body:        JSON.stringify({ actionKey }),
+      body:        JSON.stringify({ shop, issueId }),
     }
   );
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
-    throw new Error(body.error ?? `Execute failed: ${res.status}`);
+    throw new Error(body.error ?? `Rollback failed: ${res.status}`);
   }
-  const data = await res.json();
-  return data.executionId as string;
 }
 
 export interface ExecutionResult {
