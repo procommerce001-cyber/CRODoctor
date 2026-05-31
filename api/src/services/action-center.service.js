@@ -367,11 +367,29 @@ async function loadReviewStateMap(prisma, storeId, productId) {
 // saveReviewState
 // Upserts one ActionItem row. Validates status before writing.
 // Returns the persisted record (public-safe shape).
+//
+// proposedContent (optional):
+//   When reviewStatus === 'approved' and proposedContent is a non-empty string,
+//   saves the exact string as reviewedProposedContent and stamps reviewedAt.
+//   When reviewStatus is not 'approved', clears both fields so stale reviewed
+//   content is never left attached to a rejected/deferred/pending action.
 // ---------------------------------------------------------------------------
-async function saveReviewState(prisma, { storeId, productId, issueId, reviewStatus, selectedVariantIndex }) {
+async function saveReviewState(prisma, { storeId, productId, issueId, reviewStatus, selectedVariantIndex, proposedContent = null }) {
   if (!VALID_REVIEW_STATUSES.has(reviewStatus)) {
     throw new Error(`Invalid reviewStatus "${reviewStatus}". Must be one of: ${[...VALID_REVIEW_STATUSES].join(', ')}`);
   }
+
+  let reviewedProposedContent = null;
+  let reviewedAt              = null;
+
+  if (reviewStatus === 'approved') {
+    const isNonEmpty = typeof proposedContent === 'string' && proposedContent.trim().length > 0;
+    if (isNonEmpty) {
+      reviewedProposedContent = proposedContent; // stored exactly as received — no trimming
+      reviewedAt              = new Date();
+    }
+  }
+  // For non-approved statuses both fields are left null, clearing any stale value.
 
   const record = await prisma.actionItem.upsert({
     where: {
@@ -379,24 +397,30 @@ async function saveReviewState(prisma, { storeId, productId, issueId, reviewStat
     },
     update: {
       reviewStatus,
-      selectedVariantIndex: selectedVariantIndex ?? null,
+      selectedVariantIndex:    selectedVariantIndex ?? null,
+      reviewedProposedContent,
+      reviewedAt,
     },
     create: {
       storeId,
       productId,
       issueId,
       reviewStatus,
-      selectedVariantIndex: selectedVariantIndex ?? null,
+      selectedVariantIndex:    selectedVariantIndex ?? null,
+      reviewedProposedContent,
+      reviewedAt,
     },
   });
 
   return {
-    id:                  record.id,
-    productId:           record.productId,
-    issueId:             record.issueId,
-    reviewStatus:        record.reviewStatus,
-    selectedVariantIndex: record.selectedVariantIndex,
-    updatedAt:           record.updatedAt,
+    id:                     record.id,
+    productId:              record.productId,
+    issueId:                record.issueId,
+    reviewStatus:           record.reviewStatus,
+    selectedVariantIndex:   record.selectedVariantIndex,
+    reviewedProposedContent: record.reviewedProposedContent,
+    reviewedAt:             record.reviewedAt,
+    updatedAt:              record.updatedAt,
   };
 }
 
@@ -1233,13 +1257,35 @@ function mergeProposedContent(currentContent, proposedContent) {
 //   5. On Shopify failure: return error, do not persist
 // ---------------------------------------------------------------------------
 async function applyContentChange(prisma, store, rawProduct, actionItem) {
-  // 1. Gate
-  const gate = checkApplyGate(actionItem, rawProduct);
+  // 1. Load reviewedProposedContent — the exact content the merchant saw and approved.
+  //    Apply must never write LLM-regenerated or unseen content.
+  //    This check runs before the gate so the reviewed string can be injected into
+  //    the gate check (replacing any freshly generated generatedFix.bestGuess.content).
+  const reviewRecord = await prisma.actionItem.findUnique({
+    where:  { storeId_productId_issueId: { storeId: store.id, productId: rawProduct.id, issueId: actionItem.issueId } },
+    select: { reviewedProposedContent: true },
+  });
+  const reviewedContent = reviewRecord?.reviewedProposedContent;
+  if (!reviewedContent || reviewedContent.trim().length === 0) {
+    return { applied: false, blockReason: 'Please preview this change again before applying.' };
+  }
+
+  // 1b. Gate — inject the reviewed content so the gate's proposedContent check uses
+  //     the exact reviewed string, not a freshly regenerated LLM value.
+  const gatedActionItem = {
+    ...actionItem,
+    generatedFix: {
+      ...(actionItem.generatedFix ?? {}),
+      bestGuess: { ...(actionItem.generatedFix?.bestGuess ?? {}), content: reviewedContent },
+    },
+  };
+  const gate = checkApplyGate(gatedActionItem, rawProduct);
   if (!gate.eligibleToApply) {
     return { applied: false, blockReason: gate.blockReason };
   }
 
   const { currentContent, proposedContent } = gate;
+  // proposedContent === reviewedContent (guaranteed by the override above)
 
   // 1b. Idempotency guard — skip if an active applied execution exists for this issue+product.
   // "Active" means applied and NOT subsequently rolled back. A rolled_back row referencing the

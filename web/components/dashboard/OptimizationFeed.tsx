@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import type { ReviewItem, TopAction, ActivityItem, ContentPreview, ApplyResponse } from '@/lib/api';
-import { fetchContentPreview, applySelected, issueLabel, API_BASE, apiHeaders } from '@/lib/api';
+import { fetchContentPreview, applySelected, submitReviewApproval, issueLabel, API_BASE, apiHeaders } from '@/lib/api';
 import { blockReasonLabel, isManualBlockReason, PREVIEW_UNAVAILABLE_MSG, proposedContentLabel } from './previewCopy';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
@@ -488,10 +488,19 @@ export default function OptimizationFeed({
     }
   }
 
-  async function singleApply(item: ReviewItem) {
+  async function singleApply(item: ReviewItem, previewData?: ContentPreview | null) {
     const key = item.selectionKey;
     setApplyStates(s => ({ ...s, [key]: { applying: true, applied: false, error: null } }));
     try {
+      // Persist the exact content the merchant reviewed before applying.
+      // Fatal: if this fails the backend will block Apply (reviewedProposedContent required).
+      // The error propagates to the outer catch, which shows it in the UI and keeps
+      // the Preview panel open (it only closes on success).
+      const pc = previewData?.proposedContent;
+      if (pc && pc.trim().length > 0) {
+        await submitReviewApproval(shop, item.productId, item.issueId, pc);
+      }
+
       const result = await applySelected(shop, [key]);
       const row    = result.results[0];
       if (row?.status === 'applied') {
@@ -582,7 +591,7 @@ export default function OptimizationFeed({
             issueId={item.issueId}
             preview={pvState.data}
             applyState={apState ?? null}
-            onApply={() => singleApply(item)}
+            onApply={() => singleApply(item, pvState.data)}
             onClose={() => setPreviews(p => { const n = { ...p }; delete n[item.selectionKey]; return n; })}
           />
         )}

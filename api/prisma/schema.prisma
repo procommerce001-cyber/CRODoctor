@@ -168,6 +168,10 @@ model ActionItem {
   reviewStatus         String   @default("pending")
   // which generatedFix variant the reviewer selected (0 = bestGuess)
   selectedVariantIndex Int?
+  // exact proposedContent the merchant reviewed before approving (null on non-approved rows)
+  reviewedProposedContent String?
+  // timestamp when reviewedProposedContent was locked in
+  reviewedAt           DateTime?
   createdAt            DateTime @default(now())
   updatedAt            DateTime @updatedAt
 

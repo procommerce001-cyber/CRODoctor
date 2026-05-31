@@ -76,10 +76,11 @@ router.post('/actions/execute', async (req, res) => {
       });
     }
 
-    // Eligibility: require a persisted ActionItem with reviewStatus === 'approved'.
+    // Eligibility: require a persisted ActionItem with reviewStatus === 'approved'
+    // AND reviewedProposedContent set — the exact content the merchant reviewed.
     const actionItemRecord = await prisma.actionItem.findUnique({
       where:  { storeId_productId_issueId: { storeId: store.id, productId, issueId } },
-      select: { reviewStatus: true },
+      select: { reviewStatus: true, reviewedProposedContent: true },
     });
     if (!actionItemRecord || actionItemRecord.reviewStatus !== 'approved') {
       return res.status(400).json({ success: false, error: 'This action is not approved yet.' });
@@ -97,9 +98,18 @@ router.post('/actions/execute', async (req, res) => {
     const action = actionResult.actions.find(a => a.issueId === issueId);
 
     // ── Content-change path: real Shopify apply ───────────────────────────
-    const hasGeneratedContent = !!action?.generatedFix?.bestGuess?.content;
-
-    if (action?.applyType === 'content_change' && action.canAutoApply && hasGeneratedContent) {
+    // Gate on reviewedProposedContent (not on freshly generated LLM content).
+    // applyContentChange will also enforce this — the check here prevents a silent
+    // fallthrough to the non-content completion path when reviewedContent is absent.
+    if (action?.applyType === 'content_change' && action.canAutoApply) {
+      const hasReviewedContent = typeof actionItemRecord.reviewedProposedContent === 'string'
+        && actionItemRecord.reviewedProposedContent.trim().length > 0;
+      if (!hasReviewedContent) {
+        return res.status(400).json({
+          success: false,
+          error:   'Please preview this change again before applying.',
+        });
+      }
       const applyResult = await applyContentChange(prisma, store, rawProduct, action);
 
       if (!applyResult.applied) {

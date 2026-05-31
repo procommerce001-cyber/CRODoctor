@@ -520,6 +520,29 @@ export function issueLabel(issueId: string): string {
 }
 
 // ---------------------------------------------------------------------------
+// Review approval — persist the exact proposedContent the merchant reviewed.
+// Non-fatal wrapper: callers should not block apply on a persistence failure.
+// ---------------------------------------------------------------------------
+
+export async function submitReviewApproval(
+  shop: string,
+  productId: string,
+  issueId: string,
+  proposedContent: string,
+): Promise<void> {
+  const res = await fetch(`${API_BASE}/action-center/review`, {
+    method:      'POST',
+    credentials: 'include',
+    headers:     apiHeaders({ 'Content-Type': 'application/json' }),
+    body:        JSON.stringify({ shop, productId, issueId, reviewStatus: 'approved', proposedContent }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({})) as { error?: string };
+    throw new Error(body.error ?? `Review approval failed: ${res.status}`);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Content preview
 // ---------------------------------------------------------------------------
 

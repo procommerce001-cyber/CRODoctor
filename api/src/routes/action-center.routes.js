@@ -18,6 +18,7 @@ const {
 const {
   previewContentExecution,
   getExecutionHistory,
+  CONTENT_CHANGE_ISSUE_IDS,
 } = require('../services/content-execution.service');
 
 const { getProductReport } = require('../services/action-center.service');
@@ -564,7 +565,7 @@ router.get('/queue', async (req, res) => {
 router.post('/review', async (req, res) => {
   const prisma = req.app.get('prisma');
   try {
-    const { shop, productId, issueId, reviewStatus, selectedVariantIndex } = req.body;
+    const { shop, productId, issueId, reviewStatus, selectedVariantIndex, proposedContent } = req.body;
 
     if (!shop)         return res.status(400).json({ error: 'shop is required' });
     if (!productId)    return res.status(400).json({ error: 'productId is required' });
@@ -584,12 +585,26 @@ router.post('/review', async (req, res) => {
     });
     if (!product) return res.status(404).json({ error: 'Product not found in this store.' });
 
+    // For content_change issues being approved, the exact reviewed content must be provided.
+    // CONTENT_CHANGE_ISSUE_IDS is derived from PATCH_MODE_REGISTRY — the authoritative list
+    // of auto-applicable content_change issues. Manual/theme issues are unaffected.
+    if (reviewStatus === 'approved' && CONTENT_CHANGE_ISSUE_IDS.has(issueId)) {
+      const hasContent = typeof proposedContent === 'string' && proposedContent.trim().length > 0;
+      if (!hasContent) {
+        return res.status(400).json({
+          success: false,
+          error:   'Please preview this change again before approving.',
+        });
+      }
+    }
+
     const saved = await saveReviewState(prisma, {
       storeId:             store.id,
       productId,
       issueId,
       reviewStatus,
       selectedVariantIndex: typeof selectedVariantIndex === 'number' ? selectedVariantIndex : null,
+      proposedContent:      typeof proposedContent === 'string' ? proposedContent : null,
     });
 
     res.json({ success: true, item: saved });
@@ -668,13 +683,39 @@ router.post('/products/:id/apply', async (req, res) => {
       return res.status(404).json({ error: `No action found for issueId "${issueId}" on this product.` });
     }
 
-    // 1. Explicit gate check — abort before any snapshot if not eligible
-    const gate = checkApplyGate(actionItem, raw);
+    // 1. Load reviewedProposedContent — block before any snapshot or Shopify write
+    //    if the merchant has not yet reviewed and persisted the exact content.
+    const reviewRecord = await prisma.actionItem.findUnique({
+      where:  { storeId_productId_issueId: { storeId: store.id, productId: raw.id, issueId } },
+      select: { reviewedProposedContent: true },
+    });
+    const reviewedContent = reviewRecord?.reviewedProposedContent;
+    if (!reviewedContent || reviewedContent.trim().length === 0) {
+      return res.status(400).json({
+        applied:     false,
+        success:     false,
+        blockReason: 'Please preview this change again before applying.',
+      });
+    }
+
+    // Inject reviewed content into the action item so the gate check and
+    // applyContentChange both use the exact reviewed string (not a freshly
+    // regenerated LLM value).
+    const actionItemForApply = {
+      ...actionItem,
+      generatedFix: {
+        ...(actionItem.generatedFix ?? {}),
+        bestGuess: { ...(actionItem.generatedFix?.bestGuess ?? {}), content: reviewedContent },
+      },
+    };
+
+    // 2. Explicit gate check — abort before any snapshot if not eligible
+    const gate = checkApplyGate(actionItemForApply, raw);
     if (!gate.eligibleToApply) {
       return res.status(422).json({ applied: false, blockReason: gate.blockReason });
     }
 
-    // 2. Windowed before-snapshot — captures orders from [today-7d, today).
+    // 3. Windowed before-snapshot — captures orders from [today-7d, today).
     //    Runs before apply so it cannot include the current change's orders.
     let beforeCaptured   = false;
     let beforeSnapshotId = null;
@@ -686,16 +727,16 @@ router.post('/products/:id/apply', async (req, res) => {
       console.warn('[ActionCenter] before-snapshot failed (non-fatal):', snapErr.message);
     }
 
-    // 3. Apply — gate runs again inside applyContentChange (idempotent, safe)
+    // 4. Apply — gate runs again inside applyContentChange (idempotent, safe)
     //    applyContentChange also sets afterReadyAt = now + 7d on the execution row.
-    const applyResult = await applyContentChange(prisma, store, raw, actionItem);
+    const applyResult = await applyContentChange(prisma, store, raw, actionItemForApply);
 
     if (!applyResult.applied) {
       const status = applyResult.error ? 502 : 422;
       return res.status(status).json(applyResult);
     }
 
-    // 4. Fetch the executionId + afterReadyAt written by applyContentChange
+    // 5. Fetch the executionId + afterReadyAt written by applyContentChange
     const execution = await prisma.contentExecution.findFirst({
       where:   { productId: raw.id, issueId, status: 'applied' },
       orderBy: { createdAt: 'desc' },
@@ -704,7 +745,7 @@ router.post('/products/:id/apply', async (req, res) => {
     const executionId  = execution?.id       ?? null;
     const afterReadyAt = execution?.afterReadyAt ?? null;
 
-    // 5. Retroactively link the before-snapshot to the execution
+    // 6. Retroactively link the before-snapshot to the execution
     //    After-snapshot is NOT captured here — it is captured by the scheduler
     //    when afterReadyAt has elapsed (7 days from now).
     if (executionId && beforeSnapshotId) {

@@ -967,10 +967,17 @@ function wrapIssueContent(issueId, text) {
   return reg.wrapContent(text);
 }
 
+// Exported so callers can cheaply determine whether an issueId requires a
+// proposedContent snapshot at approval time without re-running the CRO engine.
+// A content_change issue is only auto-applicable if it has a PATCH_MODE_REGISTRY
+// entry — this set is therefore the authoritative list for that check.
+const CONTENT_CHANGE_ISSUE_IDS = new Set(Object.keys(PATCH_MODE_REGISTRY));
+
 module.exports = {
   previewContentExecution,
   previewRollback,
   getExecutionHistory,
   buildResultContent,
   wrapIssueContent,
+  CONTENT_CHANGE_ISSUE_IDS,
 };
