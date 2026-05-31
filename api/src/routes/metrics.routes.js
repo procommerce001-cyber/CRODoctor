@@ -115,7 +115,7 @@ router.post('/products/:id/snapshot', async (req, res) => {
 
     if (!shop) return res.status(400).json({ error: 'shop is required' });
 
-    const store = await resolveStore(prisma, shop, res);
+    const store = await resolveStore(prisma, shop, res, req);
     if (!store) return;
 
     // Confirm product belongs to this store
@@ -150,7 +150,7 @@ router.post('/products/:id/snapshot', async (req, res) => {
 router.get('/products/:id/compare', async (req, res) => {
   const prisma = req.app.get('prisma');
   try {
-    const store = await resolveStore(prisma, req.query.shop, res);
+    const store = await resolveStore(prisma, req.query.shop, res, req);
     if (!store) return;
 
     const product = await prisma.product.findFirst({
@@ -186,7 +186,7 @@ router.post('/products/:id/execution-snapshot', async (req, res) => {
     if (!shop)        return res.status(400).json({ error: 'shop is required' });
     if (!executionId) return res.status(400).json({ error: 'executionId is required' });
 
-    const store = await resolveStore(prisma, shop, res);
+    const store = await resolveStore(prisma, shop, res, req);
     if (!store) return;
 
     const product = await prisma.product.findFirst({
@@ -221,7 +221,7 @@ router.post('/products/:id/execution-snapshot', async (req, res) => {
 router.get('/executions/:id/compare', async (req, res) => {
   const prisma = req.app.get('prisma');
   try {
-    const store = await resolveStore(prisma, req.query.shop, res);
+    const store = await resolveStore(prisma, req.query.shop, res, req);
     if (!store) return;
 
     const result = await compareExecutionMetrics(prisma, req.params.id);
@@ -245,7 +245,7 @@ router.get('/executions/:id/compare', async (req, res) => {
 router.get('/executions/:id/results', async (req, res) => {
   const prisma = req.app.get('prisma');
   try {
-    const store = await resolveStore(prisma, req.query.shop, res);
+    const store = await resolveStore(prisma, req.query.shop, res, req);
     if (!store) return;
 
     // Confirm execution belongs to this store
@@ -275,7 +275,7 @@ router.get('/executions/:id/results', async (req, res) => {
 router.get('/executions/:id/analyze', async (req, res) => {
   const prisma = req.app.get('prisma');
   try {
-    const store = await resolveStore(prisma, req.query.shop, res);
+    const store = await resolveStore(prisma, req.query.shop, res, req);
     if (!store) return;
 
     const execution = await prisma.contentExecution.findFirst({
@@ -300,7 +300,7 @@ router.get('/executions/:id/analyze', async (req, res) => {
 router.get('/executions/:id/details', async (req, res) => {
   const prisma = req.app.get('prisma');
   try {
-    const store = await resolveStore(prisma, req.query.shop, res);
+    const store = await resolveStore(prisma, req.query.shop, res, req);
     if (!store) return;
 
     const execution = await prisma.contentExecution.findFirst({
@@ -348,6 +348,8 @@ router.get('/store/feed', async (req, res) => {
   const prisma = req.app.get('prisma');
   try {
     if (!req.query.shop) return res.status(400).json({ error: 'shop is required' });
+    const _store = await resolveStore(prisma, req.query.shop, res, req);
+    if (!_store) return;
 
     const result = await getStoreExecutionFeed(prisma, req.query.shop);
 
@@ -368,6 +370,8 @@ router.get('/store/results', async (req, res) => {
   const prisma = req.app.get('prisma');
   try {
     if (!req.query.shop) return res.status(400).json({ error: 'shop is required' });
+    const _store = await resolveStore(prisma, req.query.shop, res, req);
+    if (!_store) return;
 
     const result = await getStoreResultsSummary(prisma, req.query.shop);
 
@@ -391,7 +395,7 @@ router.get('/store/suggestions/:issueId/candidates', async (req, res) => {
   const prisma  = req.app.get('prisma');
   const issueId = req.params.issueId;
   try {
-    const store = await resolveStore(prisma, req.query.shop, res);
+    const store = await resolveStore(prisma, req.query.shop, res, req);
     if (!store) return;
 
     const rawProducts = await prisma.product.findMany({
@@ -475,6 +479,8 @@ router.get('/store/suggestions-status', async (req, res) => {
   const prisma = req.app.get('prisma');
   try {
     if (!req.query.shop) return res.status(400).json({ error: 'shop is required' });
+    const _store = await resolveStore(prisma, req.query.shop, res, req);
+    if (!_store) return;
 
     const result = await getStoreSuggestionsWithStatus(prisma, req.query.shop);
 
@@ -495,6 +501,8 @@ router.get('/store/suggestions', async (req, res) => {
   const prisma = req.app.get('prisma');
   try {
     if (!req.query.shop) return res.status(400).json({ error: 'shop is required' });
+    const _store = await resolveStore(prisma, req.query.shop, res, req);
+    if (!_store) return;
 
     const result = await getStoreCROSuggestions(prisma, req.query.shop);
 
@@ -515,6 +523,8 @@ router.get('/store/overview', async (req, res) => {
   const prisma = req.app.get('prisma');
   try {
     if (!req.query.shop) return res.status(400).json({ error: 'shop is required' });
+    const _store = await resolveStore(prisma, req.query.shop, res, req);
+    if (!_store) return;
 
     const result = await getStoreOverview(prisma, req.query.shop);
 
@@ -538,6 +548,8 @@ router.get('/revenue-dashboard', async (req, res) => {
   const prisma = req.app.get('prisma');
   try {
     if (!req.query.shop) return res.status(400).json({ error: 'shop is required' });
+    const _store = await resolveStore(prisma, req.query.shop, res, req);
+    if (!_store) return;
 
     const result = await getRevenueDashboard(prisma, req.query.shop);
 
@@ -569,6 +581,8 @@ router.get('/monthly-statement', async (req, res) => {
   const prisma = req.app.get('prisma');
   try {
     if (!req.query.shop) return res.status(400).json({ error: 'shop is required' });
+    const _store = await resolveStore(prisma, req.query.shop, res, req);
+    if (!_store) return;
     const result = await getMonthlyStatement(prisma, req.query.shop);
     if (!result.success) return res.status(404).json(result);
     res.json(result);
@@ -588,6 +602,8 @@ router.get('/new-products-digest', async (req, res) => {
   const prisma = req.app.get('prisma');
   try {
     if (!req.query.shop) return res.status(400).json({ error: 'shop is required' });
+    const _store = await resolveStore(prisma, req.query.shop, res, req);
+    if (!_store) return;
     const result = await getNewProductsDigest(prisma, req.query.shop);
     if (!result.success) return res.status(404).json(result);
     res.json(result);
@@ -607,6 +623,8 @@ router.get('/measurement-ready-digest', async (req, res) => {
   const prisma = req.app.get('prisma');
   try {
     if (!req.query.shop) return res.status(400).json({ error: 'shop is required' });
+    const _store = await resolveStore(prisma, req.query.shop, res, req);
+    if (!_store) return;
     const result = await getMeasurementReadyDigest(prisma, req.query.shop);
     if (!result.success) return res.status(404).json(result);
     res.json(result);
@@ -621,7 +639,7 @@ router.get('/store/attributed-revenue', async (req, res) => {
   try {
     if (!req.query.shop) return res.status(400).json({ error: 'shop is required' });
 
-    const store = await resolveStore(prisma, req.query.shop, res);
+    const store = await resolveStore(prisma, req.query.shop, res, req);
     if (!store) return;
 
     const windowDays = Math.max(1, parseInt(req.query.windowDays, 10) || 30);

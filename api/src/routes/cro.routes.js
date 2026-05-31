@@ -32,7 +32,7 @@ router.get('/health', (_req, res) => {
 router.get('/products', async (req, res) => {
   const prisma = req.app.get('prisma');
   try {
-    const store = await resolveStore(prisma, req.query.shop, res);
+    const store = await resolveStore(prisma, req.query.shop, res, req);
     if (!store) return;
 
     const rawProducts = await prisma.product.findMany({
@@ -105,7 +105,7 @@ router.get('/products/:id', async (req, res) => {
 router.get('/priorities', async (req, res) => {
   const prisma = req.app.get('prisma');
   try {
-    const store = await resolveStore(prisma, req.query.shop, res);
+    const store = await resolveStore(prisma, req.query.shop, res, req);
     if (!store) return;
 
     const rawProducts = await prisma.product.findMany({
@@ -157,7 +157,7 @@ router.get('/priorities', async (req, res) => {
 router.get('/action-plan', async (req, res) => {
   const prisma = req.app.get('prisma');
   try {
-    const store = await resolveStore(prisma, req.query.shop, res);
+    const store = await resolveStore(prisma, req.query.shop, res, req);
     if (!store) return;
 
     const rawProducts = await prisma.product.findMany({

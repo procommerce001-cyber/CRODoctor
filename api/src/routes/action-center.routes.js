@@ -40,11 +40,18 @@ router.get('/products/:id', async (req, res) => {
     });
     if (!raw) return res.status(404).json({ error: 'Product not found.' });
 
-    // Resolve store for state merge — optional; without shop param, state is not merged
+    // Resolve store for state merge — optional; without shop param, state is not merged.
+    // If shop is provided, it must match the session's store to prevent cross-store
+    // re
+    //view-state leakage.
     let storeId = null;
     if (req.query.shop) {
       const store = await prisma.store.findUnique({ where: { shopDomain: req.query.shop } });
-      if (store) storeId = store.id;
+      if (!store) return res.status(404).json({ error: 'Store not found.' });
+      if (req.session?.storeId && req.session.storeId !== store.id) {
+        return res.status(403).json({ error: 'Forbidden.' });
+      }
+      storeId = store.id;
     }
 
     const result = await getProductActions(raw, { prisma, storeId });
@@ -86,7 +93,7 @@ router.post('/batch-apply-safe', async (req, res) => {
     if (!productIds.length)   return res.status(400).json({ error: 'productIds is required' });
     if (productIds.length > 5) return res.status(400).json({ error: 'max 5 products per batch' });
 
-    const store = await resolveStore(prisma, shop, res);
+    const store = await resolveStore(prisma, shop, res, req);
     if (!store) return;
 
     const results        = [];
@@ -255,7 +262,7 @@ router.post('/batch-apply-selected', async (req, res) => {
     const duplicate = selection.find(k => seen.size === seen.add(k).size);
     if (duplicate !== undefined) return res.status(400).json({ error: `duplicate selectionKey: "${duplicate}"` });
 
-    const store = await resolveStore(prisma, shop, res);
+    const store = await resolveStore(prisma, shop, res, req);
     if (!store) return;
 
     const results      = [];
@@ -392,7 +399,7 @@ function sortActionItems(items) {
 router.get('/review-summary', async (req, res) => {
   const prisma = req.app.get('prisma');
   try {
-    const store = await resolveStore(prisma, req.query.shop, res);
+    const store = await resolveStore(prisma, req.query.shop, res, req);
     if (!store) return;
 
     const rawProducts = await prisma.product.findMany({
@@ -493,7 +500,7 @@ router.get('/review-summary', async (req, res) => {
 router.get('/batch-preview', async (req, res) => {
   const prisma = req.app.get('prisma');
   try {
-    const store = await resolveStore(prisma, req.query.shop, res);
+    const store = await resolveStore(prisma, req.query.shop, res, req);
     if (!store) return;
 
     const rawProducts = await prisma.product.findMany({
@@ -521,7 +528,7 @@ router.get('/batch-preview', async (req, res) => {
 router.get('/queue', async (req, res) => {
   const prisma = req.app.get('prisma');
   try {
-    const store = await resolveStore(prisma, req.query.shop, res);
+    const store = await resolveStore(prisma, req.query.shop, res, req);
     if (!store) return;
 
     const rawProducts = await prisma.product.findMany({
@@ -566,6 +573,9 @@ router.post('/review', async (req, res) => {
 
     const store = await prisma.store.findUnique({ where: { shopDomain: shop } });
     if (!store) return res.status(404).json({ error: 'Store not found.' });
+    if (req.session?.storeId && req.session.storeId !== store.id) {
+      return res.status(403).json({ error: 'Forbidden.' });
+    }
 
     // Confirm the product belongs to this store
     const product = await prisma.product.findFirst({
@@ -606,6 +616,9 @@ router.get('/review-state', async (req, res) => {
 
     const store = await prisma.store.findUnique({ where: { shopDomain: shop } });
     if (!store) return res.status(404).json({ error: 'Store not found.' });
+    if (req.session?.storeId && req.session.storeId !== store.id) {
+      return res.status(403).json({ error: 'Forbidden.' });
+    }
 
     const result = await getReviewStateForProduct(prisma, store.id, productId);
     res.json(result);
@@ -638,6 +651,9 @@ router.post('/products/:id/apply', async (req, res) => {
 
     const store = await prisma.store.findUnique({ where: { shopDomain: shop } });
     if (!store) return res.status(404).json({ error: 'Store not found.' });
+    if (req.session?.storeId && req.session.storeId !== store.id) {
+      return res.status(403).json({ error: 'Forbidden.' });
+    }
 
     const raw = await prisma.product.findFirst({
       where:   { id: req.params.id, storeId: store.id },
@@ -724,7 +740,7 @@ router.post('/products/:id/apply', async (req, res) => {
 router.get('/products/:id/executions', async (req, res) => {
   const prisma = req.app.get('prisma');
   try {
-    const store = await resolveStore(prisma, req.query.shop, res);
+    const store = await resolveStore(prisma, req.query.shop, res, req);
     if (!store) return;
 
     const result = await getExecutionHistory(prisma, store.id, req.params.id);
@@ -757,6 +773,9 @@ router.post('/products/:id/rollback', async (req, res) => {
 
     const store = await prisma.store.findUnique({ where: { shopDomain: shop } });
     if (!store) return res.status(404).json({ error: 'Store not found.' });
+    if (req.session?.storeId && req.session.storeId !== store.id) {
+      return res.status(403).json({ error: 'Forbidden.' });
+    }
 
     const raw = await prisma.product.findFirst({
       where:   { id: req.params.id, storeId: store.id },
@@ -800,6 +819,9 @@ router.post('/products/:id/apply-gate', async (req, res) => {
 
     const store = await prisma.store.findUnique({ where: { shopDomain: shop } });
     if (!store) return res.status(404).json({ error: 'Store not found.' });
+    if (req.session?.storeId && req.session.storeId !== store.id) {
+      return res.status(403).json({ error: 'Forbidden.' });
+    }
 
     const raw = await prisma.product.findFirst({
       where:   { id: req.params.id, storeId: store.id },
@@ -845,6 +867,9 @@ router.post('/products/:id/content-preview', async (req, res) => {
 
     const store = await prisma.store.findUnique({ where: { shopDomain: shop } });
     if (!store) return res.status(404).json({ error: 'Store not found.' });
+    if (req.session?.storeId && req.session.storeId !== store.id) {
+      return res.status(403).json({ error: 'Forbidden.' });
+    }
 
     const result = await previewContentExecution(prisma, {
       storeId:              store.id,
@@ -878,10 +903,15 @@ router.get('/products/:id/preview', async (req, res) => {
     });
     if (!raw) return res.status(404).json({ error: 'Product not found.' });
 
+    // Same session-ownership guard as GET /products/:id above.
     let storeId = null;
     if (req.query.shop) {
       const store = await prisma.store.findUnique({ where: { shopDomain: req.query.shop } });
-      if (store) storeId = store.id;
+      if (!store) return res.status(404).json({ error: 'Store not found.' });
+      if (req.session?.storeId && req.session.storeId !== store.id) {
+        return res.status(403).json({ error: 'Forbidden.' });
+      }
+      storeId = store.id;
     }
 
     const result  = await getProductActions(raw, { prisma, storeId });

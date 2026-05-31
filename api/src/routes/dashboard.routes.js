@@ -4,6 +4,7 @@ const express = require('express');
 const router  = express.Router();
 
 const { getDashboardSelectionPayload } = require('../services/dashboard.service');
+const { resolveStore }                 = require('../lib/resolve-store');
 
 // ---------------------------------------------------------------------------
 // GET /dashboard/selection?shop=
@@ -14,6 +15,8 @@ router.get('/selection', async (req, res) => {
   const prisma = req.app.get('prisma');
   try {
     if (!req.query.shop) return res.status(400).json({ error: 'shop is required' });
+    const _store = await resolveStore(prisma, req.query.shop, res, req);
+    if (!_store) return;
 
     const result = await getDashboardSelectionPayload(prisma, req.query.shop);
 

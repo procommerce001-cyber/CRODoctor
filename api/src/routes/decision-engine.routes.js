@@ -16,7 +16,7 @@ router.get('/top-actions', async (req, res) => {
   try {
     if (!req.query.shop) return res.status(400).json({ error: 'shop is required' });
 
-    const store = await resolveStore(prisma, req.query.shop, res);
+    const store = await resolveStore(prisma, req.query.shop, res, req);
     if (!store) return;
 
     const result = await getTopDecisionActions(prisma, req.query.shop);
@@ -56,7 +56,7 @@ router.post('/actions/execute', async (req, res) => {
       return res.status(400).json({ error: 'actionKey must be "productId::issueId"' });
     }
 
-    const store = await resolveStore(prisma, req.query.shop, res);
+    const store = await resolveStore(prisma, req.query.shop, res, req);
     if (!store) return;
 
     // Idempotency first — skip the expensive LLM eligibility check if already applied.
@@ -182,7 +182,7 @@ router.get('/early-signal', async (req, res) => {
     if (!shop)      return res.status(400).json({ error: 'shop is required' });
     if (!productId) return res.status(400).json({ error: 'productId is required' });
 
-    const store = await resolveStore(prisma, shop, res);
+    const store = await resolveStore(prisma, shop, res, req);
     if (!store) return;
 
     const compare = await compareProductMetrics(prisma, productId);

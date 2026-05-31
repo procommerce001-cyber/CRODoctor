@@ -67,6 +67,13 @@ app.use(cors(function corsDelegate(req, callback) {
 // is intact for Shopify HMAC verification. It handles its own body parsing.
 app.use('/webhooks', webhooksRouter);
 
+// Fail fast in production if SESSION_SECRET is not set.
+// A missing secret means sessions are signed with a known fallback string,
+// which makes session cookies forgeable. Never allow this in production.
+if (process.env.NODE_ENV === 'production' && !process.env.SESSION_SECRET) {
+  throw new Error('SESSION_SECRET must be set in production');
+}
+
 app.use(session({
   store: new PgSession({
     conString: process.env.DATABASE_URL,
@@ -137,7 +144,11 @@ app.post('/stores', async (req, res) => {
 });
 
 // Kept for backward compatibility — works if a token is already known.
+// Blocked in production: accepts a raw access token and must never be exposed externally.
 app.post('/connect-shopify', async (req, res) => {
+  if (process.env.NODE_ENV === 'production') {
+    return res.status(404).end();
+  }
   try {
     const { shopDomain, accessToken } = req.body;
 
@@ -324,6 +335,9 @@ app.get('/products', async (req, res) => {
   try {
     const store = await prisma.store.findUnique({ where: { shopDomain: shop } });
     if (!store) return res.status(404).json({ error: 'Store not found' });
+    if (req.session?.storeId && req.session.storeId !== store.id) {
+      return res.status(403).json({ error: 'Forbidden.' });
+    }
 
     const products = await prisma.product.findMany({
       where: { storeId: store.id },
@@ -450,6 +464,9 @@ app.post('/sync/products', async (req, res) => {
   try {
     const store = await prisma.store.findUnique({ where: { shopDomain: shop } });
     if (!store) return res.status(404).json({ error: 'Store not found' });
+    if (req.session?.storeId && req.session.storeId !== store.id) {
+      return res.status(403).json({ error: 'Forbidden.' });
+    }
     if (!store.accessToken) return res.status(400).json({ error: 'Store has no access token' });
 
     const shopifyProducts = await fetchProducts(store);
@@ -545,6 +562,9 @@ app.post('/sync/orders', async (req, res) => {
   try {
     const store = await prisma.store.findUnique({ where: { shopDomain: shop } });
     if (!store) return res.status(404).json({ error: 'Store not found' });
+    if (req.session?.storeId && req.session.storeId !== store.id) {
+      return res.status(403).json({ error: 'Forbidden.' });
+    }
     if (!store.accessToken) return res.status(400).json({ error: 'Store has no access token' });
 
     const shopifyOrders = await fetchOrders(store);
