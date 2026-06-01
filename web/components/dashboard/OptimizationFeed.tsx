@@ -422,6 +422,41 @@ function FeedFilterBar({
   );
 }
 
+// ── Non-actionable state note ──────────────────────────────────────────────────
+// Shown when the ready section is empty but measuring/upnext rows exist,
+// so the merchant understands why nothing is ready to apply.
+
+function FeedStatusNote({ measuring, upnext }: { measuring: number; upnext: number }) {
+  if (measuring === 0 && upnext === 0) return null;
+
+  const msg =
+    measuring > 0 && upnext > 0
+      ? 'Some changes are live and being measured. More recommendations are waiting for preview.'
+      : measuring > 0
+      ? 'Your active changes are collecting data. No new actions are ready right now.'
+      : 'Recommendations are waiting for preview. Review each change before applying it to your store.';
+
+  return (
+    <div style={fsn.wrap}>
+      <span style={fsn.dot} />
+      <span style={fsn.text}>{msg}</span>
+    </div>
+  );
+}
+
+const fsn: Record<string, React.CSSProperties> = {
+  wrap: {
+    display: 'flex', alignItems: 'flex-start', gap: 10,
+    padding: '10px 14px',
+    background: 'rgba(255,255,255,0.02)',
+    border: '1px solid rgba(255,255,255,0.06)',
+    borderRadius: 8,
+    marginBottom: 4,
+  },
+  dot:  { width: 6, height: 6, borderRadius: '50%', background: '#4b5563', flexShrink: 0, marginTop: 5 },
+  text: { fontSize: 12, color: '#6b7280', lineHeight: 1.6 },
+};
+
 // ── Main component ─────────────────────────────────────────────────────────────
 
 export default function OptimizationFeed({
@@ -857,6 +892,9 @@ export default function OptimizationFeed({
   return (
     <div>
       <FeedFilterBar active={activeSection} onChange={setActiveSection} counts={filterCounts} narrow={narrow} />
+      {ready.length === 0 && activeSection === 'all' && (
+        <FeedStatusNote measuring={measuring.length} upnext={upnext.length} />
+      )}
       <div style={{ ...s.sections, gap: narrow ? 20 : 28 }}>
 
       {/* ── WINS: proof the system delivers ──────────────────────────────── */}
