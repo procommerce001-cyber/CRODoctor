@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import type { FeedRow } from './OptimizationFeed';
-import { fetchContentPreview } from '@/lib/api';
+import { fetchContentPreview, submitReviewApproval } from '@/lib/api';
 import type { ContentPreview } from '@/lib/api';
 import { blockReasonLabel, PREVIEW_UNAVAILABLE_MSG, proposedContentLabel } from './previewCopy';
 
@@ -116,7 +116,9 @@ export default function ProductInspectorPanel({
   rollbackSuccesses?: Record<string, string>;
 }) {
   type PvState = { data: ContentPreview | null; phase: 'idle' | 'loading' | 'ready'; error: string | null };
-  const [pv, setPv] = useState<PvState>({ data: null, phase: 'idle', error: null });
+  const [pv, setPv]                           = useState<PvState>({ data: null, phase: 'idle', error: null });
+  const [pvReviewError, setPvReviewError]     = useState<string | null>(null);
+  const [isPersistingReview, setIsPersisting] = useState(false);
   const [confirmingRollback, setConfirmingRollback] = useState(false);
 
   if (!row) {
@@ -145,6 +147,7 @@ export default function ProductInspectorPanel({
 
   async function loadPreview() {
     if (!action) return;
+    setPvReviewError(null);
     setPv(s => ({ ...s, phase: 'loading', error: null }));
     try {
       const data = await fetchContentPreview(shop, action.productId, action.issueId);
@@ -152,6 +155,26 @@ export default function ProductInspectorPanel({
     } catch (err) {
       setPv({ data: null, phase: 'idle', error: (err as Error).message });
     }
+  }
+
+  async function handleApplyWithReview() {
+    if (!action || !onRunAction) return;
+    const pc = pv.data?.proposedContent;
+    if (!pc || pc.trim().length === 0) {
+      setPvReviewError('Please preview this change again before applying.');
+      return;
+    }
+    setPvReviewError(null);
+    setIsPersisting(true);
+    try {
+      await submitReviewApproval(shop, action.productId, action.issueId, pc);
+    } catch {
+      setPvReviewError('Please preview this change again before applying.');
+      setIsPersisting(false);
+      return;
+    }
+    setIsPersisting(false);
+    onRunAction(action.actionKey);
   }
 
   return (
@@ -257,12 +280,15 @@ export default function ProductInspectorPanel({
                         </div>
                         <div style={p.pvReversibility}>You can undo this change anytime.</div>
                         <button
-                          style={{ ...p.ctaBtn, opacity: isRunning ? 0.6 : 1 }}
-                          disabled={isRunning}
-                          onClick={() => onRunAction(action.actionKey)}
+                          style={{ ...p.ctaBtn, opacity: (isRunning || isPersistingReview) ? 0.6 : 1 }}
+                          disabled={isRunning || isPersistingReview}
+                          onClick={handleApplyWithReview}
                         >
-                          {isRunning ? 'Applying…' : 'Apply this change'}
+                          {(isRunning || isPersistingReview) ? 'Applying…' : 'Apply this change'}
                         </button>
+                        {pvReviewError && (
+                          <div style={p.pvError}>{pvReviewError}</div>
+                        )}
                         {executeErrors?.[action.actionKey] && (
                           <div style={p.pvError}>{executeErrors[action.actionKey]}</div>
                         )}
