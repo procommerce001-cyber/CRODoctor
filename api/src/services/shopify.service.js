@@ -36,9 +36,10 @@ async function fetchProducts(store, updatedAtMin = null) {
   return shopifyFetchAll(store, url);
 }
 
-async function fetchOrders(store, updatedAtMin = null) {
+async function fetchOrders(store, updatedAtMin = null, createdAtMin = null) {
   let url = `https://${store.shopDomain}/admin/api/${SHOPIFY_API_VERSION}/orders.json?limit=250&status=any`;
   if (updatedAtMin) url += `&updated_at_min=${encodeURIComponent(updatedAtMin.toISOString())}`;
+  if (createdAtMin) url += `&created_at_min=${encodeURIComponent(createdAtMin.toISOString())}`;
   return shopifyFetchAll(store, url);
 }
 

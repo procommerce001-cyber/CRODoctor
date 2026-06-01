@@ -4,7 +4,7 @@ const crypto  = require('crypto');
 const express = require('express');
 const router  = express.Router();
 
-const { fetchProducts }                  = require('../services/shopify.service');
+const { fetchProducts, fetchOrders }     = require('../services/shopify.service');
 const { captureWindowedBeforeSnapshot }  = require('../services/metrics.service');
 const { registerWebhooks }               = require('../services/webhook-registration.service');
 const { ensureScriptTag }                = require('../services/shopify-admin.service');
@@ -135,6 +135,113 @@ async function runInitialSync(prisma, store) {
     console.error(`${tag} sync failed:`, err.message);
     // Still attempt to mark COMPLETED so the UI doesn't hang forever on SYNCING.
     // In production you'd want a more granular error state here.
+  }
+
+  // ── Initial historical order sync (last 90 days) ──────────────────────────
+  // Non-fatal: any failure logs a warning and does not block COMPLETED.
+  // Idempotent: upsert on storeId+shopifyOrderId / orderId+shopifyLineItemId.
+  // Fills dashboard KPIs, product ranking, and before-snapshot baselines.
+  try {
+    const ninetyDaysAgo = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
+    const t0            = Date.now();
+    console.log(`${tag} starting initial order sync window=90d from=${ninetyDaysAgo.toISOString()}`);
+
+    const shopifyOrders = await fetchOrders(store, null, ninetyDaysAgo);
+    console.log(`${tag} fetched ${shopifyOrders.length} orders`);
+
+    // Batch-resolve internal product/variant IDs once across all orders
+    const shopifyProductIds = [...new Set(shopifyOrders.flatMap(o =>
+      (o.line_items || []).map(li => li.product_id).filter(Boolean).map(String)
+    ))];
+    const shopifyVariantIds = [...new Set(shopifyOrders.flatMap(o =>
+      (o.line_items || []).map(li => li.variant_id).filter(Boolean).map(String)
+    ))];
+
+    const [dbProducts, dbVariants] = await Promise.all([
+      prisma.product.findMany({
+        where:  { storeId: store.id, shopifyProductId: { in: shopifyProductIds } },
+        select: { id: true, shopifyProductId: true },
+      }),
+      prisma.productVariant.findMany({
+        where:  { shopifyVariantId: { in: shopifyVariantIds } },
+        select: { id: true, shopifyVariantId: true },
+      }),
+    ]);
+
+    const productMap = Object.fromEntries(dbProducts.map(p => [p.shopifyProductId, p.id]));
+    const variantMap = Object.fromEntries(dbVariants.map(v => [v.shopifyVariantId, v.id]));
+
+    let syncedOrders = 0, syncedLineItems = 0;
+
+    for (const o of shopifyOrders) {
+      const shippingAmount = o.total_shipping_price_set?.shop_money?.amount ?? '0';
+      const itemCount      = (o.line_items || []).reduce((s, li) => s + li.quantity, 0);
+
+      const savedOrder = await prisma.order.upsert({
+        where:  { storeId_shopifyOrderId: { storeId: store.id, shopifyOrderId: String(o.id) } },
+        update: {
+          financialStatus:    o.financial_status    || null,
+          fulfillmentStatus:  o.fulfillment_status   || null,
+          totalDiscounts:     o.total_discounts      || '0',
+          totalShippingPrice: shippingAmount,
+          totalTax:           o.total_tax            || '0',
+          totalPrice:         o.total_price,
+          itemCount,
+          updatedAt:          new Date(o.updated_at),
+          cancelledAt:        o.cancelled_at ? new Date(o.cancelled_at) : null,
+        },
+        create: {
+          storeId:            store.id,
+          shopifyOrderId:     String(o.id),
+          orderNumber:        o.order_number,
+          financialStatus:    o.financial_status    || null,
+          fulfillmentStatus:  o.fulfillment_status   || null,
+          currency:           o.currency,
+          subtotalPrice:      o.subtotal_price       || '0',
+          totalDiscounts:     o.total_discounts      || '0',
+          totalShippingPrice: shippingAmount,
+          totalTax:           o.total_tax            || '0',
+          totalPrice:         o.total_price,
+          itemCount,
+          landingSite:        o.landing_site   || null,
+          referringSite:      o.referring_site  || null,
+          createdAt:          new Date(o.created_at),
+          updatedAt:          new Date(o.updated_at),
+          cancelledAt:        o.cancelled_at ? new Date(o.cancelled_at) : null,
+        },
+      });
+      syncedOrders++;
+
+      for (const li of (o.line_items || [])) {
+        await prisma.orderLineItem.upsert({
+          where:  { orderId_shopifyLineItemId: { orderId: savedOrder.id, shopifyLineItemId: String(li.id) } },
+          update: {
+            quantity:      li.quantity,
+            price:         li.price,
+            totalDiscount: li.total_discount || '0',
+            productId:     li.product_id ? (productMap[String(li.product_id)] ?? null) : null,
+            variantId:     li.variant_id ? (variantMap[String(li.variant_id)] ?? null) : null,
+          },
+          create: {
+            orderId:           savedOrder.id,
+            productId:         li.product_id ? (productMap[String(li.product_id)] ?? null) : null,
+            variantId:         li.variant_id ? (variantMap[String(li.variant_id)] ?? null) : null,
+            shopifyLineItemId: String(li.id),
+            title:             li.title,
+            quantity:          li.quantity,
+            price:             li.price,
+            totalDiscount:     li.total_discount || '0',
+            vendor:            li.vendor || null,
+          },
+        });
+        syncedLineItems++;
+      }
+    }
+
+    const elapsed = Date.now() - t0;
+    console.log(`${tag} initial order sync complete orders=${syncedOrders} lineItems=${syncedLineItems} ms=${elapsed}`);
+  } catch (orderErr) {
+    console.warn(`${tag} initial order sync failed (non-fatal):`, orderErr.message);
   }
 
   await prisma.store.update({
