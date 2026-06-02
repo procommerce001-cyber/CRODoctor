@@ -70,7 +70,15 @@ function detectProductType(p) {
 
   if (price >= 100) return 'high_ticket';
   if (['smart', 'wireless', 'bluetooth', 'electric', 'digital', 'projector', 'led', 'laser', 'sensor', 'tracker'].some(k => title.includes(k))) return 'functional_tech';
-  if (['back', 'posture', 'pain', 'relief', 'therapy', 'massage', 'support', 'health', 'spine', 'neck', 'recovery'].some(k => combined.includes(k))) return 'health';
+
+  // Unambiguous health keywords — substring match is safe.
+  const preciseHealthKw = ['posture', 'pain', 'relief', 'therapy', 'massage', 'health', 'spine', 'neck', 'recovery'];
+  if (preciseHealthKw.some(k => combined.includes(k))) return 'health';
+
+  // Ambiguous short keywords — word-boundary match required to avoid false positives
+  // (e.g. "backs up", "get your time back", "hose support", "setback").
+  if (/\bback\b/.test(combined) || /\bsupport\b/.test(combined)) return 'health';
+
   if (hasSizeVariants) return 'fashion';
   if (price < 30) return 'impulse';
   return 'functional';
@@ -86,10 +94,9 @@ function detectProductType(p) {
 // Must stay clearly distinct from no_trust_bullets (no checkout/security/support copy).
 // ---------------------------------------------------------------------------
 function generateTrustBlock(product) {
-  const title  = (product.title || 'this product').trim();
-  const vendor = (product.vendor || '').trim();
-  const team   = vendor ? `the ${vendor} team` : 'our team';
-  const type   = detectProductType(product);
+  const title = (product.title || 'this product').trim();
+  const team  = 'our team';
+  const type  = detectProductType(product);
 
   // Strip variant suffixes like "- v.2", "- test"
   const shortTitle = title.replace(/\s*[-–]\s*(v\.?\d+|test|demo|new|old)\s*$/i, '').trim();

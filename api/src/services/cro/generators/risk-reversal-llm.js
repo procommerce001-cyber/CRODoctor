@@ -44,7 +44,16 @@ function detectProductType(product) {
   );
 
   if (price >= 100) return 'high_ticket';
-  if (['back', 'posture', 'pain', 'relief', 'therapy', 'massage', 'support', 'health', 'spine', 'neck', 'recovery'].some(k => combined.includes(k))) return 'health';
+
+  // Unambiguous health keywords — substring match is safe because these terms
+  // do not appear in general product descriptions with false meanings.
+  const preciseHealthKw = ['posture', 'pain', 'relief', 'therapy', 'massage', 'health', 'spine', 'neck', 'recovery'];
+  if (preciseHealthKw.some(k => combined.includes(k))) return 'health';
+
+  // Ambiguous short keywords — require word-boundary match to prevent false positives
+  // (e.g. "backs up", "get your time back", "support hose", "setback").
+  if (/\bback\b/.test(combined) || /\bsupport\b/.test(combined)) return 'health';
+
   if (hasSizeVariants) return 'fashion';
   return 'functional';
 }
@@ -56,9 +65,8 @@ function detectProductType(product) {
 // ---------------------------------------------------------------------------
 function buildHeadingAndB2(product) {
   const category = detectCategory(product);
-  const title    = (product.title  || 'this product').trim();
-  const vendor   = (product.vendor || '').trim();
-  const team     = vendor ? `the ${vendor} team` : 'our team';
+  const title    = (product.title || 'this product').trim();
+  const team     = 'our team';
   const type     = detectProductType(product);
 
   const shortTitle = title.replace(/\s*[-–]\s*(v\.?\d+|test|demo|new|old)\s*$/i, '').trim();
@@ -144,7 +152,9 @@ function buildRiskReversalPrompt(product, copyPlan, reviews = [], copyRole = nul
   parts.push('');
   parts.push('Rules:');
   parts.push('- Plain text only. No HTML. No markdown. No quotes around the output. No labels.');
-  parts.push('- Do not start with the product name.');
+  parts.push('- Do not use or invent any brand names, product names, company names, or team names other than the product and vendor explicitly provided in this prompt.');
+  parts.push('- Refer to the seller only as "we", "us", or "our team". Never write "[Product] team" or "[Brand] team" unless the exact name was provided above.');
+  parts.push('- If you need to name the seller, use only "we", "us", "our team", or "this product".');
   parts.push('- Do not use generic phrases like "100% satisfaction guaranteed".');
   parts.push('- Do not invent specific return windows (e.g. "30 days") — keep the copy general.');
   if (copyRole && Array.isArray(copyRole.forbiddenPhrases) && copyRole.forbiddenPhrases.length > 0) {
@@ -180,6 +190,30 @@ function validateOutput(raw) {
   }
 
   return text;
+}
+
+// ---------------------------------------------------------------------------
+// validateNoBrandHallucination
+//
+// Catches the specific failure mode where the LLM writes "[Foreign Brand] team"
+// in the output — i.e. a TitleCase multi-word phrase followed by "team" that
+// does not appear in the current product title or vendor string.
+//
+// Returns true (safe) when no foreign brand pattern is detected.
+// Returns false (reject) when a hallucinated "[X Y] team" is found whose
+// capitalized words are not substrings of the product/vendor context.
+//
+// Intentionally narrow: only rejects "[TitleCase Words] team" patterns.
+// Does not attempt to catch all possible hallucinations.
+// ---------------------------------------------------------------------------
+function validateNoBrandHallucination(text, product) {
+  const context = ((product.title || '') + ' ' + (product.vendor || '')).toLowerCase();
+  const teamPattern = /\b([A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+)+)\s+team\b/g;
+  let match;
+  while ((match = teamPattern.exec(text)) !== null) {
+    if (!context.includes(match[1].toLowerCase())) return false;
+  }
+  return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -219,6 +253,11 @@ async function generateRiskReversalWithLLM(product, copyPlan, reviews = []) {
     const data    = await res.json();
     const llmCopy = validateOutput(data?.content?.[0]?.text);
     if (!llmCopy) return null;
+
+    // Belt-and-suspenders: reject if the output contains a "[Foreign Brand] team"
+    // pattern whose words are not in the current product/vendor context.
+    // Falls back to template cleanly — no error thrown.
+    if (!validateNoBrandHallucination(llmCopy, product)) return null;
 
     const { heading, b2 } = buildHeadingAndB2(product);
     const html             = assembleHtml(heading, llmCopy, b2);
