@@ -614,7 +614,7 @@ async function resolveActionItem(prisma, storeId, productId, issueId, rawProduct
 // ---------------------------------------------------------------------------
 // gate — approval + capability checks (unchanged from v1)
 // ---------------------------------------------------------------------------
-function gate(actionItem) {
+function gate(actionItem, { preview = false } = {}) {
   if (!actionItem) {
     return { eligible: false, reason: 'Issue not found on this product.' };
   }
@@ -630,7 +630,7 @@ function gate(actionItem) {
       reason: 'canAutoApply is false. This issue does not have a generated fix ready for execution.',
     };
   }
-  if (actionItem.reviewStatus !== 'approved') {
+  if (!preview && actionItem.reviewStatus !== 'approved') {
     return {
       eligible: false,
       reason: `reviewStatus is "${actionItem.reviewStatus}". Issue must be approved before it can be applied.`,
@@ -674,7 +674,7 @@ async function previewContentExecution(prisma, {
 
   // ── 2. Gate ──────────────────────────────────────────────────────────────
   const actionItem          = await resolveActionItem(prisma, storeId, productId, issueId, rawProduct);
-  const { eligible, reason } = gate(actionItem);
+  const { eligible, reason } = gate(actionItem, { preview });
 
   if (!eligible) {
     return {

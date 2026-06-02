@@ -245,10 +245,6 @@ export default function ProductInspectorPanel({
             ) : pv.phase === 'idle' ? (
               action.applyType && action.applyType !== 'content_change' ? (
                 <div style={p.guardNote}>This recommendation requires manual setup — it can&apos;t be applied automatically.</div>
-              ) : action.applyType === 'content_change' && action.readyToApply === false ? (
-                <div style={p.guardNote}>
-                  This fix is still being reviewed before it can be applied. Once it&apos;s approved, you&apos;ll be able to preview and apply it here.
-                </div>
               ) : (
                 <button style={p.ctaBtn} onClick={loadPreview}>
                   Preview fix
