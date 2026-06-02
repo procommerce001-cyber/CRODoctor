@@ -61,7 +61,7 @@ router.post('/actions/execute', async (req, res) => {
 
     // Idempotency first — skip the expensive LLM eligibility check if already applied.
     const existing = await prisma.contentExecution.findFirst({
-      where:  { storeId: store.id, productId, issueId, status: { in: ['applied', 'completed'] } },
+      where:  { storeId: store.id, productId, issueId, status: 'applied' },
       select: { id: true, createdAt: true, status: true },
     });
     if (existing) {

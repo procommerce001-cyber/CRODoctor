@@ -1633,6 +1633,15 @@ async function getTopDecisionActions(prisma, shop) {
     if (r.status === 'completed') completedMap.set(key, r.createdAt);
   }
 
+  // Products that have a merchant-reviewed content_change ready for application.
+  // These bypass the measurement-floor pdpViewCount gate — applying content value
+  // does not require measurement power, unlike scoring-dependent optimisations.
+  const approvedContentRows = await prisma.actionItem.findMany({
+    where: { storeId: store.id, reviewStatus: 'approved', reviewedProposedContent: { not: null } },
+    select: { productId: true },
+  });
+  const approvedContentSet = new Set(approvedContentRows.map(r => r.productId));
+
   // ── Phase 2B: ProductPerformanceProfile batch load ────────────────────────
   // One query for all products; first row per productId is the latest (ORDER BY capturedAt DESC).
   const allProfiles = await prisma.productPerformanceProfile.findMany({
@@ -1694,8 +1703,11 @@ async function getTopDecisionActions(prisma, shop) {
     if (profile?.archetype === 'traffic_problem') continue;
     // Gate: tracker has data for this product but below measurement-power floor.
     // pdpViewCount === 0 means no tracker data — pass through (original behaviour).
+    // Exception: a product with a merchant-reviewed content_change bypasses this gate
+    // because applying content value does not require measurement power.
     const pdpViewCount = pdpViewMap.get(raw.id) ?? 0;
-    if (pdpViewCount > 0 && pdpViewCount < MIN_PDP_VIEWS_FOR_MEASUREMENT) continue;
+    if (pdpViewCount > 0 && pdpViewCount < MIN_PDP_VIEWS_FOR_MEASUREMENT
+        && !approvedContentSet.has(raw.id)) continue;
 
     const actionResult = await getProductActions(raw, { prisma, storeId: store.id });
     const revenue      = revenueMap.get(raw.id) ?? 0;
@@ -1810,7 +1822,19 @@ async function getTopDecisionActions(prisma, shop) {
     return Math.abs(b._scoreImpact ?? 0) - Math.abs(a._scoreImpact ?? 0);
   });
 
-  const topActions = candidates.slice(0, 3).map(({ _scoreImpact, ...item }, idx) => {
+  // Guarantee at least one merchant-actionable content_change in the returned set
+  // when one exists. Without this, three higher-scored manual items can occupy all
+  // slots and leave the merchant with no Review/Preview path.
+  // Scoring is preserved: the best content_change surfaces first; remaining slots
+  // are filled from the next-best candidates in their original score order.
+  const bestCC = candidates.find(
+    c => c.applyType === 'content_change' && c.readyToApply === true,
+  );
+  const selected = bestCC
+    ? [bestCC, ...candidates.filter(c => c !== bestCC)].slice(0, 3)
+    : candidates.slice(0, 3);
+
+  const topActions = selected.map(({ _scoreImpact, ...item }, idx) => {
     const key        = `${item.productId}:${item.issueId}`;
     const executedAt = completedMap.get(key) ?? null;
     return {
