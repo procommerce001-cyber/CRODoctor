@@ -1611,12 +1611,27 @@ async function getTopDecisionActions(prisma, shop) {
     }
   }
 
-  // Completed executions — for executionStatus field in response
-  const completedRows = await prisma.contentExecution.findMany({
-    where:  { productId: { in: productIds }, status: 'completed' },
-    select: { productId: true, issueId: true, createdAt: true },
+  // Completed executions — for executionStatus field in response.
+  // A pair is only considered completed if the LATEST relevant execution for that
+  // productId+issueId has status 'completed'. A subsequent rolled_back, superseded,
+  // or other non-completed row means the pair is actionable again.
+  const recentExecRows = await prisma.contentExecution.findMany({
+    where:  {
+      productId: { in: productIds },
+      status: { in: ['completed', 'rolled_back', 'superseded', 'applied', 'failed', 'previewed'] },
+    },
+    select: { productId: true, issueId: true, status: true, createdAt: true },
+    orderBy: { createdAt: 'desc' },
   });
-  const completedMap = new Map(completedRows.map(r => [`${r.productId}:${r.issueId}`, r.createdAt]));
+  const latestByPair = new Map();
+  for (const r of recentExecRows) {
+    const key = `${r.productId}:${r.issueId}`;
+    if (!latestByPair.has(key)) latestByPair.set(key, r);
+  }
+  const completedMap = new Map();
+  for (const [key, r] of latestByPair) {
+    if (r.status === 'completed') completedMap.set(key, r.createdAt);
+  }
 
   // ── Phase 2B: ProductPerformanceProfile batch load ────────────────────────
   // One query for all products; first row per productId is the latest (ORDER BY capturedAt DESC).

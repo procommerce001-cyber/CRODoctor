@@ -98,7 +98,13 @@ function groupRows(rows: FeedRow[]) {
   const ready      = rows.filter(r => r.feedStatus === 'ready');
   const wins       = rows.filter(r => r.feedStatus === 'measured' && r.activityItem && isPublishableWin(r.activityItem));
   const measuring  = rows.filter(r => r.feedStatus === 'measuring' || r.feedStatus === 'live');
-  const upnext     = rows.filter(r => r.feedStatus === 'queued');
+  const upnextRaw  = rows.filter(r => r.feedStatus === 'queued');
+  // Auto-applicable content_change items always appear before manual/theme items
+  // so the hero slot shows a merchant-actionable preview button when one exists.
+  const upnext = [
+    ...upnextRaw.filter(r => r.topAction?.applyType === 'content_change'),
+    ...upnextRaw.filter(r => r.topAction?.applyType !== 'content_change'),
+  ];
   const protection = rows.filter(r =>
     r.feedStatus === 'rolled_back' ||
     (r.feedStatus === 'measured' && r.activityItem && !isPublishableWin(r.activityItem)),
@@ -235,10 +241,6 @@ function HeroNextCard({ row, executing, onRunAction, previewState, onPreview, on
       {action.applyType && action.applyType !== 'content_change' ? (
         <div style={un.heroManualNote}>
           <span>This recommendation requires manual implementation — it can&apos;t be applied automatically. The steps are in the description above.</span>
-        </div>
-      ) : action.applyType === 'content_change' && action.readyToApply === false ? (
-        <div style={un.heroManualNote}>
-          <span>This fix is still being reviewed before it can be applied. Once it&apos;s approved, you&apos;ll be able to preview and apply it here.</span>
         </div>
       ) : previewState?.loading ? (
         <div style={un.heroPreviewNote}>Generating preview…</div>
@@ -765,8 +767,6 @@ export default function OptimizationFeed({
             {action.estimatedImpactLabel && <span style={s.meta}>{action.estimatedImpactLabel}</span>}
             {action.applyType && action.applyType !== 'content_change' ? (
               <span style={s.meta}>Manual setup</span>
-            ) : action.applyType === 'content_change' && action.readyToApply === false ? (
-              <span style={s.meta}>Pending review</span>
             ) : upPvState?.loading ? (
               <span style={{ ...s.meta, fontStyle: 'italic' as const }}>Loading…</span>
             ) : upPvState?.data ? (
