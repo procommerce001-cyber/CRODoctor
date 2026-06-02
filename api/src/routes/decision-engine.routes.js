@@ -113,11 +113,10 @@ router.post('/actions/execute', async (req, res) => {
       const applyResult = await applyContentChange(prisma, store, rawProduct, action);
 
       if (!applyResult.applied) {
-        // Gate blocked or already applied — surface a clear reason.
-        return res.status(400).json({
-          success: false,
-          reason:  applyResult.blockReason ?? applyResult.reason ?? 'Apply was blocked.',
-        });
+        // Gate blocked, safety-blocked, or already applied.
+        // Use `error` key so api.ts executeAction surfaces the message to the merchant.
+        const msg = applyResult.blockReason ?? applyResult.reason ?? 'Apply was blocked.';
+        return res.status(400).json({ success: false, error: msg, reason: msg });
       }
 
       // Fetch the execution row just written by applyContentChange.

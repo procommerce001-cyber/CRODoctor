@@ -46,6 +46,7 @@ async function updateProductDescription(store, shopifyProductId, bodyHtml) {
 const { classifyExecution }              = require('./cro/classifyExecution');
 const { buildResultContent,
         wrapIssueContent }               = require('./content-execution.service');
+const { validateContentSafety }          = require('./content-safety-validator');
 const { randomUUID }                     = require('crypto');
 
 // ---------------------------------------------------------------------------
@@ -1350,6 +1351,25 @@ async function applyContentChange(prisma, store, rawProduct, actionItem) {
       blockReason:          'Product has a trust_mismatch archetype: high refund rate detected. Resolve the trust issue before applying content changes.',
       archetypeWarning:     'trust_mismatch',
       archetypeWarningConf: _profile.archetypeConf ?? null,
+    };
+  }
+
+  // 1f. Content safety validation — runs after all eligibility gates, before any
+  //     Shopify write or DB write. Blocks unsupported claims, cross-product
+  //     contamination, duplicate CRO blocks, unsafe HTML, and language mismatches.
+  //     Returns a merchant-safe blockReason on failure; never exposes internals.
+  const safetyResult = await validateContentSafety({
+    store,
+    product:         rawProduct,
+    issueId:         actionItem.issueId,
+    proposedContent,
+    currentBodyHtml: currentContent,
+  }, prisma);
+  if (!safetyResult.safe) {
+    return {
+      applied:     false,
+      safetyBlock: true,
+      blockReason: safetyResult.reason,
     };
   }
 
