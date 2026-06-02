@@ -71,9 +71,13 @@ function detectProductType(p) {
   if (price >= 100) return 'high_ticket';
   if (['smart', 'wireless', 'bluetooth', 'electric', 'digital', 'projector', 'led', 'laser', 'sensor', 'tracker'].some(k => title.includes(k))) return 'functional_tech';
 
-  // Unambiguous health keywords — substring match is safe.
-  const preciseHealthKw = ['posture', 'pain', 'relief', 'therapy', 'massage', 'health', 'spine', 'neck', 'recovery'];
+  // Unambiguous health keywords — substring match is safe for these terms.
+  // 'health' is excluded here: substring match would catch "healthy", "health-conscious",
+  // "healthy cooking" etc. and misclassify non-health products. It is checked separately
+  // below with a word-boundary regex so only the standalone word triggers the type.
+  const preciseHealthKw = ['posture', 'pain', 'relief', 'therapy', 'massage', 'spine', 'neck', 'recovery'];
   if (preciseHealthKw.some(k => combined.includes(k))) return 'health';
+  if (/\bhealth\b/i.test(combined)) return 'health';
 
   // Ambiguous short keywords — word-boundary match required to avoid false positives
   // (e.g. "backs up", "get your time back", "hose support", "setback").
