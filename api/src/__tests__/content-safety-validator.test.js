@@ -259,6 +259,77 @@ describe('checkUnsupportedClaims', () => {
     );
     assert.equal(result.safe, true);
   });
+
+  // Verb-form refund promises — must block
+  test('blocks "refund your investment entirely"', () => {
+    const result = checkUnsupportedClaims(
+      "<p>If it doesn't work for your space, we'll refund your investment entirely.</p>",
+      TURBOFLUSH_BODY,
+    );
+    assert.equal(result.safe, false);
+    assert.equal(result.code, 'unsupported_claim');
+  });
+
+  test('blocks "refund your purchase"', () => {
+    const result = checkUnsupportedClaims(
+      "<p>If you're not happy, we'll refund your purchase.</p>",
+      TURBOFLUSH_BODY,
+    );
+    assert.equal(result.safe, false);
+    assert.equal(result.code, 'unsupported_claim');
+  });
+
+  test('blocks "refund you in full"', () => {
+    const result = checkUnsupportedClaims(
+      "<p>We'll refund you in full.</p>",
+      TURBOFLUSH_BODY,
+    );
+    assert.equal(result.safe, false);
+    assert.equal(result.code, 'unsupported_claim');
+  });
+
+  test('blocks "completely refund your order"', () => {
+    const result = checkUnsupportedClaims(
+      "<p>We'll completely refund your order.</p>",
+      TURBOFLUSH_BODY,
+    );
+    assert.equal(result.safe, false);
+    assert.equal(result.code, 'unsupported_claim');
+  });
+
+  test('blocks "fully refund your payment"', () => {
+    const result = checkUnsupportedClaims(
+      "<p>If something goes wrong, we'll fully refund your payment.</p>",
+      TURBOFLUSH_BODY,
+    );
+    assert.equal(result.safe, false);
+    assert.equal(result.code, 'unsupported_claim');
+  });
+
+  // Safe support language — must allow
+  test('allows "reach out and our team will help"', () => {
+    const result = checkUnsupportedClaims(
+      '<p>If something is not right, reach out and our team will help.</p>',
+      TURBOFLUSH_BODY,
+    );
+    assert.equal(result.safe, true);
+  });
+
+  test('allows "contact us and we will make it right"', () => {
+    const result = checkUnsupportedClaims(
+      "<p>If you need help, contact us and we'll make it right.</p>",
+      TURBOFLUSH_BODY,
+    );
+    assert.equal(result.safe, true);
+  });
+
+  test('allows "our team is here to help if the product does not meet expectations"', () => {
+    const result = checkUnsupportedClaims(
+      '<p>Our team is here to help if the product does not meet your expectations.</p>',
+      TURBOFLUSH_BODY,
+    );
+    assert.equal(result.safe, true);
+  });
 });
 
 // ---------------------------------------------------------------------------

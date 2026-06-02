@@ -82,6 +82,11 @@ const EXTERNAL_LINK_PATTERN   = /<link\b[^>]*\brel\s*=\s*["']?stylesheet/i;
 const UNSUPPORTED_CLAIM_PATTERNS = [
   /money[- ]back\b/i,
   /full[\s-]refund\b/i,
+  // Verb-form refund promises: "refund you", "refund your investment", "refund the full amount".
+  // Catches semantic refund promises that don't use the noun form "full refund" or "money-back".
+  /\brefund\s+(you|your|the)\b/i,
+  // Adverb-led refund: "fully refund", "completely refund".
+  /\b(fully|completely)\s+refund\b/i,
   /\d+[\s-]day[\s-](return|refund|guarantee|money|warranty|trial)\b/i,
   /\d+[\s-](month|year)[\s-](warranty|guarantee)\b/i,
   /guaranteed[\s-]results?\b/i,
