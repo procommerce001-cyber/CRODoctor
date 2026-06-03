@@ -130,16 +130,56 @@ const PATCH_MODE_REGISTRY = {
     findAnchor(html) {
       if (!html) return { found: false };
 
-      // Append guarantee after the last closing block element.
       const blockTags = ['</p>', '</ul>', '</ol>', '</div>', '</h6>', '</h5>', '</h4>', '</h3>', '</h2>', '</h1>', '</blockquote>'];
+
+      // ── Primary: around the 55% character midpoint.
+      //    Find the last closing block tag at or before that position so the
+      //    guarantee block sits in the middle of the description — past the main
+      //    product explanation but still visible to ~50% of visitors. Guard: the
+      //    tag must be past the 20% mark so we never insert before the product
+      //    has established context. ──
+      const midpoint = Math.floor(html.length * 0.55);
+      const minPos   = Math.floor(html.length * 0.20);
+      let midBestPos = -1;
+      let midBestTag = null;
+
+      for (const tag of blockTags) {
+        const idx = html.lastIndexOf(tag, midpoint);
+        if (idx !== -1 && idx > midBestPos) { midBestPos = idx; midBestTag = tag; }
+      }
+
+      if (midBestPos >= minPos) {
+        const pos = midBestPos + midBestTag.length;
+        return {
+          found:      true,
+          position:   pos,
+          anchorText: midBestTag,
+          preview:    html.slice(Math.max(0, midBestPos - 80), pos),
+        };
+      }
+
+      // ── Fallback: after the first </p> with ≥20 text chars before it ──
+      const firstPClose = html.indexOf('</p>');
+      if (firstPClose !== -1) {
+        const before  = html.slice(0, firstPClose);
+        const textLen = before.replace(/<[^>]*>/g, '').trim().length;
+        if (textLen >= 20) {
+          return {
+            found:      true,
+            position:   firstPClose + 4,
+            anchorText: '</p>',
+            preview:    before.replace(/<[^>]*>/g, '').trim().slice(-100),
+          };
+        }
+      }
+
+      // ── Final fallback: after the last closing block element ──
       let lastPos = -1;
       let lastTag = null;
-
       for (const tag of blockTags) {
         const idx = html.lastIndexOf(tag);
         if (idx > lastPos) { lastPos = idx; lastTag = tag; }
       }
-
       if (lastPos !== -1) {
         const pos = lastPos + lastTag.length;
         return {
@@ -162,22 +202,66 @@ const PATCH_MODE_REGISTRY = {
 
   no_trust_bullets: {
     field: 'bodyHtml',
-    // Additive-only. Appends a short <ul> reassurance block after the last block element.
-    // No anchor found → eligibleToApply: false (graceful block, same as no_risk_reversal).
+    // Additive-only. Places trust bullets near the top of the description so
+    // they are visible to the majority of visitors.
+    // No anchor found → eligibleToApply: false (graceful block).
     preferredModes: ['insert_after_anchor'],
 
     findAnchor(html) {
       if (!html) return { found: false };
 
       const blockTags = ['</p>', '</ul>', '</ol>', '</div>', '</h6>', '</h5>', '</h4>', '</h3>', '</h2>', '</h1>', '</blockquote>'];
+
+      // ── Primary: just before the first feature list (<ul> or <ol>), provided
+      //    there are ≥50 text chars above the list so the product has context.
+      //    Insert after the closing tag that immediately precedes the list so
+      //    trust bullets appear between the opening copy and the feature list. ──
+      const listMatch = html.match(/<(ul|ol)\b/i);
+      if (listMatch) {
+        const listPos = html.indexOf(listMatch[0]);
+        const before  = html.slice(0, listPos);
+        const textLen = before.replace(/<[^>]*>/g, '').trim().length;
+        if (textLen >= 50) {
+          let bestPos = -1;
+          let bestTag = null;
+          for (const tag of blockTags) {
+            const idx = before.lastIndexOf(tag);
+            if (idx !== -1 && idx > bestPos) { bestPos = idx; bestTag = tag; }
+          }
+          if (bestPos !== -1) {
+            const pos = bestPos + bestTag.length;
+            return {
+              found:      true,
+              position:   pos,
+              anchorText: bestTag,
+              preview:    html.slice(Math.max(0, bestPos - 80), pos),
+            };
+          }
+        }
+      }
+
+      // ── Secondary: after the first </p> with ≥20 text chars before it ──
+      const firstPClose = html.indexOf('</p>');
+      if (firstPClose !== -1) {
+        const before  = html.slice(0, firstPClose);
+        const textLen = before.replace(/<[^>]*>/g, '').trim().length;
+        if (textLen >= 20) {
+          return {
+            found:      true,
+            position:   firstPClose + 4,
+            anchorText: '</p>',
+            preview:    before.replace(/<[^>]*>/g, '').trim().slice(-100),
+          };
+        }
+      }
+
+      // ── Fallback: after the last closing block element ──
       let lastPos = -1;
       let lastTag = null;
-
       for (const tag of blockTags) {
         const idx = html.lastIndexOf(tag);
         if (idx > lastPos) { lastPos = idx; lastTag = tag; }
       }
-
       if (lastPos !== -1) {
         const pos = lastPos + lastTag.length;
         return {
