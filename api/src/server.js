@@ -74,6 +74,17 @@ if (process.env.NODE_ENV === 'production' && !process.env.SESSION_SECRET) {
   throw new Error('SESSION_SECRET must be set in production');
 }
 
+// Warn when NODE_ENV is absent so operators know the security posture.
+// DEV_BEARER_TOKEN is disabled when NODE_ENV is missing (requires === 'development').
+// Sessions still work, but the explicit warning prevents silent misconfiguration.
+if (!process.env.NODE_ENV) {
+  console.warn(
+    '[Security] NODE_ENV is not set. ' +
+    'DEV_BEARER_TOKEN is disabled (requires NODE_ENV=development). ' +
+    'Set NODE_ENV=production for beta/production, NODE_ENV=development for local dev.'
+  );
+}
+
 app.use(session({
   store: new PgSession({
     conString: process.env.DATABASE_URL,
@@ -377,8 +388,29 @@ app.get('/products', async (req, res) => {
 
 app.get('/products/:id', async (req, res) => {
   try {
-    const product = await prisma.product.findUnique({
-      where: { id: req.params.id },
+    // Enforce store ownership so no authenticated session can read another
+    // store's product by guessing/knowing a product CUID (IDOR prevention).
+    //
+    // Session path (normal OAuth flow): req.session.storeId is set — use it directly.
+    // Dev-token path (local development only): session.storeId is absent; require
+    //   an explicit ?shop= param so the lookup is still scoped to one store.
+    let storeId = req.session?.storeId ?? null;
+
+    if (!storeId) {
+      // Dev-token path — must supply ?shop= to scope the request.
+      if (!req.query.shop) {
+        return res.status(400).json({ error: 'shop query param required' });
+      }
+      const store = await prisma.store.findUnique({ where: { shopDomain: req.query.shop } });
+      // Return 404 regardless of reason to avoid leaking store existence.
+      if (!store) return res.status(404).json({ error: 'Product not found' });
+      storeId = store.id;
+    }
+
+    // findFirst with storeId filter — returns null if product exists but belongs
+    // to a different store, which surfaces as 404 (same as not found).
+    const product = await prisma.product.findFirst({
+      where: { id: req.params.id, storeId },
       include: {
         variants: {
           orderBy: { createdAt: 'asc' },
