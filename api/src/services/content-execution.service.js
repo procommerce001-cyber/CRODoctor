@@ -130,53 +130,47 @@ const PATCH_MODE_REGISTRY = {
     findAnchor(html) {
       if (!html) return { found: false };
 
-      const blockTags = ['</p>', '</ul>', '</ol>', '</div>', '</h6>', '</h5>', '</h4>', '</h3>', '</h2>', '</h1>', '</blockquote>'];
+      const L          = html.length;
+      const candidates = collectSafeCloses(html); // top-level-safe only
+      const lo         = Math.floor(L * 0.40);
+      const hi         = Math.floor(L * 0.70);
+      const inBand     = c => c.pos >= lo && c.pos <= hi;
 
-      // ── Primary: around the 55% character midpoint.
-      //    Find the last closing block tag at or before that position so the
-      //    guarantee block sits in the middle of the description — past the main
-      //    product explanation but still visible to ~50% of visitors. Guard: the
-      //    tag must be past the 20% mark so we never insert before the product
-      //    has established context. ──
-      const midpoint = Math.floor(html.length * 0.55);
-      const minPos   = Math.floor(html.length * 0.20);
-      let midBestPos = -1;
-      let midBestTag = null;
-
-      for (const tag of blockTags) {
-        const idx = html.lastIndexOf(tag, midpoint);
-        if (idx !== -1 && idx > midBestPos) { midBestPos = idx; midBestTag = tag; }
+      // ── Priority 1: after a COMPLETE top-level list (</ul>/</ol>) ending in
+      //    the 40%–70% band — the cleanest break, right after the benefits /
+      //    features section. Latest such list wins (most context before it). ──
+      const listCloses = candidates.filter(c => (c.tag === '</ul>' || c.tag === '</ol>') && inBand(c));
+      if (listCloses.length) {
+        return makeAnchor(html, listCloses[listCloses.length - 1], 'high');
       }
 
-      if (midBestPos >= minPos) {
-        const pos = midBestPos + midBestTag.length;
-        return {
-          found:      true,
-          position:   pos,
-          anchorText: midBestTag,
-          preview:    html.slice(Math.max(0, midBestPos - 80), pos),
-        };
+      // ── Priority 2: after any complete top-level block in the 40%–70% band —
+      //    for descriptions with long paragraphs and no mid list. ──
+      const midBlocks = candidates.filter(inBand);
+      if (midBlocks.length) {
+        return makeAnchor(html, midBlocks[midBlocks.length - 1], 'high');
       }
 
-      // ── Fallback: after the first </p> with ≥20 text chars before it ──
-      const firstPClose = html.indexOf('</p>');
-      if (firstPClose !== -1) {
-        const before  = html.slice(0, firstPClose);
-        const textLen = before.replace(/<[^>]*>/g, '').trim().length;
-        if (textLen >= 20) {
-          return {
-            found:      true,
-            position:   firstPClose + 4,
-            anchorText: '</p>',
-            preview:    before.replace(/<[^>]*>/g, '').trim().slice(-100),
-          };
-        }
+      // ── Priority 3: first top-level-safe block after 25% — ensures the block
+      //    follows the main product explanation even when one long top-level
+      //    list spans the middle (no safe anchor lands inside the band). ──
+      const after25   = Math.floor(L * 0.25);
+      const earlySafe = candidates.find(c => c.pos >= after25);
+      if (earlySafe) {
+        return makeAnchor(html, earlySafe, 'medium');
       }
 
-      // ── Final fallback: after the last closing block element ──
+      // ── Fallback: after the last top-level-safe closing block (low confidence). ──
+      if (candidates.length) {
+        return makeAnchor(html, candidates[candidates.length - 1], 'low');
+      }
+
+      // ── Final safety net: no top-level-safe anchor anywhere (unusual / nested
+      //    markup). Append after the last closing block of any kind so the output
+      //    is still valid HTML rather than failing the apply. ──
       let lastPos = -1;
       let lastTag = null;
-      for (const tag of blockTags) {
+      for (const tag of STANDALONE_BLOCK_TAGS) {
         const idx = html.lastIndexOf(tag);
         if (idx > lastPos) { lastPos = idx; lastTag = tag; }
       }
@@ -186,6 +180,7 @@ const PATCH_MODE_REGISTRY = {
           found:      true,
           position:   pos,
           anchorText: lastTag,
+          confidence: 'low',
           preview:    html.slice(Math.max(0, lastPos - 80), pos),
         };
       }
@@ -210,55 +205,70 @@ const PATCH_MODE_REGISTRY = {
     findAnchor(html) {
       if (!html) return { found: false };
 
-      const blockTags = ['</p>', '</ul>', '</ol>', '</div>', '</h6>', '</h5>', '</h4>', '</h3>', '</h2>', '</h1>', '</blockquote>'];
-
-      // ── Primary: just before the first feature list (<ul> or <ol>), provided
-      //    there are ≥50 text chars above the list so the product has context.
-      //    Insert after the closing tag that immediately precedes the list so
-      //    trust bullets appear between the opening copy and the feature list. ──
-      const listMatch = html.match(/<(ul|ol)\b/i);
-      if (listMatch) {
-        const listPos = html.indexOf(listMatch[0]);
+      // ── Primary: immediately before the first TOP-LEVEL feature list
+      //    (<ul>/<ol>), provided ≥50 text chars of context precede it. Insert
+      //    after the top-level closing tag that ends the intro copy so trust
+      //    bullets sit between the opening copy and the whole list — never
+      //    inside it, and never before a list that is itself nested. ──
+      const listRe = /<(ul|ol)\b/gi;
+      let lm;
+      while ((lm = listRe.exec(html)) !== null) {
+        const listPos = lm.index;
+        if (!isTopLevelSafe(html, listPos)) continue; // skip nested lists
         const before  = html.slice(0, listPos);
         const textLen = before.replace(/<[^>]*>/g, '').trim().length;
-        if (textLen >= 50) {
-          let bestPos = -1;
-          let bestTag = null;
-          for (const tag of blockTags) {
-            const idx = before.lastIndexOf(tag);
-            if (idx !== -1 && idx > bestPos) { bestPos = idx; bestTag = tag; }
-          }
-          if (bestPos !== -1) {
-            const pos = bestPos + bestTag.length;
+        if (textLen < 50) { break; }
+        let bestPos = -1;
+        let bestTag = null;
+        for (const tag of STANDALONE_BLOCK_TAGS) {
+          const idx = before.lastIndexOf(tag);
+          if (idx !== -1 && idx > bestPos) { bestPos = idx; bestTag = tag; }
+        }
+        if (bestPos !== -1) {
+          const pos = bestPos + bestTag.length;
+          if (isTopLevelSafe(html, pos)) {
             return {
               found:      true,
               position:   pos,
               anchorText: bestTag,
+              confidence: 'high',
               preview:    html.slice(Math.max(0, bestPos - 80), pos),
             };
           }
         }
+        break; // first top-level list handled; fall through to paragraph anchors
       }
 
-      // ── Secondary: after the first </p> with ≥20 text chars before it ──
-      const firstPClose = html.indexOf('</p>');
-      if (firstPClose !== -1) {
-        const before  = html.slice(0, firstPClose);
+      // ── Secondary: after the first TOP-LEVEL </p> with ≥20 text chars before
+      //    it — a clean standalone paragraph break near the top. ──
+      let pFrom = 0;
+      let pIdx;
+      while ((pIdx = html.indexOf('</p>', pFrom)) !== -1) {
+        const pos     = pIdx + 4;
+        const before  = html.slice(0, pIdx);
         const textLen = before.replace(/<[^>]*>/g, '').trim().length;
-        if (textLen >= 20) {
+        if (textLen >= 20 && isTopLevelSafe(html, pos)) {
           return {
             found:      true,
-            position:   firstPClose + 4,
+            position:   pos,
             anchorText: '</p>',
+            confidence: 'medium',
             preview:    before.replace(/<[^>]*>/g, '').trim().slice(-100),
           };
         }
+        pFrom = pIdx + 4;
       }
 
-      // ── Fallback: after the last closing block element ──
+      // ── Fallback: after the last top-level-safe closing block (low confidence). ──
+      const candidates = collectSafeCloses(html);
+      if (candidates.length) {
+        return makeAnchor(html, candidates[candidates.length - 1], 'low');
+      }
+
+      // ── Final safety net: last closing block of any kind, so output stays valid. ──
       let lastPos = -1;
       let lastTag = null;
-      for (const tag of blockTags) {
+      for (const tag of STANDALONE_BLOCK_TAGS) {
         const idx = html.lastIndexOf(tag);
         if (idx > lastPos) { lastPos = idx; lastTag = tag; }
       }
@@ -268,6 +278,7 @@ const PATCH_MODE_REGISTRY = {
           found:      true,
           position:   pos,
           anchorText: lastTag,
+          confidence: 'low',
           preview:    html.slice(Math.max(0, lastPos - 80), pos),
         };
       }
@@ -361,6 +372,98 @@ const PATCH_MODE_REGISTRY = {
 // ---------------------------------------------------------------------------
 function stripHtmlText(html) {
   return (html || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+// ---------------------------------------------------------------------------
+// Context-aware anchor safety
+//
+// Standalone CRO blocks (no_risk_reversal, no_trust_bullets) must be inserted
+// as a top-level sibling — never nested inside a list, table, definition list,
+// figure, blockquote, <select>, or an existing CRO block. The old heuristic
+// picked the nearest closing tag by character position alone, so it could land
+// the block between two <li> items because a </p> *inside* that <li> was the
+// closest closing tag before the target percentage.
+//
+// openElementsAt walks every tag from the start of the document up to `pos` and
+// returns the stack of still-open elements at that offset. isTopLevelSafe then
+// rejects any position whose open-element stack contains a structured container
+// or a CRO block. Pure string scanning — deterministic, no DOM, no side effects,
+// and tolerant of unclosed inner tags (exact on well-formed Shopify HTML).
+// ---------------------------------------------------------------------------
+const VOID_ELEMENTS = new Set([
+  'area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input',
+  'link', 'meta', 'param', 'source', 'track', 'wbr',
+]);
+
+// Elements whose interior is a structured section a standalone block must not
+// be inserted into.
+const STRUCTURED_CONTAINER_TAGS = new Set([
+  'ul', 'ol', 'li', 'table', 'thead', 'tbody', 'tfoot', 'tr', 'td', 'th',
+  'dl', 'dt', 'dd', 'figure', 'figcaption', 'blockquote', 'picture', 'select', 'option',
+]);
+
+// Block-level closing tags eligible as standalone-insertion anchors.
+const STANDALONE_BLOCK_TAGS = [
+  '</p>', '</ul>', '</ol>', '</div>', '</h6>', '</h5>', '</h4>',
+  '</h3>', '</h2>', '</h1>', '</blockquote>',
+];
+
+function openElementsAt(html, pos) {
+  const stack = [];
+  const tagRe = /<(\/?)([a-zA-Z][a-zA-Z0-9]*)\b([^>]*)>/g;
+  let m;
+  while ((m = tagRe.exec(html)) !== null) {
+    if (m.index >= pos) break;
+    const isClose     = m[1] === '/';
+    const tag         = m[2].toLowerCase();
+    const attrs       = m[3] || '';
+    const selfClosing = /\/\s*$/.test(attrs) || VOID_ELEMENTS.has(tag);
+    if (isClose) {
+      // Pop back to the matching open tag, tolerating unclosed inner elements.
+      for (let i = stack.length - 1; i >= 0; i--) {
+        if (stack[i].tag === tag) { stack.length = i; break; }
+      }
+    } else if (!selfClosing) {
+      stack.push({ tag, isCroBlock: /data-cro-block/i.test(attrs) });
+    }
+  }
+  return stack;
+}
+
+// True when inserting at `pos` would NOT land inside a structured section
+// (list/table/definition list/figure/blockquote/select) or an existing CRO block.
+function isTopLevelSafe(html, pos) {
+  if (pos == null || pos < 0) return false;
+  return !openElementsAt(html, pos).some(
+    el => STRUCTURED_CONTAINER_TAGS.has(el.tag) || el.isCroBlock,
+  );
+}
+
+// All top-level-safe block-closing positions in `html`, sorted by position.
+// Each: { tag, idx (start of closing tag), pos (insertion offset just after it) }.
+function collectSafeCloses(html) {
+  const candidates = [];
+  for (const tag of STANDALONE_BLOCK_TAGS) {
+    let from = 0;
+    let idx;
+    while ((idx = html.indexOf(tag, from)) !== -1) {
+      const pos = idx + tag.length;
+      if (isTopLevelSafe(html, pos)) candidates.push({ tag, idx, pos });
+      from = idx + tag.length;
+    }
+  }
+  candidates.sort((a, b) => a.pos - b.pos);
+  return candidates;
+}
+
+function makeAnchor(html, c, confidence) {
+  return {
+    found:      true,
+    position:   c.pos,
+    anchorText: c.tag,
+    confidence,            // non-persisted hint; ignored by detectPatchMode/storage
+    preview:    html.slice(Math.max(0, c.idx - 80), c.pos),
+  };
 }
 
 // ---------------------------------------------------------------------------
