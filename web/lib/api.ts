@@ -351,6 +351,60 @@ export async function fetchDashboard(shop: string): Promise<DashboardPayload> {
 }
 
 // ---------------------------------------------------------------------------
+// Dashboard recommendation discovery — lightweight, LLM-free list of ALL
+// recommendations across the catalog, grouped by status. Loaded lazily for the
+// "View more recommendations" UI so the main dashboard stays fast.
+// ---------------------------------------------------------------------------
+export type RecommendationStatus =
+  | 'ready_to_apply'
+  | 'needs_review'
+  | 'manual_setup'
+  | 'measuring'
+  | 'blocked';
+
+export interface Recommendation {
+  productId:    string;
+  productTitle: string | null;
+  issueId:      string;
+  title:        string;
+  category:     string | null;
+  severity:     string | null;
+  score:        number | null;
+  applyType:    'content_change' | 'manual' | 'theme_change' | null;
+  canAutoApply: boolean;
+  riskLevel:    string | null;
+  reviewStatus: string;
+  manualSetup:  boolean;
+  previewable:  boolean;
+  selectable:   boolean;
+  status:       RecommendationStatus;
+  reason:       string | null;
+}
+
+export interface RecommendationsPayload {
+  success: boolean;
+  shop:    string;
+  summary: {
+    total:        number;
+    readyToApply: number;
+    needsReview:  number;
+    manualSetup:  number;
+    measuring:    number;
+    blocked:      number;
+  };
+  items: Recommendation[];
+}
+
+export async function fetchRecommendations(shop: string): Promise<RecommendationsPayload> {
+  const res = await fetch(
+    `${API_BASE}/dashboard/recommendations?shop=${encodeURIComponent(shop)}`,
+    { cache: 'no-store', credentials: 'include', headers: apiHeaders() }
+  );
+  if (!res.ok) throw new Error(`Recommendations fetch failed: ${res.status}`);
+  return res.json();
+}
+
+// ---------------------------------------------------------------------------
 // Decision Engine — top actions
 // ---------------------------------------------------------------------------
 

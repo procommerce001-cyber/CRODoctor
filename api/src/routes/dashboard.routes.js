@@ -3,7 +3,7 @@
 const express = require('express');
 const router  = express.Router();
 
-const { getDashboardSelectionPayload } = require('../services/dashboard.service');
+const { getDashboardSelectionPayload, getDashboardRecommendationsPayload } = require('../services/dashboard.service');
 const { resolveStore }                 = require('../lib/resolve-store');
 
 // ---------------------------------------------------------------------------
@@ -26,6 +26,30 @@ router.get('/selection', async (req, res) => {
   } catch (err) {
     console.error('[Dashboard] GET /selection error:', err.message);
     res.status(500).json({ error: 'Internal error generating dashboard payload.' });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// GET /dashboard/recommendations?shop=
+// Lightweight, LLM-free discovery list of ALL recommendations across the
+// catalog, grouped by status. Powers the "View more recommendations" UI.
+// Read-only — never mutates, never applies/rolls back, never generates content.
+// ---------------------------------------------------------------------------
+router.get('/recommendations', async (req, res) => {
+  const prisma = req.app.get('prisma');
+  try {
+    if (!req.query.shop) return res.status(400).json({ error: 'shop is required' });
+    const _store = await resolveStore(prisma, req.query.shop, res, req);
+    if (!_store) return;
+
+    const result = await getDashboardRecommendationsPayload(prisma, req.query.shop);
+
+    if (!result.success) return res.status(404).json(result);
+
+    res.json(result);
+  } catch (err) {
+    console.error('[Dashboard] GET /recommendations error:', err.message);
+    res.status(500).json({ error: 'Internal error generating recommendations.' });
   }
 });
 

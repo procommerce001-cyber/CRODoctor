@@ -700,6 +700,64 @@ async function getProductActions(rawProduct, { prisma, storeId } = {}) {
 }
 
 // ---------------------------------------------------------------------------
+// listProductRecommendations
+//
+// Read-only, LLM-FREE recommendation listing for dashboard discovery.
+// Mirrors the cheap classification prefix of getProductActions (rule detection,
+// dedup, sort, persisted review-state merge) but deliberately SKIPS all content
+// generation — the expensive generate*WithLLM enrichment is the reason the full
+// review path can take ~70s. The actual fix content is fetched lazily via the
+// existing content-preview endpoint when the merchant clicks Preview.
+//
+// Does NOT mutate anything. Returns the same actionableItems shape (sans LLM
+// generatedFix override). priorContentPresent is intentionally not computed here
+// (the per-product apply gate re-checks it before any write).
+// ---------------------------------------------------------------------------
+async function listProductRecommendations(rawProduct, { prisma, storeId } = {}) {
+  const croProduct = toCroProduct(rawProduct);
+  const analysis   = analyzeProduct(croProduct);
+
+  const allIssues = [
+    ...analysis.criticalBlockers,
+    ...analysis.revenueOpportunities,
+    ...analysis.quickWins,
+    ...Object.values(analysis.categories).flatMap(c => c.issues).filter(i => V1_RULE_ALLOWLIST.has(i.issueId)),
+  ];
+
+  const seen = new Set();
+  const deduped = allIssues.filter(i => {
+    if (seen.has(i.issueId)) return false;
+    seen.add(i.issueId);
+    return true;
+  });
+
+  const v1Issues = deduped.filter(i => V1_RULE_ALLOWLIST.has(i.issueId));
+  let items = v1Issues.filter(isActionable).map(toActionItem);
+
+  const severityOrder = { critical: 0, high: 1, medium: 2, low: 3 };
+  const effortOrder   = { low: 0, medium: 1, high: 2 };
+  items.sort((a, b) => {
+    const sA = severityOrder[a.severity] ?? 9;
+    const sB = severityOrder[b.severity] ?? 9;
+    if (sA !== sB) return sA - sB;
+    return (effortOrder[a.effort] ?? 9) - (effortOrder[b.effort] ?? 9);
+  });
+
+  if (prisma && storeId) {
+    const stateMap = await loadReviewStateMap(prisma, storeId, rawProduct.id);
+    items = mergeReviewState(items, stateMap);
+  }
+
+  return {
+    productId:        analysis.productId,
+    shopifyProductId: analysis.shopifyProductId,
+    title:            analysis.title,
+    status:           analysis.status,
+    actions:          items,
+  };
+}
+
+// ---------------------------------------------------------------------------
 // getReviewStateForProduct
 // Returns the raw persisted state for a product — used by GET /review-state.
 // Does NOT re-run the engine. Pure DB read.
@@ -1626,6 +1684,7 @@ async function buildBatchPreview(shop, rawProducts, { prisma, storeId } = {}) {
 
 module.exports = {
   getProductActions,
+  listProductRecommendations,
   getStoreQueue,
   saveReviewState,
   getReviewStateForProduct,

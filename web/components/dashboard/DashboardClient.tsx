@@ -2,8 +2,9 @@
 
 import { useState, useCallback, useEffect, useMemo } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import type { DashboardPayload, ApplyResponse, TopAction } from '@/lib/api';
+import type { DashboardPayload, ApplyResponse, TopAction, Recommendation } from '@/lib/api';
 import { applySelected, fetchTopActions, executeAction, rollbackAction } from '@/lib/api';
+import MoreRecommendations      from './MoreRecommendations';
 import TopWinsList               from './TopWinsList';
 import ExecutionDetailsPanel     from './ExecutionDetailsPanel';
 import StoreSuggestionsList      from './StoreSuggestionsList';
@@ -92,6 +93,44 @@ export default function DashboardClient({ data }: Props) {
       setRollingBack(prev => { const n = new Set(prev); n.delete(key); return n; });
     }
   };
+
+  // Open a recommendation from the "View more" list in the inspector.
+  // Builds a TopAction-shaped row so the existing Preview/Apply flow works
+  // unchanged (Preview uses productId+issueId; Apply uses actionKey via execute).
+  const openRecommendation = useCallback((rec: Recommendation) => {
+    const topAction: TopAction = {
+      rank:                         0,
+      actionKey:                    `${rec.productId}::${rec.issueId}`,
+      productId:                    rec.productId,
+      productTitle:                 rec.productTitle ?? '',
+      issueId:                      rec.issueId,
+      severity:                     rec.severity ?? 'medium',
+      opportunityScore:             rec.score ?? 0,
+      revenue:                      0,
+      estimatedImpactLabel:         null,
+      quickWin:                     false,
+      expectedTimeToImpact:         '',
+      earlySignalEligible:          false,
+      whyNow:                       '',
+      recommendedAction:            rec.title,
+      executionStatus:              'pending',
+      executedAt:                   null,
+      confidenceTier:               null,
+      confidenceSampleSize:         null,
+      openMeasurementWindow:        false,
+      openMeasurementWindowReadyAt: null,
+      applyType:                    rec.applyType ?? undefined,
+      readyToApply:                 rec.selectable,
+    };
+    setFocusedRow({
+      key:          `rec::${rec.productId}::${rec.issueId}`,
+      feedStatus:   'queued',
+      productTitle: rec.productTitle ?? '',
+      issueId:      rec.issueId,
+      topAction,
+    });
+    if (typeof window !== 'undefined') window.scrollTo({ top: 0, behavior: 'smooth' });
+  }, []);
 
   const selectableKeys = data.review.groups.readyToApply
     .filter(i => i.selectable)
@@ -204,6 +243,9 @@ export default function DashboardClient({ data }: Props) {
             />
         </div>
       </section>
+
+      {/* ── B2: Discover more recommendations (lazy, LLM-free) ──────────── */}
+      <MoreRecommendations shop={SHOP} onOpen={openRecommendation} />
 
       {/* ── C: Scale what's working ─────────────────────────────────────── */}
       <section>

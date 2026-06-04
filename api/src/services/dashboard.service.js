@@ -7,7 +7,7 @@
 // Does NOT contain business logic — delegates entirely to existing services.
 // ---------------------------------------------------------------------------
 
-const { getProductActions }  = require('./action-center.service');
+const { getProductActions, listProductRecommendations } = require('./action-center.service');
 const { getStoreResultsSummary, getStoreExecutionFeed } = require('./metrics.service');
 const { PRODUCT_INCLUDE }    = require('../lib/product-include');
 
@@ -237,4 +237,121 @@ async function getDashboardSelectionPayload(prisma, shop) {
   return payload;
 }
 
-module.exports = { getDashboardSelectionPayload };
+// ---------------------------------------------------------------------------
+// getDashboardRecommendationsPayload
+//
+// Lightweight, LLM-FREE discovery list for "View more recommendations".
+// Loads ALL recommendations across the catalog using listProductRecommendations
+// (rule detection + review-state only — no content generation), so it returns
+// quickly where the full review-selection path times out. Read-only.
+//
+// Returns recommendations grouped by status the UI can render directly:
+//   ready_to_apply | needs_review | manual_setup | measuring | blocked
+// Content is NOT generated here — it is fetched lazily via content-preview when
+// the merchant clicks Preview/Review. Apply/Rollback behaviour is unchanged.
+// ---------------------------------------------------------------------------
+const RECOMMENDATIONS_TTL_MS = 5_000;
+const _recCache = new Map(); // Map<shop, { payload, expiresAt }>
+
+async function getDashboardRecommendationsPayload(prisma, shop) {
+  const cached = _recCache.get(shop);
+  if (cached && Date.now() <= cached.expiresAt) return cached.payload;
+
+  const store = await prisma.store.findUnique({ where: { shopDomain: shop }, select: { id: true } });
+  if (!store) return { success: false, reason: 'store not found' };
+
+  const rawProducts = await prisma.product.findMany({
+    where:   { storeId: store.id },
+    orderBy: { createdAt: 'desc' },
+    take:    100,
+    include: PRODUCT_INCLUDE,
+  });
+
+  const productIds  = rawProducts.map(p => p.id);
+  const appliedRows = productIds.length
+    ? await prisma.contentExecution.findMany({
+        where:  { productId: { in: productIds }, status: 'applied' },
+        select: { productId: true, issueId: true },
+      })
+    : [];
+  const appliedSet = new Set(appliedRows.map(r => `${r.productId}:${r.issueId}`));
+
+  const items = [];
+  for (const raw of rawProducts) {
+    let result;
+    try {
+      result = await listProductRecommendations(raw, { prisma, storeId: store.id });
+    } catch (_) {
+      continue; // non-fatal: skip a product that fails to analyze
+    }
+
+    for (const action of result.actions) {
+      const applied      = appliedSet.has(`${raw.id}:${action.issueId}`);
+      const manualSetup  = action.applyType !== 'content_change';
+      const previewable  = action.canAutoApply === true && !manualSetup;
+      const selectable   =
+        previewable &&
+        action.riskLevel    === 'low' &&
+        action.reviewStatus === 'approved' &&
+        !applied;
+
+      let status;
+      let reason = null;
+      if (applied)            { status = 'measuring'; }
+      else if (manualSetup)   { status = 'manual_setup';  reason = 'Manual setup — open the product to configure.'; }
+      else if (selectable)    { status = 'ready_to_apply'; }
+      else if (previewable)   { status = 'needs_review';  reason = action.reviewStatus !== 'approved' ? 'Preview and review before applying.' : null; }
+      else                    { status = 'blocked';       reason = action.canAutoApply ? `riskLevel is ${action.riskLevel}` : 'Confidence too low for one-click apply.'; }
+
+      items.push({
+        productId:        raw.id,
+        productTitle:     result.title ?? raw.title ?? null,
+        issueId:          action.issueId,
+        title:            action.title ?? action.issueId,
+        category:         action.category ?? null,
+        severity:         action.severity ?? null,
+        score:            action.scoreImpact ?? null,
+        applyType:        action.applyType ?? null,
+        canAutoApply:     action.canAutoApply === true,
+        riskLevel:        action.riskLevel ?? null,
+        reviewStatus:     action.reviewStatus ?? 'pending',
+        manualSetup,
+        previewable,
+        selectable,
+        status,
+        reason,
+      });
+    }
+  }
+
+  // Stable order: ready first, then needs_review, manual, measuring, blocked;
+  // within each, by severity then score.
+  const statusOrder = { ready_to_apply: 0, needs_review: 1, manual_setup: 2, measuring: 3, blocked: 4 };
+  const sevOrder    = { critical: 0, high: 1, medium: 2, low: 3 };
+  items.sort((a, b) => {
+    const so = (statusOrder[a.status] ?? 9) - (statusOrder[b.status] ?? 9);
+    if (so !== 0) return so;
+    const sv = (sevOrder[a.severity] ?? 9) - (sevOrder[b.severity] ?? 9);
+    if (sv !== 0) return sv;
+    return (b.score ?? 0) - (a.score ?? 0);
+  });
+
+  const payload = {
+    success:  true,
+    shop,
+    summary: {
+      total:        items.length,
+      readyToApply: items.filter(i => i.status === 'ready_to_apply').length,
+      needsReview:  items.filter(i => i.status === 'needs_review').length,
+      manualSetup:  items.filter(i => i.status === 'manual_setup').length,
+      measuring:    items.filter(i => i.status === 'measuring').length,
+      blocked:      items.filter(i => i.status === 'blocked').length,
+    },
+    items,
+  };
+
+  _recCache.set(shop, { payload, expiresAt: Date.now() + RECOMMENDATIONS_TTL_MS });
+  return payload;
+}
+
+module.exports = { getDashboardSelectionPayload, getDashboardRecommendationsPayload };
