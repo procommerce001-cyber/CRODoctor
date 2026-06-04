@@ -18,6 +18,7 @@ const { test } = require('node:test');
 const assert   = require('node:assert');
 
 const { RULES } = require('../services/cro/rules');
+const { buildSupportBullets } = require('../services/cro/generators/trust-bullets-llm');
 
 const trustRule = RULES.find(r => r.id === 'no_trust_bullets');
 
@@ -88,4 +89,26 @@ test('product with no title falls back to fully neutral copy', () => {
   const { full } = buildContent(noTitle);
   assert.ok(!/AURA/i.test(full), 'no vendor leakage even without a title');
   assert.ok(/our team|get in touch/i.test(full), 'neutral support language present');
+});
+
+// ---------------------------------------------------------------------------
+// LLM path: buildSupportBullets builds the template bullets 2 & 3 that are
+// appended to the LLM-generated bullet 1. This is the ACTUAL served path when
+// ANTHROPIC_API_KEY is present, and previously carried the same vendor leak.
+// ---------------------------------------------------------------------------
+test('LLM-path support bullets (buildSupportBullets) do not leak polluted vendor', () => {
+  const { b2, b3 } = buildSupportBullets(turboFlush);
+  const all = [b2, b3].filter(Boolean).join(' ');
+  assert.ok(!/AURA/i.test(all),               'b2/b3 must not contain "AURA"');
+  assert.ok(!/Magnetic Powerbank/i.test(all), 'b2/b3 must not contain "Magnetic Powerbank"');
+  assert.ok(!/The AURA Magnetic Powerbank team/i.test(all), 'no vendor-team interpolation');
+  assert.ok(/our team/i.test(b2),             'b2 uses neutral "our team" language');
+  assert.ok(/TurboFlush/i.test(b2),           'b2 references the current product only');
+});
+
+test('LLM-path support bullets do not invent policy claims', () => {
+  const { b2, b3 } = buildSupportBullets(turboFlush);
+  const all = [b2, b3].filter(Boolean).join(' ');
+  assert.ok(!/money[- ]back|free returns?|\d+[\s-]day[\s-](guarantee|return|refund|warranty)|warranty|guaranteed[\s-](delivery|results?)|risk[- ]free/i.test(all),
+    'no invented legal/policy claims');
 });

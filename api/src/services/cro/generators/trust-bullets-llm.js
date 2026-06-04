@@ -71,15 +71,18 @@ function detectProductType(product) {
 function buildSupportBullets(product) {
   const category   = detectCategory(product);
   const type       = detectProductType(product);
-  const vendor     = (product.vendor || '').trim();
   const price      = parseFloat(String(product.variants?.[0]?.price || 0));
   const shortTitle = (product.title || '').replace(/\s*[-–]\s*(v\.?\d+|test|demo|new|old)\s*$/i, '').trim();
 
+  // Neutral seller/support language only. Never interpolate product.vendor or any
+  // brand/team name: vendor can be polluted store-wide with a sibling product's brand
+  // (e.g. "AURA Magnetic Powerbank"), which would leak another product's name into
+  // this product's trust copy. Referencing the CURRENT product's own title is safe.
   const b2 = category === 'baby_infant'
     ? `Unsure whether this fits your baby's age or weight right now? Share their details before ordering and we'll confirm the right fit.`
-    : (vendor
-        ? `Questions about ${shortTitle}? The ${vendor} team is here — get in touch before you buy.`
-        : `Questions before you order? Get in touch — we'll give you a straight answer.`);
+    : (shortTitle
+        ? `Questions about ${shortTitle}? Our team is here to help — get in touch before you order.`
+        : `Questions before you order? Our team is here to help — we'll give you a straight answer.`);
 
   const b3 =
     type === 'fashion'     ? `Not sure about sizing? Message us before you order and we'll help you get the right fit.` :
@@ -247,4 +250,4 @@ async function generateTrustBulletsWithLLM(product, copyPlan, reviews = []) {
   }
 }
 
-module.exports = { generateTrustBulletsWithLLM, buildTrustBulletsPrompt };
+module.exports = { generateTrustBulletsWithLLM, buildTrustBulletsPrompt, buildSupportBullets };
