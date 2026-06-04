@@ -153,12 +153,12 @@ function generateTrustBlock(product) {
 // PDP-level trust signals only — addresses buyer hesitation at the moment of
 // deciding, not paying. Checkout security is handled by Shopify's native badges
 // and belongs on the checkout page, not here.
-// Grounds bullets in product context (type + vendor). Never invents policies.
+// Grounds bullets in product context (type + the current product's own title).
+// Never interpolates product.vendor or any brand/team name — see bullet 2.
 // Returns { bestGuess: { content }, variants: [{ content }, { content }] }
 // ---------------------------------------------------------------------------
 function generateTrustBullets(product) {
   const type   = detectProductType(product);
-  const vendor = (product.vendor || '').trim();
   const price  = parseFloat(String(product.variants?.[0]?.price || 0));
 
   // Pre-purchase reassurance only. No post-purchase framing — that belongs in no_risk_reversal.
@@ -172,11 +172,15 @@ function generateTrustBullets(product) {
     type === 'high_ticket' ? `We only carry products we\'d back at this price point. If you have questions before committing, ask us — we\'ll give you a straight answer.` :
     `We\'re selective about what we stock — and happy to answer any questions before you order.`;
 
-  // Bullet 2 — pre-purchase support, personalised to brand + product name
+  // Bullet 2 — pre-purchase support. Neutral seller/support language only.
+  // Never interpolate product.vendor or any brand/team name: vendor can be polluted
+  // store-wide with a sibling product's brand (e.g. "AURA Magnetic Powerbank"), which
+  // would leak another product's name into this product's trust copy. Referencing the
+  // CURRENT product's own title is safe and keeps the bullet relevant.
   const shortTitle = (product.title || '').replace(/\s*[-–]\s*(v\.?\d+|test|demo|new|old)\s*$/i, '').trim();
-  const bullet2 = vendor
-    ? `Questions about ${shortTitle}? The ${vendor} team is here — get in touch before you buy.`
-    : `Questions before you order? Get in touch — we\'ll give you a straight answer.`;
+  const bullet2 = shortTitle
+    ? `Questions about ${shortTitle}? Our team is here to help — get in touch before you order.`
+    : `Questions before you order? Our team is here to help — we\'ll give you a straight answer.`;
 
   // Bullet 3 — type-specific hesitation resolved (pre-purchase only)
   const bullet3 =
