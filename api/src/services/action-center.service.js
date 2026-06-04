@@ -45,7 +45,8 @@ async function updateProductDescription(store, shopifyProductId, bodyHtml) {
 }
 const { classifyExecution }              = require('./cro/classifyExecution');
 const { buildResultContent,
-        wrapIssueContent }               = require('./content-execution.service');
+        wrapIssueContent,
+        safeHtmlEquivalent }             = require('./content-execution.service');
 const { validateContentSafety }          = require('./content-safety-validator');
 const { randomUUID }                     = require('crypto');
 
@@ -1552,9 +1553,13 @@ async function rollbackContentChange(prisma, store, rawProduct, issueId) {
     };
   }
 
-  // 3. Safety: abort if content has been manually edited since apply
+  // 3. Safety: abort if content has been manually edited since apply.
+  // Exact match passes. Otherwise allow ONLY when the difference is Shopify's
+  // harmless body_html whitespace normalization (safeHtmlEquivalent preserves
+  // text/structure, so real manual edits, stacked changes, or removed/duplicated
+  // CRO blocks still block). Any other difference is treated as manual-edit drift.
   const currentBodyHtml = rawProduct.bodyHtml ?? null;
-  if (currentBodyHtml !== execution.resultContent) {
+  if (!safeHtmlEquivalent(currentBodyHtml, execution.resultContent)) {
     return {
       success:     false,
       rolledBack:  false,

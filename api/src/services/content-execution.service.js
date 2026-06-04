@@ -375,6 +375,40 @@ function stripHtmlText(html) {
 }
 
 // ---------------------------------------------------------------------------
+// normalizeHtmlForCompare / safeHtmlEquivalent
+//
+// Shopify reformats saved product body_html — it inserts/removes newlines and
+// whitespace *between* block tags (e.g. it turns the compact "<ul><li>" we write
+// into "<ul>\n<li>"). The stored ContentExecution.resultContent is the pre-write
+// compact string, while the live/local body carries Shopify's reformatted copy,
+// so a strict byte compare in the rollback guard reports a false "manual edit".
+//
+// normalizeHtmlForCompare removes ONLY harmless formatting:
+//   - normalizes line endings
+//   - strips whitespace that sits purely between two tags (">  <" → "><")
+//   - collapses remaining whitespace runs (inside text nodes) to a single space
+// It preserves all tags, attributes, and text — so real drift still differs:
+//   changed text, missing/duplicated data-cro-block, removed paragraphs, added
+//   content, or changed links/attributes all survive normalization and block.
+// ---------------------------------------------------------------------------
+function normalizeHtmlForCompare(html) {
+  return String(html ?? '')
+    .replace(/\r\n/g, '\n')   // normalize line endings
+    .replace(/>\s+</g, '><')  // drop whitespace between adjacent tags (Shopify reformatting)
+    .replace(/\s+/g, ' ')     // collapse remaining whitespace runs within text nodes
+    .trim();
+}
+
+// Returns true when two HTML strings are equal, or differ ONLY by the harmless
+// Shopify whitespace normalization above. Never treats text/structure changes as
+// equivalent. Used solely by the rollback manual-edit guard.
+function safeHtmlEquivalent(a, b) {
+  if (a === b) return true;
+  if (a == null || b == null) return false;
+  return normalizeHtmlForCompare(a) === normalizeHtmlForCompare(b);
+}
+
+// ---------------------------------------------------------------------------
 // Context-aware anchor safety
 //
 // Standalone CRO blocks (no_risk_reversal, no_trust_bullets) must be inserted
@@ -1166,5 +1200,6 @@ module.exports = {
   getExecutionHistory,
   buildResultContent,
   wrapIssueContent,
+  safeHtmlEquivalent,
   CONTENT_CHANGE_ISSUE_IDS,
 };
