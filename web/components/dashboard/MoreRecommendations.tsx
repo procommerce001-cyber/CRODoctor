@@ -16,29 +16,53 @@ const GROUPS: { status: RecommendationStatus; label: string; hint: string }[] = 
 export default function MoreRecommendations({
   shop,
   onOpen,
+  onUndo,
 }: {
   shop:   string;
   onOpen: (rec: Recommendation) => void;
+  // Reuses the dashboard's existing rollback flow (rollbackAction). Resolves on success.
+  onUndo: (productId: string, issueId: string) => Promise<void>;
 }) {
   const [open,    setOpen]    = useState(false);
   const [phase,   setPhase]   = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
   const [items,   setItems]   = useState<Recommendation[]>([]);
   const [error,   setError]   = useState<string | null>(null);
+  const [confirmKey, setConfirmKey] = useState<string | null>(null);
+  const [undoingKey, setUndoingKey] = useState<string | null>(null);
+  const [undoErrors, setUndoErrors] = useState<Record<string, string>>({});
+
+  async function load() {
+    setPhase('loading');
+    try {
+      const data = await fetchRecommendations(shop);
+      setItems(data.items);
+      setPhase('ready');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to load recommendations');
+      setPhase('error');
+    }
+  }
 
   async function handleToggle() {
     const next = !open;
     setOpen(next);
     // Lazy-load once on first expand.
-    if (next && phase === 'idle') {
-      setPhase('loading');
-      try {
-        const data = await fetchRecommendations(shop);
-        setItems(data.items);
-        setPhase('ready');
-      } catch (err) {
-        setError(err instanceof Error ? err.message : 'Failed to load recommendations');
-        setPhase('error');
-      }
+    if (next && phase === 'idle') await load();
+  }
+
+  async function handleUndo(rec: Recommendation) {
+    const key = `${rec.productId}::${rec.issueId}`;
+    setConfirmKey(null);
+    setUndoErrors(prev => { const n = { ...prev }; delete n[key]; return n; });
+    setUndoingKey(key);
+    try {
+      await onUndo(rec.productId, rec.issueId);
+      // Refresh the list so the reverted item leaves "Measuring".
+      await load();
+    } catch (err) {
+      setUndoErrors(prev => ({ ...prev, [key]: err instanceof Error ? err.message : 'Undo failed' }));
+    } finally {
+      setUndoingKey(null);
     }
   }
 
@@ -71,25 +95,48 @@ export default function MoreRecommendations({
                   <span style={s.groupCount}>{groupItems.length}</span>
                 </div>
                 <ul style={s.list}>
-                  {groupItems.map(rec => (
-                    <li key={`${rec.productId}::${rec.issueId}`} style={s.row}>
-                      <div style={s.rowMain}>
-                        <span style={s.rowTitle}>{rec.productTitle ?? '(untitled product)'}</span>
-                        <span style={s.rowIssue}>
-                          {issueLabel(rec.issueId)}
-                          {rec.manualSetup && <span style={s.manualTag}>Manual</span>}
-                        </span>
-                        {rec.reason && <span style={s.reason}>{rec.reason}</span>}
-                      </div>
-                      {rec.previewable ? (
-                        <button style={s.reviewBtn} onClick={() => onOpen(rec)}>
-                          {rec.status === 'ready_to_apply' ? 'Review' : 'Preview'}
-                        </button>
-                      ) : (
-                        <span style={s.noAction}>{rec.manualSetup ? 'Manual' : '—'}</span>
-                      )}
-                    </li>
-                  ))}
+                  {groupItems.map(rec => {
+                    const key        = `${rec.productId}::${rec.issueId}`;
+                    const isMeasuring = rec.status === 'measuring';
+                    const canUndo     = isMeasuring && rec.rollbackAvailable === true;
+                    const isUndoing   = undoingKey === key;
+                    const isConfirming = confirmKey === key;
+                    return (
+                      <li key={key} style={s.row}>
+                        <div style={s.rowMain}>
+                          <span style={s.rowTitle}>{rec.productTitle ?? '(untitled product)'}</span>
+                          <span style={s.rowIssue}>
+                            {issueLabel(rec.issueId)}
+                            {rec.manualSetup && <span style={s.manualTag}>Manual</span>}
+                          </span>
+                          {rec.reason && <span style={s.reason}>{rec.reason}</span>}
+                          {undoErrors[key] && <span style={s.error}>{undoErrors[key]}</span>}
+                        </div>
+                        {canUndo ? (
+                          isConfirming ? (
+                            <span style={s.confirmWrap}>
+                              <button style={s.confirmBtn} disabled={isUndoing} onClick={() => handleUndo(rec)}>
+                                {isUndoing ? 'Undoing…' : 'Confirm'}
+                              </button>
+                              <button style={s.cancelBtn} disabled={isUndoing} onClick={() => setConfirmKey(null)}>
+                                Cancel
+                              </button>
+                            </span>
+                          ) : (
+                            <button style={s.undoBtn} onClick={() => setConfirmKey(key)}>
+                              Undo
+                            </button>
+                          )
+                        ) : rec.previewable ? (
+                          <button style={s.reviewBtn} onClick={() => onOpen(rec)}>
+                            {rec.status === 'ready_to_apply' ? 'Review' : 'Preview'}
+                          </button>
+                        ) : (
+                          <span style={s.noAction}>{isMeasuring ? 'Measuring' : rec.manualSetup ? 'Manual' : '—'}</span>
+                        )}
+                      </li>
+                    );
+                  })}
                 </ul>
               </div>
             );
@@ -120,4 +167,8 @@ const s: Record<string, React.CSSProperties> = {
   reason:     { fontSize: 11, color: '#6b7280' },
   reviewBtn:  { flexShrink: 0, background: 'rgba(99,102,241,0.15)', border: '1px solid rgba(99,102,241,0.35)', borderRadius: 6, color: '#c7d2fe', fontSize: 12, fontWeight: 600, padding: '6px 14px', cursor: 'pointer' },
   noAction:   { flexShrink: 0, fontSize: 11, color: '#6b7280' },
+  undoBtn:    { flexShrink: 0, background: 'transparent', border: '1px solid rgba(255,255,255,0.18)', borderRadius: 6, color: '#d1d5db', fontSize: 12, fontWeight: 600, padding: '6px 14px', cursor: 'pointer' },
+  confirmWrap:{ flexShrink: 0, display: 'flex', gap: 6 },
+  confirmBtn: { background: 'rgba(248,113,113,0.15)', border: '1px solid rgba(248,113,113,0.4)', borderRadius: 6, color: '#fca5a5', fontSize: 12, fontWeight: 600, padding: '6px 12px', cursor: 'pointer' },
+  cancelBtn:  { background: 'transparent', border: '1px solid rgba(255,255,255,0.12)', borderRadius: 6, color: '#9ca3af', fontSize: 12, fontWeight: 600, padding: '6px 12px', cursor: 'pointer' },
 };

@@ -379,6 +379,10 @@ export interface Recommendation {
   selectable:   boolean;
   status:       RecommendationStatus;
   reason:       string | null;
+  // Rollback metadata — populated for measuring (applied) content_change rows.
+  executionId?:       string | null;
+  afterReadyAt?:      string | null;
+  rollbackAvailable?: boolean;
 }
 
 export interface RecommendationsPayload {

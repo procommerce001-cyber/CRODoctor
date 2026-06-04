@@ -271,10 +271,23 @@ async function getDashboardRecommendationsPayload(prisma, shop) {
   const appliedRows = productIds.length
     ? await prisma.contentExecution.findMany({
         where:  { productId: { in: productIds }, status: 'applied' },
-        select: { productId: true, issueId: true },
+        select: { id: true, productId: true, issueId: true, previousContent: true, afterReadyAt: true },
       })
     : [];
-  const appliedSet = new Set(appliedRows.map(r => `${r.productId}:${r.issueId}`));
+  // Map (productId:issueId) → the active applied execution (one per pair via the
+  // partial unique index). Carries the executionId + rollback inputs the UI needs.
+  const appliedByKey = new Map(appliedRows.map(r => [`${r.productId}:${r.issueId}`, r]));
+  const appliedSet   = new Set(appliedByKey.keys());
+
+  // Set of applied execution ids that already have a rolled_back row referencing
+  // them — those are no longer reversible. One read-only query, no LLM.
+  const reversedRows = appliedRows.length
+    ? await prisma.contentExecution.findMany({
+        where:  { status: 'rolled_back', referenceExecutionId: { in: appliedRows.map(r => r.id) } },
+        select: { referenceExecutionId: true },
+      })
+    : [];
+  const reversedSet = new Set(reversedRows.map(r => r.referenceExecutionId));
 
   const items = [];
   for (const raw of rawProducts) {
@@ -286,6 +299,7 @@ async function getDashboardRecommendationsPayload(prisma, shop) {
     }
 
     for (const action of result.actions) {
+      const appliedExec  = appliedByKey.get(`${raw.id}:${action.issueId}`) ?? null;
       const applied      = appliedSet.has(`${raw.id}:${action.issueId}`);
       const manualSetup  = action.applyType !== 'content_change';
       const previewable  = action.canAutoApply === true && !manualSetup;
@@ -302,6 +316,17 @@ async function getDashboardRecommendationsPayload(prisma, shop) {
       else if (selectable)    { status = 'ready_to_apply'; }
       else if (previewable)   { status = 'needs_review';  reason = action.reviewStatus !== 'approved' ? 'Preview and review before applying.' : null; }
       else                    { status = 'blocked';       reason = action.canAutoApply ? `riskLevel is ${action.riskLevel}` : 'Confidence too low for one-click apply.'; }
+
+      // Rollback metadata — only meaningful for measuring (applied) content_change
+      // rows. rollbackAvailable mirrors the main feed's Undo affordance: an active
+      // applied execution that has not already been rolled back. The rollback
+      // endpoint still enforces the full safety guard at click time.
+      const executionId      = appliedExec ? appliedExec.id : null;
+      const rollbackAvailable =
+        status === 'measuring' &&
+        !manualSetup &&
+        !!executionId &&
+        !reversedSet.has(executionId);
 
       items.push({
         productId:        raw.id,
@@ -320,6 +345,9 @@ async function getDashboardRecommendationsPayload(prisma, shop) {
         selectable,
         status,
         reason,
+        executionId,
+        afterReadyAt:     appliedExec && appliedExec.afterReadyAt ? appliedExec.afterReadyAt.toISOString() : null,
+        rollbackAvailable,
       });
     }
   }

@@ -94,6 +94,14 @@ export default function DashboardClient({ data }: Props) {
     }
   };
 
+  // Undo for a measuring recommendation surfaced in the "View more" panel.
+  // Reuses the same rollbackAction flow; throws on failure so the panel can show
+  // its own inline error, and refreshes the main dashboard on success.
+  const handleUndoFromPanel = useCallback(async (productId: string, issueId: string) => {
+    await rollbackAction(SHOP, productId, issueId);
+    router.refresh();
+  }, [SHOP, router]);
+
   // Open a recommendation from the "View more" list in the inspector.
   // Builds a TopAction-shaped row so the existing Preview/Apply flow works
   // unchanged (Preview uses productId+issueId; Apply uses actionKey via execute).
@@ -245,7 +253,7 @@ export default function DashboardClient({ data }: Props) {
       </section>
 
       {/* ── B2: Discover more recommendations (lazy, LLM-free) ──────────── */}
-      <MoreRecommendations shop={SHOP} onOpen={openRecommendation} />
+      <MoreRecommendations shop={SHOP} onOpen={openRecommendation} onUndo={handleUndoFromPanel} />
 
       {/* ── C: Scale what's working ─────────────────────────────────────── */}
       <section>
