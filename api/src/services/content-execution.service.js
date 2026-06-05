@@ -393,9 +393,21 @@ function stripHtmlText(html) {
 // ---------------------------------------------------------------------------
 function normalizeHtmlForCompare(html) {
   return String(html ?? '')
-    .replace(/\r\n/g, '\n')   // normalize line endings
-    .replace(/>\s+</g, '><')  // drop whitespace between adjacent tags (Shopify reformatting)
-    .replace(/\s+/g, ' ')     // collapse remaining whitespace runs within text nodes
+    .replace(/\r\n/g, '\n')         // normalize line endings
+    // Shopify's body_html sanitizer applies two deterministic, content-preserving
+    // normalizations to the inline SVG icons in trust badges. Mirror ONLY these so
+    // executions applied before the generator matched Shopify's form stay reversible:
+    //   (a) lowercase the camelCase SVG attribute NAME `viewBox` → `viewbox`
+    //       (the value is untouched), and
+    //   (b) expand self-closing elements `<tag .../>` → `<tag ...></tag>`
+    //       (semantically identical HTML).
+    // Both are symmetric on each side and cannot mask a real change: differing
+    // attribute VALUES, paths, labels, classes, styles, added/removed/duplicated
+    // elements all still survive normalization and block the rollback.
+    .replace(/viewBox=/g, 'viewbox=')
+    .replace(/<([a-zA-Z][\w:-]*)((?:[^<>"']|"[^"]*"|'[^']*')*?)\s*\/>/g, '<$1$2></$1>')
+    .replace(/>\s+</g, '><')        // drop whitespace between adjacent tags (Shopify reformatting)
+    .replace(/\s+/g, ' ')           // collapse remaining whitespace runs within text nodes
     .trim();
 }
 

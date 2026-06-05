@@ -128,6 +128,15 @@ test('Safety Validator blocks an injected money-back badge', async () => {
   assert.strictEqual(res.safe, false, 'must block money-back claim');
 });
 
+// SVG attribute normalization — emit lowercase viewbox so stored resultContent
+// stays byte-aligned with Shopify's lowercased body_html (keeps rollback working).
+test('SVG icons emit lowercase viewbox, not camelCase viewBox', () => {
+  const { full, variants } = ruleContent();
+  const all = [full, ...variants].join(' ');
+  assert.ok(/viewbox=/.test(all),  'uses lowercase viewbox');
+  assert.ok(!/viewBox=/.test(all), 'does not emit camelCase viewBox');
+});
+
 // generateTrustBadges direct shape check.
 test('generateTrustBadges returns the standard {bestGuess, variants} shape', () => {
   const fix = generateTrustBadges(turboFlush);
