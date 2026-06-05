@@ -205,88 +205,70 @@ const PATCH_MODE_REGISTRY = {
     findAnchor(html) {
       if (!html) return { found: false };
 
-      // ── Primary: immediately before the first TOP-LEVEL feature list
-      //    (<ul>/<ol>), provided ≥50 text chars of context precede it. Insert
-      //    after the top-level closing tag that ends the intro copy so trust
-      //    bullets sit between the opening copy and the whole list — never
-      //    inside it, and never before a list that is itself nested. ──
-      const listRe = /<(ul|ol)\b/gi;
-      let lm;
-      while ((lm = listRe.exec(html)) !== null) {
-        const listPos = lm.index;
-        if (!isTopLevelSafe(html, listPos)) continue; // skip nested lists
-        const before  = html.slice(0, listPos);
-        const textLen = before.replace(/<[^>]*>/g, '').trim().length;
-        if (textLen < 50) { break; }
-        let bestPos = -1;
-        let bestTag = null;
-        for (const tag of STANDALONE_BLOCK_TAGS) {
-          const idx = before.lastIndexOf(tag);
-          if (idx !== -1 && idx > bestPos) { bestPos = idx; bestTag = tag; }
-        }
-        if (bestPos !== -1) {
-          const pos = bestPos + bestTag.length;
-          if (isTopLevelSafe(html, pos)) {
-            return {
-              found:      true,
-              position:   pos,
-              anchorText: bestTag,
-              confidence: 'high',
-              preview:    html.slice(Math.max(0, bestPos - 80), pos),
-            };
-          }
-        }
-        break; // first top-level list handled; fall through to paragraph anchors
-      }
+      // Section-label / intro detection. Trust badges are fast-scan signals that
+      // should sit as high as possible — but never AFTER a section label like
+      // "Perfect for:" (that splits the label from its following list), and never
+      // immediately before a list. So we anchor after the FIRST real intro
+      // paragraph, else at the very top of the description.
+      const SECTION_LABEL = /^(perfect for|ideal for|great for|best for|use it for|what'?s included|what'?s in the box|benefits|features|specifications|how to use|suitable for|made for)\b/i;
+      const stripText = s => s.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+      const isSectionLabelText = t => SECTION_LABEL.test(t) || (t.length <= 40 && /:\s*$/.test(t));
+      // True when the next top-level element after `pos` is a list (heading/label→list split).
+      const nextIsList = pos => {
+        const m = html.slice(pos).match(/^\s*<([a-z0-9]+)\b/i);
+        return !!m && /^(ul|ol)$/i.test(m[1]);
+      };
 
-      // ── Secondary: after the first TOP-LEVEL </p> with ≥20 text chars before
-      //    it — a clean standalone paragraph break near the top. ──
+      // ── Primary: after the FIRST top-level intro <p> — real intro copy
+      //    (≥40 chars, not a section label, not immediately followed by a list).
+      //    Places badges high, before any section heading/feature list. ──
       let pFrom = 0;
       let pIdx;
       while ((pIdx = html.indexOf('</p>', pFrom)) !== -1) {
-        const pos     = pIdx + 4;
-        const before  = html.slice(0, pIdx);
-        const textLen = before.replace(/<[^>]*>/g, '').trim().length;
-        if (textLen >= 20 && isTopLevelSafe(html, pos)) {
+        const pos      = pIdx + 4;
+        const before   = html.slice(0, pIdx);
+        const openIdx  = before.lastIndexOf('<p');
+        const paraText = stripText(openIdx !== -1 ? before.slice(openIdx) : before);
+        if (
+          paraText.length >= 40 &&
+          !isSectionLabelText(paraText) &&
+          !nextIsList(pos) &&
+          isTopLevelSafe(html, pos)
+        ) {
           return {
             found:      true,
             position:   pos,
             anchorText: '</p>',
-            confidence: 'medium',
-            preview:    before.replace(/<[^>]*>/g, '').trim().slice(-100),
+            confidence: 'high',
+            preview:    paraText.slice(-100),
           };
         }
-        pFrom = pIdx + 4;
+        pFrom = pos;
       }
 
-      // ── Fallback: after the last top-level-safe closing block (low confidence). ──
+      // ── Fallback: the very beginning of the description, as a top-level block,
+      //    so badges sit above the first section label/list when there is no clean
+      //    intro paragraph. ──
+      if (isTopLevelSafe(html, 0)) {
+        return {
+          found:      true,
+          position:   0,
+          anchorText: '',
+          confidence: 'medium',
+          preview:    '(top of description)',
+        };
+      }
+
+      // ── Final safety net: after the last top-level-safe closing block. ──
       const candidates = collectSafeCloses(html);
       if (candidates.length) {
         return makeAnchor(html, candidates[candidates.length - 1], 'low');
       }
 
-      // ── Final safety net: last closing block of any kind, so output stays valid. ──
-      let lastPos = -1;
-      let lastTag = null;
-      for (const tag of STANDALONE_BLOCK_TAGS) {
-        const idx = html.lastIndexOf(tag);
-        if (idx > lastPos) { lastPos = idx; lastTag = tag; }
-      }
-      if (lastPos !== -1) {
-        const pos = lastPos + lastTag.length;
-        return {
-          found:      true,
-          position:   pos,
-          anchorText: lastTag,
-          confidence: 'low',
-          preview:    html.slice(Math.max(0, lastPos - 80), pos),
-        };
-      }
-
       return { found: false };
     },
 
-    // generatedFix.bestGuess.content is already a <ul> — pass through as-is.
+    // generatedFix.bestGuess.content is a ready badge block — pass through as-is.
     wrapContent(text) {
       return text;
     },

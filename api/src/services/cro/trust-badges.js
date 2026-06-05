@@ -39,7 +39,7 @@ const ICONS = {
 const BADGE_LIBRARY = {
   secure_checkout:    { badgeId: 'secure_checkout',    label: 'Secure Checkout',     iconKey: 'lock',  riskLevel: 'low',    claimType: 'A', allowedInBeta: true, requiresMerchantApproval: false, requiredEvidence: 'shopify_checkout' },
   safe_payment:       { badgeId: 'safe_payment',       label: 'Safe Payment',        iconKey: 'card',  riskLevel: 'low',    claimType: 'A', allowedInBeta: true, requiresMerchantApproval: false, requiredEvidence: 'standard_checkout' },
-  easy_help:          { badgeId: 'easy_help',          label: "We're Here to Help",  iconKey: 'chat',  riskLevel: 'low',    claimType: 'A', allowedInBeta: true, requiresMerchantApproval: false, requiredEvidence: 'generic_support' },
+  easy_help:          { badgeId: 'easy_help',          label: 'Support Available',   iconKey: 'chat',  riskLevel: 'low',    claimType: 'A', allowedInBeta: true, requiresMerchantApproval: false, requiredEvidence: 'generic_support' },
   quality_checked:    { badgeId: 'quality_checked',    label: 'Quality Checked',     iconKey: 'check', riskLevel: 'low',    claimType: 'A', allowedInBeta: true, requiresMerchantApproval: false, requiredEvidence: 'generic_curation' },
   carefully_selected: { badgeId: 'carefully_selected', label: 'Carefully Selected',  iconKey: 'star',  riskLevel: 'low',    claimType: 'A', allowedInBeta: true, requiresMerchantApproval: false, requiredEvidence: 'generic_curation' },
 };
@@ -61,11 +61,14 @@ const ALLOWED_BETA_BADGE_LABELS = Object.values(BADGE_LIBRARY)
 // ---------------------------------------------------------------------------
 function renderBadge(badge) {
   const icon = ICONS[badge.iconKey] || ICONS.check;
+  // Equal-width flex item (flex:1 1 140px) so 3 badges share one clean row on
+  // desktop and wrap to full-width aligned rows on mobile — never a centered
+  // orphan. min-width:0 + no nowrap prevents overflow in narrow themes.
   return (
     '<span class="cro-trust-badge" ' +
-    'style="display:inline-flex;align-items:center;gap:8px;padding:10px 14px;' +
-    'border:1px solid rgba(127,127,127,0.25);border-radius:8px;font-size:14px;' +
-    'line-height:1.2;white-space:nowrap;">' +
+    'style="flex:1 1 140px;min-width:0;display:inline-flex;align-items:center;' +
+    'justify-content:center;gap:8px;padding:8px 12px;border:1px solid rgba(127,127,127,0.25);' +
+    'border-radius:8px;font-size:13px;line-height:1.2;">' +
       '<span aria-hidden="true" style="display:inline-flex;flex-shrink:0;">' + icon + '</span>' +
       '<span>' + badge.label + '</span>' +
     '</span>'
@@ -81,7 +84,8 @@ function renderBadgeBlock(badgeIds) {
   return (
     '<div class="cro-trust-badges" data-cro-trust-badges="1" role="list" ' +
     'aria-label="Store trust signals" ' +
-    'style="display:flex;flex-wrap:wrap;gap:12px;justify-content:center;margin:16px 0;">' +
+    'style="display:flex;flex-wrap:wrap;gap:10px;align-items:stretch;' +
+    'justify-content:center;margin:16px 0;">' +
     cards +
     '</div>'
   );

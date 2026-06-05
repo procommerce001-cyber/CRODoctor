@@ -17,6 +17,7 @@ const assert   = require('node:assert');
 const { RULES } = require('../services/cro/rules');
 const { generateTrustBadges, ALLOWED_BETA_BADGE_LABELS } = require('../services/cro/trust-badges');
 const { validateContentSafety } = require('../services/content-safety-validator');
+const { buildResultContent } = require('../services/content-execution.service');
 
 const trustRule = RULES.find(r => r.id === 'no_trust_bullets');
 
@@ -135,6 +136,71 @@ test('SVG icons emit lowercase viewbox, not camelCase viewBox', () => {
   const all = [full, ...variants].join(' ');
   assert.ok(/viewbox=/.test(all),  'uses lowercase viewbox');
   assert.ok(!/viewBox=/.test(all), 'does not emit camelCase viewBox');
+});
+
+// Default Phase-2 labels — exactly the three safe defaults, shorter "Support
+// Available" (not "We're Here to Help").
+test('default badge labels are exactly Secure Checkout / Safe Payment / Support Available', () => {
+  const { full } = ruleContent();
+  const labels = [...full.matchAll(/>([^<>]+)<\/span>/g)].map(m => m[1].trim()).filter(Boolean);
+  assert.deepStrictEqual(labels, ['Secure Checkout', 'Safe Payment', 'Support Available']);
+});
+
+test('output does not contain the old "We\'re Here to Help" label', () => {
+  const { full, variants } = ruleContent();
+  assert.ok(!/Here to Help/i.test([full, ...variants].join(' ')));
+});
+
+test('"Support Available" is an approved badge label', () => {
+  assert.ok(ALLOWED_BETA_BADGE_LABELS.includes('Support Available'));
+});
+
+// ── Placement: high, before "Perfect for:" / before the first feature list ──
+const TURBO_BODY =
+  '<h2>Upgrade Your Kitchen</h2>' +
+  '<p>Tired of cluttered countertops and bottles scattered everywhere? This rotating organizer fixes that fast and looks great in any kitchen.</p>' +
+  '<h2>Smart Design</h2>' +
+  '<p>Crafted from premium materials with a smooth rotation that gives instant access to everything you store.</p>' +
+  '<p>Perfect for:</p>' +
+  '<ul><li>Kitchen sinks</li><li>Bathroom drains</li></ul>';
+const BADGES = '<div class="cro-trust-badges" data-cro-trust-badges="1">x</div>';
+
+function openListDepthBefore(html, idx) {
+  const before = html.slice(0, idx);
+  const opens = (before.match(/<(ul|ol|li|table|details)\b/gi) || []).length;
+  const closes = (before.match(/<\/(ul|ol|li|table|details)>/gi) || []).length;
+  return opens - closes;
+}
+
+test('TurboFlush placement does not insert after "Perfect for:"', () => {
+  const out = buildResultContent('no_trust_bullets', TURBO_BODY, BADGES);
+  assert.ok(!/Perfect for:<\/p>\s*<div[^>]*data-cro-trust-badges/i.test(out),
+    'badges must not be inserted directly after the "Perfect for:" label');
+});
+
+test('TurboFlush places Trust Badges before "Perfect for:" and before the first list', () => {
+  const out = buildResultContent('no_trust_bullets', TURBO_BODY, BADGES);
+  const blockIdx   = out.indexOf('data-cro-trust-badges');
+  const perfectIdx = out.indexOf('Perfect for:');
+  const listIdx    = out.indexOf('<ul');
+  assert.ok(blockIdx !== -1, 'block inserted');
+  assert.ok(blockIdx < perfectIdx, 'badges appear before "Perfect for:"');
+  assert.ok(blockIdx < listIdx,    'badges appear before the first feature list');
+});
+
+test('Trust Badges block is a top-level sibling (not inside any list/structured section)', () => {
+  const out = buildResultContent('no_trust_bullets', TURBO_BODY, BADGES);
+  const blockIdx = out.indexOf('data-cro-trust-badges');
+  assert.strictEqual(openListDepthBefore(out, blockIdx), 0, 'insertion point is not inside a list/table/details');
+});
+
+test('no_risk_reversal still produces a valid top-level placement (untouched by this fix)', () => {
+  // This fix only changed no_trust_bullets.findAnchor. Sanity-check that
+  // no_risk_reversal still inserts a top-level-safe block via its own logic.
+  const out = buildResultContent('no_risk_reversal', TURBO_BODY, '<div data-cro-block="x">RR</div>');
+  const idx = out.indexOf('>RR<');
+  assert.ok(idx !== -1, 'no_risk_reversal block inserted');
+  assert.strictEqual(openListDepthBefore(out, idx), 0, 'no_risk_reversal block is top-level safe');
 });
 
 // generateTrustBadges direct shape check.
