@@ -128,6 +128,29 @@ function hebrewRatio(text) {
 }
 
 // ---------------------------------------------------------------------------
+// Trust Badge allowlist (Phase 2). Visible badge labels must come ONLY from the
+// approved library; no policy/commercial badge labels may be injected.
+// ---------------------------------------------------------------------------
+const { ALLOWED_BETA_BADGE_LABELS, extractBadgeLabels } = require('./cro/trust-badges');
+const ALLOWED_BADGE_LABEL_SET = new Set(ALLOWED_BETA_BADGE_LABELS);
+
+// Phase-2 disallowed badge/claim phrases that the generic claim check does not
+// already cover (free/fast shipping, free/easy returns, satisfaction guarantee,
+// risk-free, standalone warranty). Belt-and-suspenders alongside the allowlist.
+const DISALLOWED_BADGE_PHRASES = [
+  /free\s+shipping/i,
+  /fast\s+shipping/i,
+  /free\s+returns?/i,
+  /easy\s+returns?/i,
+  /\breturns?\b/i,
+  /\bwarranty\b/i,
+  /money[- ]back/i,
+  /satisfaction\s+guarantee/i,
+  /\bguarantee[d]?\b/i,
+  /risk[- ]free/i,
+];
+
+// ---------------------------------------------------------------------------
 // Check 1 — HTML safety
 // ---------------------------------------------------------------------------
 function checkHtmlSafety(proposedContent) {
@@ -247,6 +270,40 @@ function checkLanguageConsistency(proposedContent, currentBodyHtml) {
 }
 
 // ---------------------------------------------------------------------------
+// Check 6 — Trust Badge allowlist (Phase 2, no_trust_bullets only)
+//
+// Every visible badge label must be an approved library label, and no
+// policy/commercial claim phrase may appear anywhere in the badge content.
+// Only runs for no_trust_bullets; legacy/empty content passes through.
+// ---------------------------------------------------------------------------
+function checkTrustBadgeLabels(issueId, proposedContent) {
+  if (issueId !== 'no_trust_bullets') return { safe: true };
+
+  const labels = extractBadgeLabels(proposedContent);
+  for (const label of labels) {
+    if (!ALLOWED_BADGE_LABEL_SET.has(label)) {
+      return {
+        safe: false,
+        code: 'badge_not_allowed',
+        reason: 'This trust badge is not an approved badge and cannot be applied.',
+      };
+    }
+  }
+
+  const visibleText = stripHtml(proposedContent);
+  for (const pattern of DISALLOWED_BADGE_PHRASES) {
+    if (pattern.test(visibleText)) {
+      return {
+        safe: false,
+        code: 'badge_unsupported_claim',
+        reason: 'This trust badge makes a policy claim that needs evidence and merchant approval.',
+      };
+    }
+  }
+  return { safe: true };
+}
+
+// ---------------------------------------------------------------------------
 // validateContentSafety — main export
 //
 // context:
@@ -296,6 +353,10 @@ async function validateContentSafety(
     // 5. Language consistency — synchronous, no DB
     const langCheck = checkLanguageConsistency(proposedContent, currentBodyHtml);
     if (!langCheck.safe) return langCheck;
+
+    // 6. Trust Badge allowlist — synchronous, no DB (no_trust_bullets only)
+    const badgeCheck = checkTrustBadgeLabels(issueId, proposedContent);
+    if (!badgeCheck.safe) return badgeCheck;
 
     return { safe: true };
 

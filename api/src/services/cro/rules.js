@@ -1,6 +1,7 @@
 'use strict';
 
 const { generateDesireBlock } = require('./generators/desire-block');
+const { generateTrustBadges } = require('./trust-badges');
 
 // ---------------------------------------------------------------------------
 // CRO Rule Definitions
@@ -766,7 +767,11 @@ const RULES = [
           : type === 'fashion'
           ? 'Fashion: include a sizing-help bullet — fit uncertainty is the #1 reason fashion shoppers abandon.'
           : 'Functional/impulse: three bullets (secure checkout, careful dispatch, support) are sufficient. Keep them short.',
-        generatedFix: generateTrustBullets(p),
+        // Phase 2: render as a controlled visual Trust Badge block (safe defaults
+        // only) instead of prose bullets. Output shape is unchanged. The LLM prose
+        // path (generateTrustBulletsWithLLM) is disabled for no_trust_bullets so
+        // this deterministic block is what gets previewed/applied.
+        generatedFix: generateTrustBadges(p),
       };
     },
   },

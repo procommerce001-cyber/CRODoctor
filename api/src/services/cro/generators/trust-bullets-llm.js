@@ -217,6 +217,14 @@ function assembleHtml(b1, b2, b3) {
 // External call shape (action-center.service.js) is unchanged.
 // ---------------------------------------------------------------------------
 async function generateTrustBulletsWithLLM(product, copyPlan, reviews = []) {
+  // Phase 2: no_trust_bullets now renders a controlled, deterministic visual
+  // Trust Badge block (see cro/trust-badges.js). The LLM prose path is disabled
+  // for this issue — returning null makes getProductActions keep the rule's
+  // deterministic generatedFix (the badge block). Re-enabling LLM badge SELECTION
+  // (badgeIds only, never free text) is a later phase.
+  return null;
+
+  /* eslint-disable no-unreachable */
   if (!copyPlan)                      return null;
   if (!process.env.ANTHROPIC_API_KEY) return null;
 
