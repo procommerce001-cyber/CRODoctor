@@ -205,61 +205,24 @@ const PATCH_MODE_REGISTRY = {
     findAnchor(html) {
       if (!html) return { found: false };
 
-      // Section-label / intro detection. Trust badges are fast-scan signals that
-      // should sit as high as possible — but never AFTER a section label like
-      // "Perfect for:" (that splits the label from its following list), and never
-      // immediately before a list. So we anchor after the FIRST real intro
-      // paragraph, else at the very top of the description.
-      const SECTION_LABEL = /^(perfect for|ideal for|great for|best for|use it for|what'?s included|what'?s in the box|benefits|features|specifications|how to use|suitable for|made for)\b/i;
-      const stripText = s => s.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
-      const isSectionLabelText = t => SECTION_LABEL.test(t) || (t.length <= 40 && /:\s*$/.test(t));
-      // True when the next top-level element after `pos` is a list (heading/label→list split).
-      const nextIsList = pos => {
-        const m = html.slice(pos).match(/^\s*<([a-z0-9]+)\b/i);
-        return !!m && /^(ul|ol)$/i.test(m[1]);
-      };
-
-      // ── Primary: after the FIRST top-level intro <p> — real intro copy
-      //    (≥40 chars, not a section label, not immediately followed by a list).
-      //    Places badges high, before any section heading/feature list. ──
-      let pFrom = 0;
-      let pIdx;
-      while ((pIdx = html.indexOf('</p>', pFrom)) !== -1) {
-        const pos      = pIdx + 4;
-        const before   = html.slice(0, pIdx);
-        const openIdx  = before.lastIndexOf('<p');
-        const paraText = stripText(openIdx !== -1 ? before.slice(openIdx) : before);
-        if (
-          paraText.length >= 40 &&
-          !isSectionLabelText(paraText) &&
-          !nextIsList(pos) &&
-          isTopLevelSafe(html, pos)
-        ) {
-          return {
-            found:      true,
-            position:   pos,
-            anchorText: '</p>',
-            confidence: 'high',
-            preview:    paraText.slice(-100),
-          };
-        }
-        pFrom = pos;
-      }
-
-      // ── Fallback: the very beginning of the description, as a top-level block,
-      //    so badges sit above the first section label/list when there is no clean
-      //    intro paragraph. ──
+      // Trust badges are fast-scan trust signals and are the Phase 2 beta proxy for
+      // below-Add-to-Cart placement (bodyHtml renders below the buy box in most
+      // themes, so the TOP of bodyHtml is the closest safe position to the buy
+      // decision). Place the block at the very beginning of the description —
+      // before the first heading/paragraph/section/feature list — as a top-level
+      // sibling. Position 0 has an empty open-element stack, so it is always
+      // top-level safe (never inside a list/table/details/section).
       if (isTopLevelSafe(html, 0)) {
         return {
           found:      true,
           position:   0,
           anchorText: '',
-          confidence: 'medium',
+          confidence: 'high',
           preview:    '(top of description)',
         };
       }
 
-      // ── Final safety net: after the last top-level-safe closing block. ──
+      // ── Defensive fallback: after the last top-level-safe closing block. ──
       const candidates = collectSafeCloses(html);
       if (candidates.length) {
         return makeAnchor(html, candidates[candidates.length - 1], 'low');

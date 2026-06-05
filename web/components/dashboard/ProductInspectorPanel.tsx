@@ -90,6 +90,25 @@ const mb: Record<string, React.CSSProperties> = {
            letterSpacing: '0.08em', color: '#4b5563' },
 };
 
+// ── Trust Badges visual preview helpers ──────────────────────────────────────
+// Trust Badges are a controlled, validator-approved HTML UI block, so they get a
+// rendered visual preview. Every OTHER recommendation keeps the plain escaped-text
+// preview — this is NOT a generic HTML renderer.
+function isTrustBadgeContent(issueId: string | undefined, html: string): boolean {
+  return issueId === 'no_trust_bullets' || /data-cro-trust-badges/.test(html);
+}
+// Defensive gate before dangerouslySetInnerHTML. Renders only the safe controlled
+// badge markup; refuses scripts, event handlers, remote assets/links, iframes, or
+// <style>. On any failure the caller falls back to escaped raw HTML.
+function isBadgeHtmlSafe(html: string): boolean {
+  if (!/data-cro-trust-badges/.test(html)) return false;
+  if (/<script|<iframe|<style/i.test(html)) return false;
+  if (/\son\w+\s*=/i.test(html))            return false; // event handlers
+  if (/https?:\/\//i.test(html))            return false; // remote URLs
+  if (/\s(src|href)\s*=/i.test(html))       return false; // external assets/links
+  return true;
+}
+
 // ── Main panel ───────────────────────────────────────────────────────────────
 
 export default function ProductInspectorPanel({
@@ -270,9 +289,24 @@ export default function ProductInspectorPanel({
                           <div style={{ ...p.pvLabel, color: '#4ade80' }}>
                             {proposedContentLabel(pv.data.patchMode)}
                           </div>
-                          <div style={{ ...p.pvContent, borderColor: 'rgba(34,197,94,0.22)', background: 'rgba(34,197,94,0.05)' }}>
-                            {pv.data.proposedContent}
-                          </div>
+                          {isTrustBadgeContent(row.issueId, pv.data.proposedContent) && isBadgeHtmlSafe(pv.data.proposedContent) ? (
+                            <>
+                              {/* Rendered visual preview — controlled, validator-approved badge block only */}
+                              <div
+                                style={{ ...p.pvContent, borderColor: 'rgba(34,197,94,0.22)', background: 'rgba(34,197,94,0.05)', color: '#e5e7eb', maxHeight: 'none', overflow: 'visible' }}
+                                dangerouslySetInnerHTML={{ __html: pv.data.proposedContent }}
+                              />
+                              <div style={p.pvPlacementNote}>Placement: Top of product description</div>
+                              <details style={p.pvDetails}>
+                                <summary style={p.pvDetailsSummary}>Technical HTML</summary>
+                                <div style={p.pvRawHtml}>{pv.data.proposedContent}</div>
+                              </details>
+                            </>
+                          ) : (
+                            <div style={{ ...p.pvContent, borderColor: 'rgba(34,197,94,0.22)', background: 'rgba(34,197,94,0.05)' }}>
+                              {pv.data.proposedContent}
+                            </div>
+                          )}
                         </div>
                         <div style={p.pvReversibility}>You can undo this change anytime.</div>
                         <button
@@ -516,6 +550,14 @@ const p: Record<string, React.CSSProperties> = {
                      overflow: 'hidden' as const, border: '1px solid rgba(255,255,255,0.08)',
                      borderRadius: 6, padding: '8px 10px', background: 'rgba(255,255,255,0.02)' },
   pvReversibility: { fontSize: 11, color: '#4b5563', fontStyle: 'italic' as const },
+  pvPlacementNote: { fontSize: 11, color: '#9ca3af', marginTop: 6 },
+  pvDetails:       { marginTop: 8 },
+  pvDetailsSummary:{ fontSize: 11, color: '#6b7280', cursor: 'pointer', userSelect: 'none' as const },
+  pvRawHtml:       { fontSize: 11, color: '#9ca3af', lineHeight: 1.5, marginTop: 6,
+                     maxHeight: 140, overflow: 'auto' as const, whiteSpace: 'pre-wrap' as const,
+                     wordBreak: 'break-all' as const, border: '1px solid rgba(255,255,255,0.08)',
+                     borderRadius: 6, padding: '8px 10px', background: 'rgba(255,255,255,0.02)',
+                     fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' },
   pvBackBtn:       { background: 'none', border: 'none', color: '#4b5563', cursor: 'pointer',
                      fontSize: 12, padding: '0', textAlign: 'left' as const, textDecoration: 'underline' },
   pvError:         { fontSize: 12, color: '#f87171' },

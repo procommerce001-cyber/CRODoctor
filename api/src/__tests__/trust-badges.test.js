@@ -155,9 +155,9 @@ test('"Support Available" is an approved badge label', () => {
   assert.ok(ALLOWED_BETA_BADGE_LABELS.includes('Support Available'));
 });
 
-// ── Placement: high, before "Perfect for:" / before the first feature list ──
+// ── Placement: very top of bodyHtml — before first heading/paragraph/list ──
 const TURBO_BODY =
-  '<h2>Upgrade Your Kitchen</h2>' +
+  '<h2>Meet the TurboFlush</h2>' +
   '<p>Tired of cluttered countertops and bottles scattered everywhere? This rotating organizer fixes that fast and looks great in any kitchen.</p>' +
   '<h2>Smart Design</h2>' +
   '<p>Crafted from premium materials with a smooth rotation that gives instant access to everything you store.</p>' +
@@ -186,6 +186,17 @@ test('TurboFlush places Trust Badges before "Perfect for:" and before the first 
   assert.ok(blockIdx !== -1, 'block inserted');
   assert.ok(blockIdx < perfectIdx, 'badges appear before "Perfect for:"');
   assert.ok(blockIdx < listIdx,    'badges appear before the first feature list');
+});
+
+test('TurboFlush places Trust Badges at the very TOP — before first heading & "Meet the TurboFlush"', () => {
+  const out = buildResultContent('no_trust_bullets', TURBO_BODY, BADGES);
+  const blockIdx   = out.indexOf('data-cro-trust-badges');
+  const firstH     = out.search(/<h[1-6]\b/i);
+  const firstP     = out.indexOf('<p');
+  const meetIdx    = out.indexOf('Meet the TurboFlush');
+  assert.ok(blockIdx < firstH,  'badges appear before the first heading');
+  assert.ok(blockIdx < firstP,  'badges appear before the first paragraph');
+  assert.ok(blockIdx < meetIdx, 'badges appear before "Meet the TurboFlush"');
 });
 
 test('Trust Badges block is a top-level sibling (not inside any list/structured section)', () => {
