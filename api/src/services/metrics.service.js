@@ -719,6 +719,278 @@ function deriveDecisionSignal(resultStatus, confidence, revenueChangePercent, co
   return 'keep';
 }
 
+// ===========================================================================
+// Phase 1A — additive conversion-first decision object (decisionV2)
+//
+// Pure, dependency-free. Prefers exposure/conversion signals over revenue.
+// Advisory only — never triggers Apply/Rollback. Existing decisionSignal is
+// left untouched for backward compatibility.
+// ===========================================================================
+
+const COOLDOWN_MS        = 48 * 60 * 60 * 1000; // 48h post-apply stabilization
+const EFFECT_FLOOR_PCT   = 5;    // |relative %| below this is "no clear effect"
+const KEEP_P             = 0.80; // P(improve) ≥ → keep-eligible
+const UNDO_P             = 0.80; // P(harm)    ≥ → undo-eligible
+const MIN_UNEXPOSED      = MIN_EXPOSED_SESSIONS; // control cohort floor (20)
+
+// Standard normal CDF (Abramowitz & Stegun 7.1.26) — no dependencies.
+function _normalCdf(z) {
+  const t = 1 / (1 + 0.2316419 * Math.abs(z));
+  const d = 0.3989422804014327 * Math.exp(-z * z / 2);
+  let p = d * t * (0.319381530 + t * (-0.356563782 + t * (1.781477937 + t * (-1.821255978 + t * 1.330274429))));
+  p = 1 - p;
+  return z >= 0 ? p : 1 - p;
+}
+
+// Probability treatment rate > control rate via normal approximation to the
+// difference of two proportions. Returns 0..1, or null if not computable.
+function _pImprove(succT, nT, succC, nC) {
+  if (!nT || !nC || nT <= 0 || nC <= 0) return null;
+  const pT = succT / nT, pC = succC / nC;
+  const se = Math.sqrt((pT * (1 - pT)) / nT + (pC * (1 - pC)) / nC);
+  if (se === 0) return pT === pC ? 0.5 : (pT > pC ? 1 : 0);
+  return _normalCdf((pT - pC) / se);
+}
+
+const clamp = (n, lo = 0, hi = 100) => Math.max(lo, Math.min(hi, Math.round(n)));
+
+// Build the additive decisionV2 object. `ctx` carries everything already
+// computed in getExecutionResultsSummary so this performs no new queries.
+function buildDecisionV2(ctx) {
+  const {
+    status, createdAt, confidence,
+    compare, exposure, confoundedBy = [], confoundSignals = [],
+  } = ctx;
+
+  const reasons = [];
+  const ageMs   = Date.now() - new Date(createdAt).getTime();
+  const inCooldown = ageMs < COOLDOWN_MS;
+
+  // Confounds → flags + severity
+  const confoundFlags = [];
+  if (confoundedBy.length > 0) confoundFlags.push('overlapping_execution');
+  for (const s of confoundSignals) if (s && s.type) confoundFlags.push(s.type);
+  const severeConfound =
+    confoundedBy.length > 0 || confoundSignals.some(s => s && s.severity === 'high');
+  if (confoundSignals.some(s => s && s.type === 'store_revenue_spike')) reasons.push('storewide_spike_detected');
+  if (confoundSignals.some(s => s && s.type === 'product_traffic_spike')) reasons.push('product_traffic_spike');
+  if (confoundSignals.some(s => s && s.type === 'inventory_depletion'))   reasons.push('inventory_changed');
+  if (confoundedBy.length > 0) reasons.push('overlapping_execution');
+
+  // Safe defaults (used by waiting branch / thin data)
+  const base = {
+    measurementStatus:    'measuring',
+    recommendedAction:    'continue_measuring',
+    primaryMetric:        null,
+    primaryMetricBefore:  null,
+    primaryMetricAfter:   null,
+    primaryMetricLift:    null,
+    exposureLift:         null,
+    revenuePerViewLift:   null,
+    addToCartLift:        null,
+    checkoutStartLift:    null,
+    confidenceScore:      20,
+    dataQualityScore:     25,
+    downsideRiskScore:    0,
+    attributionConfidence: 20,
+    expectedImpactScore:  null,
+    confoundFlags,
+    explanationForMerchant: 'Not enough visitors have seen this change yet. We’ll keep measuring.',
+    internalReasonCodes:  reasons,
+    nextAllowedAction:    ['undo'],
+    canAutoUndoLater:     false,
+    shouldNotTouchReason: null,
+  };
+
+  // ── No after-snapshot yet (waiting branch) ────────────────────────────────
+  if (status !== 'measured' || !compare || !compare.success) {
+    if (inCooldown) {
+      base.measurementStatus    = 'cooling_down';
+      base.shouldNotTouchReason = 'Change just applied — measuring begins after a short stabilization period.';
+      reasons.push('in_cooldown');
+    } else {
+      base.measurementStatus = compare && compare.success ? 'measuring' : 'not_started';
+      reasons.push('window_not_complete');
+    }
+    return base;
+  }
+
+  const before = compare.before, after = compare.after, diff = compare.diff;
+  const fn = exposure && exposure.funnel ? exposure.funnel : null;
+  const exposedN   = exposure?.exposedSessionCount ?? 0;
+  const unexposedN = exposure?.unexposedPdpSessionCount ?? 0;
+
+  // ── Secondary metrics (best-effort, never invented) ──────────────────────
+  const addToCartLift =
+    diff.productAtcCountChangePercent ??
+    (fn && fn.exposed.atcRate != null && fn.unexposed.atcRate ? safePct(fn.unexposed.atcRate, fn.exposed.atcRate) : null);
+  const checkoutStartLift =
+    fn && fn.exposed.checkoutRate != null && fn.unexposed.checkoutRate
+      ? safePct(fn.unexposed.checkoutRate, fn.exposed.checkoutRate) : null;
+  let revenuePerViewLift = null;
+  if (before.productSessions && after.productSessions) {
+    const rpvB = parseFloat(before.revenue) / before.productSessions;
+    const rpvA = parseFloat(after.revenue)  / after.productSessions;
+    revenuePerViewLift = safePct(rpvB, rpvA);
+  }
+
+  // ── Attribution hierarchy → primary metric + P(improve) ──────────────────
+  let primaryMetric = null, pBefore = null, pAfter = null, pLift = null;
+  let pImprove = null, attributionConfidence = 20, exposureLift = null;
+
+  if (fn && exposedN >= MIN_EXPOSED_SESSIONS && unexposedN >= MIN_UNEXPOSED &&
+      fn.exposed.atcRate != null && fn.unexposed.atcRate != null) {
+    // Level 1 — exposed vs unexposed (same-period control). Strongest.
+    primaryMetric = 'exposure_atc_rate';
+    pBefore = fn.unexposed.atcRate; pAfter = fn.exposed.atcRate;
+    pLift   = safePct(pBefore, pAfter);
+    exposureLift = pLift;
+    pImprove = _pImprove(fn.exposed.atcSessions, exposedN, fn.unexposed.atcSessions, unexposedN);
+    attributionConfidence = 90;
+    reasons.push('exposure_data_available');
+  } else if (before.productSessions && after.productSessions &&
+             diff.productCvrBefore != null && diff.productCvrAfter != null) {
+    // Level 2 — product before/after conversion, view-normalized.
+    primaryMetric = 'product_cvr';
+    pBefore = diff.productCvrBefore; pAfter = diff.productCvrAfter; pLift = diff.productCvrChangePercent;
+    pImprove = _pImprove(after.orderCount, after.productSessions, before.orderCount, before.productSessions);
+    attributionConfidence = severeConfound ? 45 : 65;
+    reasons.push('exposure_data_missing');
+  } else {
+    // Level 4 — orders/revenue fallback (session data missing). Low trust.
+    primaryMetric = 'revenue_per_view';
+    pBefore = parseFloat(before.revenue); pAfter = parseFloat(after.revenue);
+    pLift   = diff.orderCountChangePercent ?? diff.revenueChangePercent ?? null;
+    pImprove = null; // cannot compute a proportion test without sessions
+    attributionConfidence = 35;
+    reasons.push('revenue_only_fallback');
+  }
+  if (severeConfound) attributionConfidence = clamp(attributionConfidence - 30);
+
+  // ── confidenceScore ───────────────────────────────────────────────────────
+  // Probability-based when available; else conservative heuristic from tier.
+  let confidenceScore;
+  if (pImprove != null) {
+    confidenceScore = clamp(pImprove * 100);
+  } else {
+    const tierBase = { high: 70, medium: 60, low: 45, insufficient: 20 }[confidence] ?? 20;
+    // nudge by direction but stay conservative (heuristic, not a real test)
+    confidenceScore = clamp(tierBase);
+    reasons.push('confidence_heuristic_no_proportion_test');
+  }
+
+  // ── dataQualityScore ──────────────────────────────────────────────────────
+  let dq = 100;
+  if (primaryMetric === 'revenue_per_view') dq -= 45;       // orders/revenue only
+  else if (primaryMetric === 'product_cvr') dq -= 20;       // no exposure cohort
+  if (primaryMetric === 'exposure_atc_rate' && (exposedN < 60 || unexposedN < 60)) dq -= 15;
+  if (confidence === 'insufficient') dq -= 25;
+  else if (confidence === 'low')     dq -= 10;
+  dq -= Math.min(30, confoundFlags.length * 15);
+  const dataQualityScore = clamp(dq);
+
+  // ── downsideRiskScore ─────────────────────────────────────────────────────
+  // High only when a meaningful NEGATIVE lift sits on meaningful traffic/revenue.
+  let downsideRiskScore = 0;
+  if (pLift != null && pLift < 0) {
+    const trafficFactor = Math.min(1, (after.productSessions ?? exposedN ?? 0) / 1000);
+    const revFactor     = Math.min(1, (parseFloat(after.revenue) || 0) / 1000);
+    const magnitude     = Math.min(1, Math.abs(pLift) / 30);
+    downsideRiskScore = clamp(magnitude * 100 * (0.5 + 0.5 * Math.max(trafficFactor, revFactor)));
+    if (dataQualityScore < 40) downsideRiskScore = clamp(downsideRiskScore * 0.5);
+  }
+
+  // ── expectedImpactScore ───────────────────────────────────────────────────
+  let expectedImpactScore = null;
+  if (pLift != null) {
+    const mag = Math.min(1, Math.abs(pLift) / 30);
+    const traffic = Math.min(1, (after.productSessions ?? exposedN ?? 0) / 1000);
+    expectedImpactScore = clamp(mag * 100 * (0.4 + 0.6 * traffic) * (pLift > 0 ? 1 : 0.3));
+  }
+
+  // ── measurementStatus ─────────────────────────────────────────────────────
+  let measurementStatus;
+  if (inCooldown) measurementStatus = 'cooling_down';
+  else if (confidence === 'insufficient') measurementStatus = 'measuring';
+  else if (severeConfound) measurementStatus = 'inconclusive';
+  else measurementStatus = 'ready_for_decision';
+
+  // ── recommendedAction (conservative, advisory) ────────────────────────────
+  let recommendedAction = 'continue_measuring';
+  const meaningful = pLift != null && Math.abs(pLift) >= EFFECT_FLOOR_PCT;
+  const decidable  = confidence === 'medium' || confidence === 'high';
+
+  if (inCooldown) {
+    recommendedAction = 'continue_measuring';
+    reasons.push('in_cooldown');
+  } else if (severeConfound) {
+    recommendedAction = 'manual_review';
+    reasons.push('manual_review_required');
+  } else if (confidence === 'insufficient' || !decidable) {
+    recommendedAction = 'continue_measuring';
+    reasons.push(confidence === 'insufficient' ? 'low_data_quality' : 'effect_below_floor');
+  } else if (meaningful && pLift > 0 && confidenceScore >= KEEP_P * 100 && downsideRiskScore < 35) {
+    recommendedAction = 'keep';
+    reasons.push(primaryMetric === 'exposure_atc_rate' || primaryMetric === 'product_cvr' ? 'positive_cvr_lift' : 'positive_cvr_lift');
+    if (addToCartLift != null && addToCartLift > 0) reasons.push('positive_atc_lift');
+    // future-ready: flag (do NOT emit stack action in Phase 1A)
+    if (confidenceScore >= 90 && !severeConfound) reasons.push('ready_to_stack');
+  } else if (meaningful && pLift < 0 && (100 - confidenceScore) >= UNDO_P * 100 && downsideRiskScore >= 50) {
+    recommendedAction = 'undo_suggested';
+    reasons.push('negative_cvr_lift');
+    if (addToCartLift != null && addToCartLift < 0) reasons.push('negative_atc_lift');
+    if (revenuePerViewLift != null && revenuePerViewLift < 0) reasons.push('revenue_per_view_drop');
+  } else if (!meaningful) {
+    recommendedAction = 'try_alternative';
+    reasons.push('no_clear_effect');
+  } else {
+    recommendedAction = 'continue_measuring';
+    reasons.push('effect_below_floor');
+  }
+
+  // ── merchant explanation ──────────────────────────────────────────────────
+  const EXPL = {
+    keep:               'This change is likely improving conversion. We recommend keeping it active.',
+    undo_suggested:     'This change may be hurting performance. We recommend undoing it to protect conversion.',
+    try_alternative:    'This change did not create a clear lift. We recommend trying a different improvement.',
+    continue_measuring: 'Not enough data yet to make a confident call. We’ll keep measuring.',
+    manual_review:      'This result is too noisy to decide confidently right now.',
+    stack_next_change:  'This change is working. We can test another improvement on a different part of the journey.',
+  };
+
+  const canAutoUndoLater =
+    recommendedAction === 'undo_suggested' && downsideRiskScore >= 60 && !severeConfound;
+
+  return {
+    measurementStatus,
+    recommendedAction,
+    primaryMetric,
+    primaryMetricBefore: pBefore,
+    primaryMetricAfter:  pAfter,
+    primaryMetricLift:   pLift,
+    exposureLift,
+    revenuePerViewLift,
+    addToCartLift,
+    checkoutStartLift,
+    confidenceScore,
+    dataQualityScore,
+    downsideRiskScore,
+    attributionConfidence,
+    expectedImpactScore,
+    confoundFlags,
+    explanationForMerchant: EXPL[recommendedAction] ?? EXPL.continue_measuring,
+    internalReasonCodes: [...new Set(reasons)],
+    nextAllowedAction:
+      recommendedAction === 'keep'           ? ['keep', 'undo'] :
+      recommendedAction === 'undo_suggested' ? ['undo', 'keep'] :
+      recommendedAction === 'try_alternative'? ['undo', 'keep'] : ['undo'],
+    canAutoUndoLater,
+    shouldNotTouchReason: severeConfound
+      ? 'Paused — external factors (e.g. a store-wide sales change) are distorting this product’s numbers.'
+      : null,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // getExecutionExposure
 //
@@ -854,6 +1126,15 @@ async function getExecutionResultsSummary(prisma, executionId) {
       exposureCount,
       exposureRate,
       decisionSignal: 'still_measuring',
+      decisionV2: buildDecisionV2({
+        status: 'waiting_for_more_data',
+        createdAt: execution.createdAt,
+        confidence: 'insufficient',
+        compare: null,
+        exposure,
+        confoundedBy: [],
+        confoundSignals: [],
+      }),
     };
   }
 
@@ -1053,6 +1334,15 @@ async function getExecutionResultsSummary(prisma, executionId) {
     exposureRate,
     decisionSignal,
     measurementSource,
+    decisionV2: buildDecisionV2({
+      status: 'measured',
+      createdAt: execution.createdAt,
+      confidence,
+      compare,
+      exposure,
+      confoundedBy,
+      confoundSignals,
+    }),
   };
 }
 
@@ -2356,6 +2646,7 @@ module.exports = {
   captureExecutionSnapshots,
   compareExecutionMetrics,
   getExecutionResultsSummary,
+  buildDecisionV2,
   getStoreResultsSummary,
   getStoreExecutionFeed,
   getStoreOverview,
