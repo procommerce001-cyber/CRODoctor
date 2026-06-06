@@ -28,6 +28,15 @@ async function resolveStore(prisma, shop, res, req) {
     res.status(403).json({ error: 'Forbidden.' });
     return null;
   }
+  // Block inactive / uninstalled stores. The app/uninstalled webhook sets
+  // isActive=false and accessToken=null, so a stale session must not read data
+  // or attempt Shopify writes (Apply/Rollback) with a missing token. Runs after
+  // the ownership check so cross-tenant access still returns "Forbidden" (no
+  // existence leak); applies to all paths since it does not depend on the session.
+  if (store.isActive === false || !store.accessToken) {
+    res.status(403).json({ error: 'Store is inactive.' });
+    return null;
+  }
   return store;
 }
 
