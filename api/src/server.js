@@ -8,6 +8,7 @@ const PgSession = require('connect-pg-simple')(session);
 const { PrismaClient } = require('@prisma/client');
 const { fetchProducts, fetchOrders } = require('./services/shopify.service');
 const { requireSession }             = require('./lib/auth-middleware');
+const { eventsLimiter, dashboardLimiter, expensiveLimiter, writeLimiter } = require('./middleware/rate-limits');
 const { startImpactWindowScheduler }        = require('./scheduler/impact-window.scheduler');
 const { startDeltaSyncScheduler }           = require('./scheduler/delta-sync.scheduler');
 const { startProductPerformanceScheduler }  = require('./scheduler/product-performance.scheduler');
@@ -106,7 +107,8 @@ app.use(session({
 app.use(express.json());
 // Events endpoint — public, no session required (storefront pixel target).
 // Mounted before requireSession so the gate does not block ingest calls.
-app.use('/events', eventsRouter);
+// IP-keyed rate limit guards against storefront-pixel spam / measurement poisoning.
+app.use('/events', eventsLimiter, eventsRouter);
 // Tracker snippet — public static file, no auth.
 app.get('/cro-tracker.js', (_req, res) => {
   res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
@@ -478,11 +480,27 @@ function formatProduct(p) {
 // CRO routes (mounted from src/routes/cro.routes.js)
 // ---------------------------------------------------------------------------
 
+// ── Beta rate limits (see middleware/rate-limits.js) ──────────────────────
+// Tenant-keyed (session.storeId → shop → IP). Mounted on specific paths BEFORE
+// the routers so writes (Shopify Admin API) and expensive (LLM) endpoints get
+// the stricter caps, while read routers get the generous dashboard cap.
+// Write routes — Shopify writes; guards accidental double-clicks / spikes.
+app.use('/action-center/products/:id/apply',          writeLimiter);
+app.use('/action-center/products/:id/rollback',       writeLimiter);
+app.use('/action-center/batch-apply-safe',            writeLimiter);
+app.use('/action-center/batch-apply-selected',        writeLimiter);
+app.use('/decision-engine/actions/execute',           writeLimiter);
+// Expensive routes — LLM / heavy generation.
+app.use('/action-center/products/:id/content-preview', expensiveLimiter);
+app.use('/action-center/products/:id/preview',         expensiveLimiter);
+app.use('/action-center/products/:id/report',          expensiveLimiter);
+app.use('/action-center/review-summary',               expensiveLimiter);
+
 app.use('/auth', authRouter);
 app.use('/cro', croRouter);
 app.use('/action-center', actionCenterRouter);
-app.use('/metrics', metricsRouter);
-app.use('/dashboard', dashboardRouter);
+app.use('/metrics', dashboardLimiter, metricsRouter);
+app.use('/dashboard', dashboardLimiter, dashboardRouter);
 app.use('/decision-engine', decisionEngineRouter);
 
 // ---------------------------------------------------------------------------
