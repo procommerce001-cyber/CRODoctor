@@ -333,6 +333,9 @@ router.get('/executions/:id/details', async (req, res) => {
       exposureRate:    result.success ? (result.exposureRate   ?? null) : null,
       confoundedBy:    result.success ? (result.confoundedBy  ?? null) : null,
       decisionSignal:  result.success ? (result.decisionSignal ?? null) : null,
+      // Additive pass-through of the already-computed conversion-first decision
+      // object (no new logic). Lets the dashboard display recommendations.
+      decisionV2:      result.success ? (result.decisionV2 ?? null) : null,
     });
   } catch (err) {
     console.error('[Metrics] GET /executions/:id/details error:', err.message);

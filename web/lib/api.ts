@@ -281,6 +281,36 @@ export interface ExposureSummary {
   } | null;
 }
 
+// Additive conversion-first decision object (backend commit 4d28082).
+// Advisory only — never triggers actions. All fields may be null on thin data.
+export interface DecisionV2 {
+  measurementStatus:
+    | 'not_started' | 'cooling_down' | 'measuring'
+    | 'ready_for_decision' | 'inconclusive' | 'decided';
+  recommendedAction:
+    | 'continue_measuring' | 'keep' | 'undo_suggested'
+    | 'try_alternative' | 'stack_next_change' | 'manual_review';
+  primaryMetric:         string | null;
+  primaryMetricBefore:   number | null;
+  primaryMetricAfter:    number | null;
+  primaryMetricLift:     number | null;
+  exposureLift:          number | null;
+  revenuePerViewLift:    number | null;
+  addToCartLift:         number | null;
+  checkoutStartLift:     number | null;
+  confidenceScore:       number | null;
+  dataQualityScore:      number | null;
+  downsideRiskScore:     number | null;
+  attributionConfidence: number | null;
+  expectedImpactScore:   number | null;
+  confoundFlags:         string[];
+  explanationForMerchant: string;
+  internalReasonCodes:   string[];
+  nextAllowedAction:     string[];
+  canAutoUndoLater:      boolean;
+  shouldNotTouchReason:  string | null;
+}
+
 export interface ExecutionDetails {
   success:         boolean;
   executionId:     string;
@@ -310,6 +340,7 @@ export interface ExecutionDetails {
   };
   exposure?:       ExposureSummary | null;
   decisionSignal?: 'still_measuring' | 'keep' | 'revise' | 'rollback_candidate';
+  decisionV2?:     DecisionV2 | null;
 }
 
 export async function fetchExecutionDetails(shop: string, executionId: string): Promise<ExecutionDetails> {
