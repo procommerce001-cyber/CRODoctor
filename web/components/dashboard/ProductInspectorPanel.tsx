@@ -1,9 +1,10 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import type { FeedRow } from './OptimizationFeed';
-import { fetchContentPreview, submitReviewApproval } from '@/lib/api';
-import type { ContentPreview } from '@/lib/api';
+import { fetchContentPreview, submitReviewApproval, fetchExecutionDetails } from '@/lib/api';
+import type { ContentPreview, DecisionV2 } from '@/lib/api';
+import DecisionV2Card from './DecisionV2Card';
 import { blockReasonLabel, PREVIEW_UNAVAILABLE_MSG, proposedContentLabel } from './previewCopy';
 
 const ISSUE_CATEGORY: Record<string, string> = {
@@ -139,6 +140,21 @@ export default function ProductInspectorPanel({
   const [pvReviewError, setPvReviewError]     = useState<string | null>(null);
   const [isPersistingReview, setIsPersisting] = useState(false);
   const [confirmingRollback, setConfirmingRollback] = useState(false);
+
+  // Conversion-first decision object for the selected Measuring/activity item.
+  // Fetched read-only from /metrics/executions/:id/details (which returns decisionV2).
+  // The panel is remounted (keyed by row) on selection change, so state starts
+  // fresh per item — no manual reset needed. Failures are non-fatal.
+  const activityExecId = row?.activityItem?.executionId ?? null;
+  const [decisionV2, setDecisionV2] = useState<DecisionV2 | null>(null);
+  useEffect(() => {
+    if (!activityExecId) return;
+    let cancelled = false;
+    fetchExecutionDetails(shop, activityExecId)
+      .then(d => { if (!cancelled) setDecisionV2(d?.decisionV2 ?? null); })
+      .catch(() => { /* non-fatal: leave decisionV2 null */ });
+    return () => { cancelled = true; };
+  }, [shop, activityExecId]);
 
   if (!row) {
     return (
@@ -385,6 +401,9 @@ export default function ProductInspectorPanel({
                 <span style={p.metaItem}>Applied {fmtDate(activity.createdAt)}</span>
               </div>
             )}
+
+            {/* Conversion-first recommendation (advisory, read-only) */}
+            {decisionV2 && <DecisionV2Card d={decisionV2} variant="dark" />}
 
             {/* Rollback — available while change is still live/measuring */}
             {activity.status === 'applied' && onRollback && rbSuccess && (

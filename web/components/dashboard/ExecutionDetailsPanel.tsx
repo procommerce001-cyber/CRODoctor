@@ -3,7 +3,8 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { fetchExecutionDetails, apiHeaders, API_BASE, issueLabel } from '@/lib/api';
-import type { ExecutionDetails, MetricStat, ExposureSummary, ExposureFunnelGroup, DecisionV2 } from '@/lib/api';
+import type { ExecutionDetails, MetricStat, ExposureSummary, ExposureFunnelGroup } from '@/lib/api';
+import DecisionV2Card from './DecisionV2Card';
 
 const EXECUTION_STATUS_LABEL: Record<string, string> = {
   applied:     'Live on your store',
@@ -117,7 +118,7 @@ export default function ExecutionDetailsPanel({ shop, executionId, onClose }: Pr
                 <h3 style={styles.sectionTitle}>7-Day Impact Snapshot</h3>
 
                 {data.decisionV2
-                  ? <DecisionV2Card d={data.decisionV2} />
+                  ? <DecisionV2Card d={data.decisionV2} variant="light" />
                   : data.decisionSignal && <DecisionBadge signal={data.decisionSignal} />}
 
                 {data.resultStatus === 'measured' && data.summary && (
@@ -213,72 +214,6 @@ function DecisionBadge({ signal }: { signal: string }) {
   return <span style={{ ...styles.decisionBadge, ...colors }}>{label}</span>;
 }
 
-// Read-only display of the additive conversion-first decisionV2 object.
-// Advisory only — renders nothing actionable; existing Undo button is untouched.
-const V2_ACTION: Record<string, { label: string; color: string; bg: string; border: string }> = {
-  keep:               { label: 'Keep',               color: '#4ade80', bg: 'rgba(34,197,94,0.10)',  border: 'rgba(34,197,94,0.30)' },
-  undo_suggested:     { label: 'Undo suggested',      color: '#fbbf24', bg: 'rgba(251,191,36,0.10)', border: 'rgba(251,191,36,0.30)' },
-  try_alternative:    { label: 'Try alternative',     color: '#60a5fa', bg: 'rgba(96,165,250,0.10)', border: 'rgba(96,165,250,0.30)' },
-  continue_measuring: { label: 'Continue measuring',  color: '#9ca3af', bg: 'rgba(156,163,175,0.08)', border: 'rgba(156,163,175,0.25)' },
-  manual_review:      { label: 'Manual review',       color: '#f59e0b', bg: 'rgba(245,158,11,0.10)', border: 'rgba(245,158,11,0.30)' },
-  stack_next_change:  { label: 'Stack next change',   color: '#4ade80', bg: 'rgba(34,197,94,0.10)',  border: 'rgba(34,197,94,0.30)' },
-};
-
-function DecisionV2Card({ d }: { d: DecisionV2 }) {
-  const cfg = V2_ACTION[d.recommendedAction] ?? V2_ACTION.continue_measuring;
-  const isUndo = d.recommendedAction === 'undo_suggested';
-  const pct = (n: number | null) => (n == null ? null : `${n > 0 ? '+' : ''}${n}%`);
-  const score = (n: number | null) => (n == null ? null : `${n}/100`);
-
-  const chips: Array<[string, string | null]> = [
-    ['Confidence',  score(d.confidenceScore)],
-    ['Data quality', score(d.dataQualityScore)],
-    ['Attribution', score(d.attributionConfidence)],
-    ...(isUndo ? [['Downside risk', score(d.downsideRiskScore)] as [string, string | null]] : []),
-  ];
-  const visibleChips = chips.filter(([, v]) => v != null);
-
-  return (
-    <div style={{ ...styles.v2Card, background: cfg.bg, borderColor: cfg.border }}>
-      <div style={styles.v2Head}>
-        <span style={{ ...styles.v2Chip, color: cfg.color, borderColor: cfg.border }}>{cfg.label}</span>
-        {d.shouldNotTouchReason && <span style={styles.v2Paused}>Paused</span>}
-      </div>
-
-      <p style={styles.v2Expl}>{d.shouldNotTouchReason ?? d.explanationForMerchant}</p>
-
-      {d.primaryMetric && d.primaryMetricLift != null && (
-        <p style={styles.v2Metric}>
-          {d.primaryMetric.replace(/_/g, ' ')}: <strong style={{ color: d.primaryMetricLift >= 0 ? '#4ade80' : '#fbbf24' }}>{pct(d.primaryMetricLift)}</strong>
-        </p>
-      )}
-
-      {visibleChips.length > 0 ? (
-        <div style={styles.v2Scores}>
-          {visibleChips.map(([label, val]) => (
-            <span key={label} style={styles.v2Score}>
-              <span style={styles.v2ScoreLabel}>{label}</span>
-              <span style={styles.v2ScoreVal}>{val}</span>
-            </span>
-          ))}
-        </div>
-      ) : (
-        <p style={styles.v2Thin}>Not enough data yet</p>
-      )}
-
-      {(d.internalReasonCodes?.length > 0 || d.confoundFlags?.length > 0) && (
-        <details style={styles.v2Details}>
-          <summary style={styles.v2Summary}>Why?</summary>
-          <div style={styles.v2Why}>
-            {d.confoundFlags?.length > 0 && <div>Confounds: {d.confoundFlags.join(', ')}</div>}
-            {d.internalReasonCodes?.length > 0 && <div>{d.internalReasonCodes.join(' · ')}</div>}
-          </div>
-        </details>
-      )}
-    </div>
-  );
-}
-
 function Row({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
   return (
     <div style={styles.row}>
@@ -368,20 +303,6 @@ function MetricRow({ label, stat, prefix = '' }: { label: string; stat: MetricSt
 // Styles
 // ---------------------------------------------------------------------------
 const styles: Record<string, React.CSSProperties> = {
-  v2Card:       { border: '1px solid', borderRadius: 8, padding: '12px 14px', marginBottom: 12 },
-  v2Head:       { display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 },
-  v2Chip:       { fontSize: 11, fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase' as const, border: '1px solid', borderRadius: 6, padding: '2px 8px' },
-  v2Paused:     { fontSize: 10, fontWeight: 700, color: '#92400e', background: 'rgba(245,158,11,0.15)', borderRadius: 4, padding: '2px 6px', textTransform: 'uppercase' as const },
-  v2Expl:       { fontSize: 13, color: '#374151', lineHeight: 1.5, margin: '0 0 8px' },
-  v2Metric:     { fontSize: 12, color: '#4b5563', margin: '0 0 8px' },
-  v2Scores:     { display: 'flex', flexWrap: 'wrap' as const, gap: 8 },
-  v2Score:      { display: 'flex', flexDirection: 'column' as const, gap: 1, background: 'rgba(0,0,0,0.04)', borderRadius: 6, padding: '4px 8px', minWidth: 64 },
-  v2ScoreLabel: { fontSize: 9, fontWeight: 700, textTransform: 'uppercase' as const, letterSpacing: '0.04em', color: '#6b7280' },
-  v2ScoreVal:   { fontSize: 13, fontWeight: 700, color: '#111827' },
-  v2Thin:       { fontSize: 12, color: '#9ca3af', fontStyle: 'italic' as const, margin: 0 },
-  v2Details:    { marginTop: 8 },
-  v2Summary:    { fontSize: 11, color: '#6b7280', cursor: 'pointer', userSelect: 'none' as const },
-  v2Why:        { fontSize: 11, color: '#6b7280', lineHeight: 1.5, marginTop: 6, display: 'flex', flexDirection: 'column' as const, gap: 3 },
   backdrop:     { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.25)', zIndex: 100 },
   drawer:       { position: 'fixed', top: 0, right: 0, bottom: 0, width: 440, background: '#fff', boxShadow: '-4px 0 24px rgba(0,0,0,0.12)', zIndex: 101, display: 'flex', flexDirection: 'column', overflow: 'hidden' },
   header:       { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px 20px', borderBottom: '1px solid #e5e7eb', flexShrink: 0 },
