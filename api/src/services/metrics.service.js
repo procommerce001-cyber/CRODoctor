@@ -834,30 +834,47 @@ function buildDecisionV2(ctx) {
     revenuePerViewLift = safePct(rpvB, rpvA);
   }
 
-  // ── Attribution hierarchy → primary metric + P(improve) ──────────────────
-  let primaryMetric = null, pBefore = null, pAfter = null, pLift = null;
-  let pImprove = null, attributionConfidence = 20, exposureLift = null;
-
+  // ── Exposure = DIRECTIONAL signal only ────────────────────────────────────
+  // "Exposed" = sessions whose tracker saw the block; "unexposed" = PDP sessions
+  // that didn't. This is NOT a randomized holdout — exposure is correlated with
+  // engagement (selection bias), so it must never be the primary causal basis or
+  // drive a "keep" on its own. It is kept as a secondary directional signal that
+  // can corroborate or conflict with the before/after baseline.
+  let exposureLift = null;   // exposed vs unexposed ATC-rate, % (directional)
+  let exposureDir  = 0;      // -1 down | +1 up | 0 none, only when meaningful
   if (fn && exposedN >= MIN_EXPOSED_SESSIONS && unexposedN >= MIN_UNEXPOSED &&
       fn.exposed.atcRate != null && fn.unexposed.atcRate != null) {
-    // Level 1 — exposed vs unexposed (same-period control). Strongest.
-    primaryMetric = 'exposure_atc_rate';
-    pBefore = fn.unexposed.atcRate; pAfter = fn.exposed.atcRate;
-    pLift   = safePct(pBefore, pAfter);
-    exposureLift = pLift;
-    pImprove = _pImprove(fn.exposed.atcSessions, exposedN, fn.unexposed.atcSessions, unexposedN);
-    attributionConfidence = 90;
-    reasons.push('exposure_data_available');
-  } else if (before.productSessions && after.productSessions &&
-             diff.productCvrBefore != null && diff.productCvrAfter != null) {
-    // Level 2 — product before/after conversion, view-normalized.
+    exposureLift = safePct(fn.unexposed.atcRate, fn.exposed.atcRate);
+    if (exposureLift != null && Math.abs(exposureLift) >= EFFECT_FLOOR_PCT) {
+      exposureDir = exposureLift > 0 ? 1 : -1;
+    }
+  }
+
+  // ── Attribution hierarchy → primary metric + P(improve) ──────────────────
+  // Beta hierarchy: (1) randomized_holdout — NOT available today; (2) product
+  // before/after view-normalized (PRIMARY); (3) exposure directional — only when
+  // it is the sole signal, low confidence; (4) orders/revenue fallback.
+  let primaryMetric = null, pBefore = null, pAfter = null, pLift = null;
+  let pImprove = null, attributionConfidence = 20;
+
+  if (before.productSessions && after.productSessions &&
+      diff.productCvrBefore != null && diff.productCvrAfter != null) {
+    // PRIMARY — product before/after conversion, view-normalized.
     primaryMetric = 'product_cvr';
     pBefore = diff.productCvrBefore; pAfter = diff.productCvrAfter; pLift = diff.productCvrChangePercent;
     pImprove = _pImprove(after.orderCount, after.productSessions, before.orderCount, before.productSessions);
     attributionConfidence = severeConfound ? 45 : 65;
-    reasons.push('exposure_data_missing');
+    reasons.push('before_after_primary');
+    if (exposureLift != null) reasons.push('no_randomized_holdout', 'attribution_directional');
+  } else if (exposureLift != null) {
+    // Exposure is the ONLY signal → directional, low confidence, not proof.
+    primaryMetric = 'exposure_atc_rate';
+    pBefore = fn.unexposed.atcRate; pAfter = fn.exposed.atcRate; pLift = exposureLift;
+    pImprove = _pImprove(fn.exposed.atcSessions, exposedN, fn.unexposed.atcSessions, unexposedN);
+    attributionConfidence = severeConfound ? 35 : 50;
+    reasons.push('exposure_directional_only', 'exposure_selection_bias', 'no_randomized_holdout', 'causal_lift_not_proven');
   } else {
-    // Level 4 — orders/revenue fallback (session data missing). Low trust.
+    // Orders/revenue fallback (session data missing). Low trust.
     primaryMetric = 'revenue_per_view';
     pBefore = parseFloat(before.revenue); pAfter = parseFloat(after.revenue);
     pLift   = diff.orderCountChangePercent ?? diff.revenueChangePercent ?? null;
@@ -865,7 +882,25 @@ function buildDecisionV2(ctx) {
     attributionConfidence = 35;
     reasons.push('revenue_only_fallback');
   }
+  const exposureOnly = primaryMetric === 'exposure_atc_rate';
+
+  // ── Reconcile exposure against the baseline (only when baseline is primary) ─
+  let conflict = false;
+  if (primaryMetric === 'product_cvr' && exposureDir !== 0 &&
+      pLift != null && Math.abs(pLift) >= EFFECT_FLOOR_PCT) {
+    const baselineDir = pLift > 0 ? 1 : -1;
+    if (exposureDir === baselineDir) {
+      reasons.push('exposure_supports_trend');
+      attributionConfidence = clamp(attributionConfidence + 5);
+    } else {
+      reasons.push('exposure_conflicts_with_baseline');
+      conflict = true;
+      attributionConfidence = clamp(attributionConfidence - 15);
+    }
+  }
   if (severeConfound) attributionConfidence = clamp(attributionConfidence - 30);
+  // Beta cap: without a randomized holdout nothing is causal-grade confidence.
+  attributionConfidence = clamp(Math.min(attributionConfidence, 75));
 
   // ── confidenceScore ───────────────────────────────────────────────────────
   // Probability-based when available; else conservative heuristic from tier.
@@ -882,8 +917,8 @@ function buildDecisionV2(ctx) {
   // ── dataQualityScore ──────────────────────────────────────────────────────
   let dq = 100;
   if (primaryMetric === 'revenue_per_view') dq -= 45;       // orders/revenue only
-  else if (primaryMetric === 'product_cvr') dq -= 20;       // no exposure cohort
-  if (primaryMetric === 'exposure_atc_rate' && (exposedN < 60 || unexposedN < 60)) dq -= 15;
+  else if (exposureOnly) { dq -= 25; if (exposedN < 60 || unexposedN < 60) dq -= 15; } // directional only
+  else if (primaryMetric === 'product_cvr') dq -= 10;       // baseline primary (preferred)
   if (confidence === 'insufficient') dq -= 25;
   else if (confidence === 'low')     dq -= 10;
   dq -= Math.min(30, confoundFlags.length * 15);
@@ -920,26 +955,34 @@ function buildDecisionV2(ctx) {
   const meaningful = pLift != null && Math.abs(pLift) >= EFFECT_FLOOR_PCT;
   const decidable  = confidence === 'medium' || confidence === 'high';
 
+  // keep/undo require the PRIMARY before/after baseline — never exposure alone.
   if (inCooldown) {
     recommendedAction = 'continue_measuring';
     reasons.push('in_cooldown');
   } else if (severeConfound) {
     recommendedAction = 'manual_review';
     reasons.push('manual_review_required');
+  } else if (conflict) {
+    // Exposure and baseline disagree → wait for a clearer signal, never act.
+    recommendedAction = 'continue_measuring';
   } else if (confidence === 'insufficient' || !decidable) {
     recommendedAction = 'continue_measuring';
     reasons.push(confidence === 'insufficient' ? 'low_data_quality' : 'effect_below_floor');
-  } else if (meaningful && pLift > 0 && confidenceScore >= KEEP_P * 100 && downsideRiskScore < 35) {
+  } else if (primaryMetric === 'product_cvr' && meaningful && pLift > 0 &&
+             confidenceScore >= KEEP_P * 100 && downsideRiskScore < 35) {
     recommendedAction = 'keep';
-    reasons.push(primaryMetric === 'exposure_atc_rate' || primaryMetric === 'product_cvr' ? 'positive_cvr_lift' : 'positive_cvr_lift');
+    reasons.push('positive_cvr_lift');
     if (addToCartLift != null && addToCartLift > 0) reasons.push('positive_atc_lift');
-    // future-ready: flag (do NOT emit stack action in Phase 1A)
     if (confidenceScore >= 90 && !severeConfound) reasons.push('ready_to_stack');
-  } else if (meaningful && pLift < 0 && (100 - confidenceScore) >= UNDO_P * 100 && downsideRiskScore >= 50) {
+  } else if (primaryMetric === 'product_cvr' && meaningful && pLift < 0 &&
+             (100 - confidenceScore) >= UNDO_P * 100 && downsideRiskScore >= 50) {
     recommendedAction = 'undo_suggested';
     reasons.push('negative_cvr_lift');
     if (addToCartLift != null && addToCartLift < 0) reasons.push('negative_atc_lift');
     if (revenuePerViewLift != null && revenuePerViewLift < 0) reasons.push('revenue_per_view_drop');
+  } else if (exposureOnly && meaningful) {
+    // Directional exposure signal only — never auto-keep/undo without a baseline.
+    recommendedAction = 'continue_measuring';
   } else if (!meaningful) {
     recommendedAction = 'try_alternative';
     reasons.push('no_clear_effect');

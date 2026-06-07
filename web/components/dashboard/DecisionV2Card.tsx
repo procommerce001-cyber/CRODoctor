@@ -72,6 +72,14 @@ const REASON_COPY: Record<string, string> = {
   revenue_per_view_drop:  'Revenue per visitor is trending down.',
   effect_below_floor:     'The change is too small to judge confidently yet.',
   ready_to_stack:         'This change may be strong enough to test another improvement later.',
+  // Attribution-safety (exposure is directional, not a randomized A/B test).
+  exposure_directional_only: 'This signal is directional because visitors who saw the block may already be more engaged.',
+  exposure_selection_bias:   'This signal is directional because visitors who saw the block may already be more engaged.',
+  no_randomized_holdout:     'This is not a randomized A/B test yet, so CRODoctor avoids treating the result as proven lift.',
+  before_after_primary:      'CRODoctor is comparing performance against the product’s recent baseline before making a recommendation.',
+  exposure_supports_trend:   'Visitor behavior around the change supports the current trend, but it is not used alone.',
+  exposure_conflicts_with_baseline: 'Visitor behavior and baseline performance are not aligned yet, so CRODoctor is waiting for a clearer signal.',
+  causal_lift_not_proven:    'The result is still directional, not proven.',
   // confoundFlag types alias to the same plain copy
   store_revenue_spike:    'A store-wide sales or traffic spike may be affecting this product’s numbers.',
   inventory_depletion:    'Inventory changed during the measurement window.',
