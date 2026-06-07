@@ -14,12 +14,14 @@ import type { DecisionV2 } from '@/lib/api';
 
 // Merchant-facing action labels (backend enum → friendly display).
 const ACTION_LABEL: Record<string, string> = {
-  continue_measuring: 'Still collecting data',
-  keep:               'Keep this change',
-  undo_suggested:     'Undo suggested',
-  try_alternative:    'Try another improvement',
-  manual_review:      'Needs review',
-  stack_next_change:  'Ready for next improvement',
+  continue_measuring:    'Still collecting data',
+  keep:                  'Keep this change',
+  undo_suggested:        'Undo suggested',
+  try_alternative:       'Try another improvement',
+  neutral_no_clear_lift: 'No clear change',
+  measurement_expired:   'Not enough traffic',
+  manual_review:         'Needs review',
+  stack_next_change:     'Ready for next improvement',
 };
 
 const ACTION_TONE: Record<string, { color: string; bg: string; border: string }> = {
@@ -27,6 +29,8 @@ const ACTION_TONE: Record<string, { color: string; bg: string; border: string }>
   undo_suggested:     { color: '#d97706', bg: 'rgba(251,191,36,0.10)',  border: 'rgba(251,191,36,0.35)' },
   try_alternative:    { color: '#2563eb', bg: 'rgba(96,165,250,0.10)',  border: 'rgba(96,165,250,0.30)' },
   continue_measuring: { color: '#6b7280', bg: 'rgba(156,163,175,0.10)', border: 'rgba(156,163,175,0.30)' },
+  neutral_no_clear_lift: { color: '#2563eb', bg: 'rgba(96,165,250,0.10)', border: 'rgba(96,165,250,0.30)' },
+  measurement_expired: { color: '#6b7280', bg: 'rgba(156,163,175,0.10)', border: 'rgba(156,163,175,0.30)' },
   manual_review:      { color: '#d97706', bg: 'rgba(245,158,11,0.10)',  border: 'rgba(245,158,11,0.30)' },
   stack_next_change:  { color: '#16a34a', bg: 'rgba(34,197,94,0.10)',   border: 'rgba(34,197,94,0.30)' },
 };
@@ -42,6 +46,8 @@ function explanationFor(d: DecisionV2): string {
     case 'keep':              return 'This change is showing a positive signal. We recommend keeping it active while monitoring the result.';
     case 'undo_suggested':    return 'This change may be hurting performance. We recommend reviewing it and undoing if the trend continues.';
     case 'try_alternative':   return 'This change did not create a clear lift. A different improvement may be a better fit for this product.';
+    case 'neutral_no_clear_lift': return 'This change did not create a clear lift. You can safely test a different improvement.';
+    case 'measurement_expired':   return 'This product did not get enough traffic to measure this change reliably.';
     case 'manual_review':     return 'The result is noisy or affected by outside factors. Review before making a decision.';
     case 'stack_next_change': return 'This change is performing well. The next step can target a different part of the buying journey.';
     default:                  return d.explanationForMerchant;

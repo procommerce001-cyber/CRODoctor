@@ -728,10 +728,11 @@ function deriveDecisionSignal(resultStatus, confidence, revenueChangePercent, co
 // ===========================================================================
 
 const COOLDOWN_MS        = 48 * 60 * 60 * 1000; // 48h post-apply stabilization
-const EFFECT_FLOOR_PCT   = 5;    // |relative %| below this is "no clear effect"
+const EFFECT_FLOOR_PCT   = 5;    // |relative %| below this is "no clear effect" / commercial floor
 const KEEP_P             = 0.80; // P(improve) ≥ → keep-eligible
 const UNDO_P             = 0.80; // P(harm)    ≥ → undo-eligible
 const MIN_UNEXPOSED      = MIN_EXPOSED_SESSIONS; // control cohort floor (20)
+const MAX_WINDOW_DAYS    = 28;   // after this, decide neutral/expired — never loop forever
 
 // Standard normal CDF (Abramowitz & Stegun 7.1.26) — no dependencies.
 function _normalCdf(z) {
@@ -789,6 +790,13 @@ function buildDecisionV2(ctx) {
     revenuePerViewLift:   null,
     addToCartLift:        null,
     checkoutStartLift:    null,
+    rawLiftPercent:              null,
+    expectedBaselineLiftPercent: null,
+    adjustedLiftPercent:         null,
+    creditedLiftPercent:         null,
+    creditedRevenueImpact:       null,
+    creditedOrdersImpact:        null,
+    creditBand:                  'not_creditable',
     confidenceScore:      20,
     dataQualityScore:     25,
     downsideRiskScore:    0,
@@ -902,6 +910,31 @@ function buildDecisionV2(ctx) {
   // Beta cap: without a randomized holdout nothing is causal-grade confidence.
   attributionConfidence = clamp(Math.min(attributionConfidence, 75));
 
+  // ── Store-trend (difference-in-differences) adjustment ────────────────────
+  // Subtract the lift the product would have inherited from the store-wide trend
+  // in the same window, so we don't credit a CRO change for a store/seasonal/
+  // campaign-driven rise. Uses existing store before/after snapshots only.
+  const rawLiftPercent = pLift;
+  let expectedBaselineLiftPercent = null;
+  const sdiff = compare.store && compare.store.diff;
+  if (sdiff && primaryMetric === 'product_cvr') {
+    expectedBaselineLiftPercent = sdiff.cvrChangePercent ?? sdiff.orderCountChangePercent ?? null;
+  } else if (sdiff && primaryMetric === 'revenue_per_view') {
+    expectedBaselineLiftPercent = sdiff.revenueChangePercent ?? sdiff.orderCountChangePercent ?? null;
+  } // exposureOnly: no comparable store ATC-exposure baseline → leave null
+
+  let adjustedLiftPercent;
+  if (expectedBaselineLiftPercent != null && rawLiftPercent != null) {
+    adjustedLiftPercent = parseFloat((rawLiftPercent - expectedBaselineLiftPercent).toFixed(2));
+    reasons.push('store_trend_adjusted');
+    if (rawLiftPercent > 0 && adjustedLiftPercent <= 0) reasons.push('store_also_improved');
+  } else {
+    adjustedLiftPercent = rawLiftPercent; // baseline unknown → fall back to raw; credit is discounted below
+    if (!exposureOnly) reasons.push('store_trend_unavailable');
+  }
+  // Decisions (keep/undo/neutral) use the DiD-corrected lift when available.
+  const decisionLift = adjustedLiftPercent;
+
   // ── confidenceScore ───────────────────────────────────────────────────────
   // Probability-based when available; else conservative heuristic from tier.
   let confidenceScore;
@@ -943,19 +976,56 @@ function buildDecisionV2(ctx) {
     expectedImpactScore = clamp(mag * 100 * (0.4 + 0.6 * traffic) * (pLift > 0 ? 1 : 0.3));
   }
 
+  // ── creditBand + credited impact (conservative; capped at medium in beta) ──
+  // Credit only POSITIVE, baseline-adjusted lift above the commercial floor,
+  // discounted by confidence × data quality × confound factor. Never strong
+  // without a randomized holdout. Negative/neutral/thin/confounded → not_creditable.
+  const confoundFactor = severeConfound ? 0 : (confoundFlags.length > 0 ? 0.5 : 1);
+  let creditedLiftPercent   = null;
+  let creditedRevenueImpact = null;
+  let creditedOrdersImpact  = null;
+  let creditBand = 'not_creditable';
+  const adjPositive = adjustedLiftPercent != null && adjustedLiftPercent >= EFFECT_FLOOR_PCT;
+  if (!exposureOnly && primaryMetric !== 'revenue_per_view' && adjPositive && confoundFactor > 0) {
+    const discount = (confidenceScore / 100) * (dataQualityScore / 100) * confoundFactor;
+    creditedLiftPercent = parseFloat((adjustedLiftPercent * discount).toFixed(2));
+    const strongInputs = expectedBaselineLiftPercent != null &&
+      confidenceScore >= KEEP_P * 100 && dataQualityScore >= 60 && confoundFlags.length === 0;
+    creditBand = strongInputs ? 'medium' : 'low';   // beta cap: never 'strong'
+    reasons.push('partial_credit_only', 'no_causal_credit_without_holdout');
+    if (confoundFlags.length > 0)                              reasons.push('credit_discounted_by_confound');
+    if (dataQualityScore < 60 || confidenceScore < KEEP_P*100) reasons.push('credit_discounted_by_low_data');
+    if (creditBand === 'medium') {
+      creditedOrdersImpact  = Math.round((after.orderCount ?? 0) * (creditedLiftPercent / 100));
+      creditedRevenueImpact = Math.round((parseFloat(after.revenue) || 0) * (creditedLiftPercent / 100));
+    }
+  } else {
+    creditBand = 'not_creditable';
+    reasons.push('credit_not_assignable');
+    if (severeConfound) reasons.push('credit_discounted_by_confound');
+  }
+  if (adjustedLiftPercent != null) {
+    if (adjustedLiftPercent >= EFFECT_FLOOR_PCT)       reasons.push('adjusted_lift_positive');
+    else if (adjustedLiftPercent <= -EFFECT_FLOOR_PCT) reasons.push('adjusted_lift_negative');
+    else                                               reasons.push('adjusted_lift_neutral');
+  }
+
   // ── measurementStatus ─────────────────────────────────────────────────────
+  const ageDays  = (Date.now() - new Date(createdAt).getTime()) / 86400000;
+  const expired  = ageDays >= MAX_WINDOW_DAYS && confidence === 'insufficient';
   let measurementStatus;
   if (inCooldown) measurementStatus = 'cooling_down';
+  else if (expired) measurementStatus = 'inconclusive';
   else if (confidence === 'insufficient') measurementStatus = 'measuring';
   else if (severeConfound) measurementStatus = 'inconclusive';
   else measurementStatus = 'ready_for_decision';
 
   // ── recommendedAction (conservative, advisory) ────────────────────────────
+  // Decisions use the DiD-corrected `decisionLift`, never raw lift or exposure alone.
   let recommendedAction = 'continue_measuring';
-  const meaningful = pLift != null && Math.abs(pLift) >= EFFECT_FLOOR_PCT;
+  const meaningful = decisionLift != null && Math.abs(decisionLift) >= EFFECT_FLOOR_PCT;
   const decidable  = confidence === 'medium' || confidence === 'high';
 
-  // keep/undo require the PRIMARY before/after baseline — never exposure alone.
   if (inCooldown) {
     recommendedAction = 'continue_measuring';
     reasons.push('in_cooldown');
@@ -965,16 +1035,20 @@ function buildDecisionV2(ctx) {
   } else if (conflict) {
     // Exposure and baseline disagree → wait for a clearer signal, never act.
     recommendedAction = 'continue_measuring';
+  } else if (expired) {
+    // Max window reached and still not enough data → stop; never loop forever.
+    recommendedAction = 'measurement_expired';
+    reasons.push('measurement_expired', 'insufficient_traffic');
   } else if (confidence === 'insufficient' || !decidable) {
     recommendedAction = 'continue_measuring';
     reasons.push(confidence === 'insufficient' ? 'low_data_quality' : 'effect_below_floor');
-  } else if (primaryMetric === 'product_cvr' && meaningful && pLift > 0 &&
+  } else if (primaryMetric === 'product_cvr' && meaningful && decisionLift > 0 &&
              confidenceScore >= KEEP_P * 100 && downsideRiskScore < 35) {
     recommendedAction = 'keep';
     reasons.push('positive_cvr_lift');
     if (addToCartLift != null && addToCartLift > 0) reasons.push('positive_atc_lift');
     if (confidenceScore >= 90 && !severeConfound) reasons.push('ready_to_stack');
-  } else if (primaryMetric === 'product_cvr' && meaningful && pLift < 0 &&
+  } else if (primaryMetric === 'product_cvr' && meaningful && decisionLift < 0 &&
              (100 - confidenceScore) >= UNDO_P * 100 && downsideRiskScore >= 50) {
     recommendedAction = 'undo_suggested';
     reasons.push('negative_cvr_lift');
@@ -984,8 +1058,9 @@ function buildDecisionV2(ctx) {
     // Directional exposure signal only — never auto-keep/undo without a baseline.
     recommendedAction = 'continue_measuring';
   } else if (!meaningful) {
-    recommendedAction = 'try_alternative';
-    reasons.push('no_clear_effect');
+    // Enough data/time, no meaningful adjusted lift → move on (don't loop forever).
+    recommendedAction = 'neutral_no_clear_lift';
+    reasons.push('adjusted_lift_neutral', 'no_clear_effect');
   } else {
     recommendedAction = 'continue_measuring';
     reasons.push('effect_below_floor');
@@ -993,12 +1068,14 @@ function buildDecisionV2(ctx) {
 
   // ── merchant explanation ──────────────────────────────────────────────────
   const EXPL = {
-    keep:               'This change is likely improving conversion. We recommend keeping it active.',
-    undo_suggested:     'This change may be hurting performance. We recommend undoing it to protect conversion.',
-    try_alternative:    'This change did not create a clear lift. We recommend trying a different improvement.',
-    continue_measuring: 'Not enough data yet to make a confident call. We’ll keep measuring.',
-    manual_review:      'This result is too noisy to decide confidently right now.',
-    stack_next_change:  'This change is working. We can test another improvement on a different part of the journey.',
+    keep:                 'This change is likely improving conversion. We recommend keeping it active.',
+    undo_suggested:       'This change may be hurting performance. We recommend undoing it to protect conversion.',
+    try_alternative:      'This change did not create a clear lift. We recommend trying a different improvement.',
+    neutral_no_clear_lift:'This change did not create a clear lift. You can safely test a different improvement.',
+    measurement_expired:  'This product did not get enough traffic to measure this change reliably.',
+    continue_measuring:   'Not enough data yet to make a confident call. We’ll keep measuring.',
+    manual_review:        'This result is too noisy to decide confidently right now.',
+    stack_next_change:    'This change is working. We can test another improvement on a different part of the journey.',
   };
 
   const canAutoUndoLater =
@@ -1015,6 +1092,13 @@ function buildDecisionV2(ctx) {
     revenuePerViewLift,
     addToCartLift,
     checkoutStartLift,
+    rawLiftPercent,
+    expectedBaselineLiftPercent,
+    adjustedLiftPercent,
+    creditedLiftPercent,
+    creditedRevenueImpact,
+    creditedOrdersImpact,
+    creditBand,
     confidenceScore,
     dataQualityScore,
     downsideRiskScore,
@@ -1024,9 +1108,10 @@ function buildDecisionV2(ctx) {
     explanationForMerchant: EXPL[recommendedAction] ?? EXPL.continue_measuring,
     internalReasonCodes: [...new Set(reasons)],
     nextAllowedAction:
-      recommendedAction === 'keep'           ? ['keep', 'undo'] :
-      recommendedAction === 'undo_suggested' ? ['undo', 'keep'] :
-      recommendedAction === 'try_alternative'? ['undo', 'keep'] : ['undo'],
+      recommendedAction === 'keep'             ? ['keep', 'undo'] :
+      recommendedAction === 'undo_suggested'   ? ['undo', 'keep'] :
+      (recommendedAction === 'try_alternative' ||
+       recommendedAction === 'neutral_no_clear_lift') ? ['undo', 'keep'] : ['undo'],
     canAutoUndoLater,
     shouldNotTouchReason: severeConfound
       ? 'Paused — external factors (e.g. a store-wide sales change) are distorting this product’s numbers.'

@@ -289,7 +289,8 @@ export interface DecisionV2 {
     | 'ready_for_decision' | 'inconclusive' | 'decided';
   recommendedAction:
     | 'continue_measuring' | 'keep' | 'undo_suggested'
-    | 'try_alternative' | 'stack_next_change' | 'manual_review';
+    | 'try_alternative' | 'stack_next_change' | 'manual_review'
+    | 'neutral_no_clear_lift' | 'measurement_expired';
   primaryMetric:         string | null;
   primaryMetricBefore:   number | null;
   primaryMetricAfter:    number | null;
@@ -298,6 +299,14 @@ export interface DecisionV2 {
   revenuePerViewLift:    number | null;
   addToCartLift:         number | null;
   checkoutStartLift:     number | null;
+  // Store-trend (DiD) adjusted partial-credit fields.
+  rawLiftPercent?:              number | null;
+  expectedBaselineLiftPercent?: number | null;
+  adjustedLiftPercent?:         number | null;
+  creditedLiftPercent?:         number | null;
+  creditedRevenueImpact?:       number | null;
+  creditedOrdersImpact?:        number | null;
+  creditBand?:                  'not_creditable' | 'low' | 'medium' | 'strong';
   confidenceScore:       number | null;
   dataQualityScore:      number | null;
   downsideRiskScore:     number | null;
