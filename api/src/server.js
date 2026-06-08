@@ -86,6 +86,12 @@ if (!process.env.NODE_ENV) {
   );
 }
 
+// Trust the first proxy hop (Render/Cloudflare terminate TLS upstream).
+// Without this, req.secure is false behind the proxy and express-session
+// refuses to emit a `Secure` cookie — so the session cookie is never set.
+// Trust exactly one hop (not `true`) to avoid honoring spoofed X-Forwarded-* headers.
+app.set('trust proxy', 1);
+
 app.use(session({
   store: new PgSession({
     conString: process.env.DATABASE_URL,
@@ -99,7 +105,10 @@ app.use(session({
   cookie: {
     httpOnly: true,
     secure:   process.env.NODE_ENV === 'production',
-    sameSite: 'lax',
+    // Staging dashboard (Vercel) and API (Render) are cross-site, so the
+    // session cookie must be SameSite=None to be sent on cross-site fetch.
+    // None requires Secure, which holds in production. Local dev stays Lax.
+    sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
     maxAge:   7 * 24 * 60 * 60 * 1000, // 7 days
   },
 }));

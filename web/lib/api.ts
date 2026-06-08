@@ -373,7 +373,10 @@ export async function fetchMe(cookieHeader?: string): Promise<{ shopDomain: stri
   try {
     const headers: Record<string, string> = apiHeaders();
     if (cookieHeader) headers['Cookie'] = cookieHeader;
-    const res = await fetch(`${API_BASE}/auth/me`, { cache: 'no-store', headers });
+    // credentials:'include' lets the browser attach the cross-site session
+    // cookie when fetchMe runs client-side. Harmless no-op server-side, where
+    // the forwarded Cookie header above carries the session instead.
+    const res = await fetch(`${API_BASE}/auth/me`, { cache: 'no-store', credentials: 'include', headers });
     if (!res.ok) return null;
     return await res.json();
   } catch {
