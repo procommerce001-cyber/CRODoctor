@@ -9,8 +9,13 @@ const { captureWindowedBeforeSnapshot }  = require('../services/metrics.service'
 const { registerWebhooks }               = require('../services/webhook-registration.service');
 const { ensureScriptTag }                = require('../services/shopify-admin.service');
 const {
-  pendingOAuthStates,
   OAUTH_STATE_TTL_MS,
+  OAUTH_STATE_COOKIE,
+  signOAuthState,
+  readCookie,
+  oauthStateCookieOptions,
+  oauthStateClearOptions,
+  validateOAuthCallback,
   verifyShopifyHmac,
   isValidShopDomain,
 } = require('../lib/shopify-oauth');
@@ -265,8 +270,12 @@ router.get('/install', (req, res) => {
     return res.status(400).json({ error: 'Missing or invalid shop parameter (must be *.myshopify.com).' });
   }
 
-  const state = crypto.randomBytes(16).toString('hex');
-  pendingOAuthStates.set(state, { shop, expiresAt: Date.now() + OAUTH_STATE_TTL_MS });
+  // Durable OAuth state: sign {shop, state, expiresAt} into a short-lived,
+  // httpOnly cookie scoped to /auth. Survives Render restart/redeploy/cold-start
+  // and works across instances, unlike the previous in-memory Map.
+  const state     = crypto.randomBytes(16).toString('hex');
+  const expiresAt = Date.now() + OAUTH_STATE_TTL_MS;
+  res.cookie(OAUTH_STATE_COOKIE, signOAuthState({ shop, state, expiresAt }), oauthStateCookieOptions());
 
   const authUrl = new URL(`https://${shop}/admin/oauth/authorize`);
   authUrl.searchParams.set('client_id',    CLIENT_ID);
@@ -302,19 +311,18 @@ router.get('/callback', async (req, res) => {
     return res.status(400).json({ error: 'Invalid or missing shop parameter.' });
   }
 
-  // 1b. Validate state nonce (CSRF protection)
-  const pending = pendingOAuthStates.get(state);
-  if (!pending) {
-    return res.status(403).json({ error: 'Invalid or expired state parameter.' });
+  // 1b. Validate state nonce (CSRF protection) against the signed cookie set
+  // at /auth/install. Clear the cookie on BOTH success and failure so a state
+  // is practically one-time-use (a refreshed/replayed callback has no cookie).
+  const stateResult = validateOAuthCallback({
+    cookieToken:   readCookie(req, OAUTH_STATE_COOKIE),
+    returnedState: state,
+    shop,
+  });
+  res.clearCookie(OAUTH_STATE_COOKIE, oauthStateClearOptions());
+  if (!stateResult.ok) {
+    return res.status(stateResult.status).json({ error: stateResult.error });
   }
-  if (pending.shop !== shop) {
-    return res.status(403).json({ error: 'State/shop mismatch.' });
-  }
-  if (Date.now() > pending.expiresAt) {
-    pendingOAuthStates.delete(state);
-    return res.status(403).json({ error: 'OAuth state expired. Please restart the install flow.' });
-  }
-  pendingOAuthStates.delete(state); // one-time use
 
   // 1c. Verify HMAC signature
   if (!verifyShopifyHmac(req.query, CLIENT_SECRET)) {
