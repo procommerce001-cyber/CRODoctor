@@ -486,4 +486,35 @@ router.get('/me', (req, res) => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// GET /auth/onboarding-status
+// Session-protected poll target for the onboarding screen. Returns only the
+// coarse setupStatus enum for the authenticated session's store. Replaces the
+// previous anon Supabase Realtime subscription on the Store table, so Store can
+// be RLS-locked with no public/anon access path. Never returns the access token.
+// ---------------------------------------------------------------------------
+router.get('/onboarding-status', async (req, res) => {
+  if (!req.session?.storeId) {
+    return res.status(401).json({ error: 'Not authenticated.' });
+  }
+  // Defense in depth: if the client passes a storeId, it must match the session.
+  if (req.query.storeId && req.query.storeId !== req.session.storeId) {
+    return res.status(403).json({ error: 'Store mismatch.' });
+  }
+  try {
+    const prisma = req.app.get('prisma');
+    const store = await prisma.store.findUnique({
+      where:  { id: req.session.storeId },
+      select: { setupStatus: true },
+    });
+    if (!store) {
+      return res.status(404).json({ error: 'Store not found.' });
+    }
+    res.json({ setupStatus: store.setupStatus });
+  } catch (err) {
+    console.error('[Auth] onboarding-status error:', err.message);
+    res.status(500).json({ error: 'Failed to read onboarding status.' });
+  }
+});
+
 module.exports = router;

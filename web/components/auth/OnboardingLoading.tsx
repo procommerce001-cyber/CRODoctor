@@ -2,13 +2,14 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { supabase } from '@/lib/supabase';
+import { fetchOnboardingStatus } from '@/lib/api';
 
 const TIMEOUT_MS = 45_000;
+const POLL_MS    = 2_500;
 
 type Phase =
   | 'connecting'    // 0 – 2 s  initial
-  | 'syncing'       // 2 s+     once subscription is confirmed
+  | 'syncing'       // 2 s+     once polling has begun
   | 'success'       // COMPLETED received
   | 'timeout';      // 45 s elapsed with no COMPLETED
 
@@ -19,7 +20,7 @@ interface Props {
 export default function OnboardingLoading({ storeId }: Props) {
   const router               = useRouter();
   const [phase, setPhase]    = useState<Phase>('connecting');
-  const channelRef           = useRef<ReturnType<typeof supabase.channel> | null>(null);
+  const pollRef              = useRef<ReturnType<typeof setInterval> | null>(null);
   const timeoutRef           = useRef<ReturnType<typeof setTimeout> | null>(null);
   const successTimerRef      = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -33,41 +34,38 @@ export default function OnboardingLoading({ storeId }: Props) {
       setPhase(p => p === 'success' ? p : 'timeout');
     }, TIMEOUT_MS);
 
-    // Subscribe to UPDATE events on the Store row for this storeId.
-    const channel = supabase
-      .channel(`store-onboarding-${storeId}`)
-      .on(
-        'postgres_changes',
-        {
-          event:  'UPDATE',
-          schema: 'public',
-          table:  'Store',
-          filter: `id=eq.${storeId}`,
-        },
-        (payload) => {
-          const next = (payload.new as { setupStatus?: string }).setupStatus;
-          if (next === 'COMPLETED') {
-            // Clear the timeout so it can't fire after we're done.
-            if (timeoutRef.current) clearTimeout(timeoutRef.current);
+    // Poll the session-protected onboarding-status endpoint until COMPLETED.
+    // Replaces the previous anon Supabase Realtime subscription on the Store
+    // table, so Store can be RLS-locked with no public/anon access path.
+    let stopped = false;
+    const finish = () => {
+      if (stopped) return;
+      stopped = true;
+      if (pollRef.current)    clearInterval(pollRef.current);
+      if (timeoutRef.current) clearTimeout(timeoutRef.current);
 
-            setPhase('success');
+      setPhase('success');
 
-            // Show success state for 1 s, then navigate.
-            successTimerRef.current = setTimeout(() => {
-              router.push('/dashboard');
-            }, 1000);
-          }
-        },
-      )
-      .subscribe();
+      // Show success state for 1 s, then navigate.
+      successTimerRef.current = setTimeout(() => {
+        router.push('/dashboard');
+      }, 1000);
+    };
 
-    channelRef.current = channel;
+    const poll = async () => {
+      const res = await fetchOnboardingStatus(storeId);
+      if (res?.setupStatus === 'COMPLETED') finish();
+    };
+
+    poll(); // immediate first check
+    pollRef.current = setInterval(poll, POLL_MS);
 
     return () => {
+      stopped = true;
       clearTimeout(connectTimer);
-      if (timeoutRef.current)    clearTimeout(timeoutRef.current);
+      if (pollRef.current)         clearInterval(pollRef.current);
+      if (timeoutRef.current)      clearTimeout(timeoutRef.current);
       if (successTimerRef.current) clearTimeout(successTimerRef.current);
-      supabase.removeChannel(channel);
     };
   }, [storeId, router]);
 

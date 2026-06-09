@@ -384,6 +384,24 @@ export async function fetchMe(cookieHeader?: string): Promise<{ shopDomain: stri
   }
 }
 
+// fetchOnboardingStatus — session-protected poll for the onboarding screen.
+// Returns the coarse setupStatus enum (or null on any failure) so the client
+// can poll for COMPLETED without an anon Supabase Realtime subscription.
+export async function fetchOnboardingStatus(storeId?: string): Promise<{ setupStatus: string } | null> {
+  try {
+    const qs  = storeId ? `?storeId=${encodeURIComponent(storeId)}` : '';
+    const res = await fetch(`${API_BASE}/auth/onboarding-status${qs}`, {
+      cache:       'no-store',
+      credentials: 'include',
+      headers:     apiHeaders(),
+    });
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
+    return null;
+  }
+}
+
 export async function fetchDashboard(shop: string): Promise<DashboardPayload> {
   const res = await fetch(
     `${API_BASE}/dashboard/selection?shop=${encodeURIComponent(shop)}`,
