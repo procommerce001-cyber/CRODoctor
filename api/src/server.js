@@ -51,14 +51,28 @@ function safeStore(store) {
 // ---------------------------------------------------------------------------
 // CORS — open for public event/tracker paths; restricted elsewhere
 // ---------------------------------------------------------------------------
-const ALLOWED_ORIGIN = process.env.ALLOWED_ORIGIN || 'http://localhost:5173';
+// Normalize trailing slash so a stray slash in the env value (e.g.
+// "https://app.example.com/") still matches the browser-sent Origin, which
+// never has one. Supports a comma-separated allowlist for multiple frontends.
+const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGIN || 'http://localhost:5173')
+  .split(',')
+  .map(o => o.trim().replace(/\/$/, ''))
+  .filter(Boolean);
 
 app.use(cors(function corsDelegate(req, callback) {
   const pub = req.path === '/cro-tracker.js' || req.path.startsWith('/events');
   if (pub) return callback(null, { origin: true, credentials: false });
   const origin = req.headers.origin;
-  if (!origin || origin === ALLOWED_ORIGIN) return callback(null, { origin: true, credentials: true });
-  callback(new Error(`CORS: origin "${origin}" is not allowed`));
+  // No Origin header (server-to-server, top-level OAuth navigation): allow.
+  if (!origin) return callback(null, { origin: true, credentials: true });
+  if (ALLOWED_ORIGINS.includes(origin.replace(/\/$/, ''))) {
+    return callback(null, { origin: true, credentials: true });
+  }
+  // Disallowed origin: respond WITHOUT CORS headers instead of throwing.
+  // Throwing here propagates to Express's default handler as an uncaught
+  // 500 "Internal Server Error" white page; returning origin:false lets the
+  // request proceed and the browser cleanly blocks the cross-origin read.
+  callback(null, { origin: false });
 }));
 
 // ---------------------------------------------------------------------------
