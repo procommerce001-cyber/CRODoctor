@@ -43,6 +43,25 @@ async function updateProductDescription(store, shopifyProductId, bodyHtml) {
   const { product } = await res.json();
   return product;
 }
+
+// Private read companion to updateProductDescription — fetches the live
+// body_html from Shopify. Used only to reconcile a stale 'applying' row against
+// the authoritative source (never the local Product.bodyHtml mirror, which in
+// the orphan case still holds previousContent while Shopify already has the
+// applied resultContent). Read-only; never writes.
+async function fetchLiveProductBodyHtml(store, shopifyProductId) {
+  const url = `https://${store.shopDomain}/admin/api/2024-01/products/${shopifyProductId}.json?fields=id,body_html`;
+  const res = await fetch(url, {
+    method:  'GET',
+    headers: { 'X-Shopify-Access-Token': store.accessToken, 'Content-Type': 'application/json' },
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Shopify API ${res.status} — ${url}\n${text}`);
+  }
+  const { product } = await res.json();
+  return product?.body_html ?? null;
+}
 const { classifyExecution }              = require('./cro/classifyExecution');
 const { buildResultContent,
         wrapIssueContent,
@@ -1456,61 +1475,286 @@ async function applyContentChange(prisma, store, rawProduct, actionItem) {
     if (candidate !== resultContent) markedContent = candidate;
   } catch (_) { /* non-fatal — apply proceeds without marker */ }
 
-  // 3. Shopify write
-  try {
-    await updateProductDescription(store, rawProduct.shopifyProductId, markedContent);
-  } catch (err) {
-    return { applied: false, error: `Shopify write failed: ${err.message}` };
-  }
-
-  // 4a. Persist execution record
   const patchMode = (!currentContent || currentContent.trim().length === 0)
     ? 'replace_full_body'
     : 'insert_after_anchor';
+  const anchorUsed = patchMode === 'insert_after_anchor' ? '</p>' : null;
 
-  // afterReadyAt: the timestamp at which the 7-day after-window closes and
-  // the after-snapshot can be captured. Exactly 7 days from now.
-  const afterReadyAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+  // 3-4. Orphan-safe two-phase write: reserve an 'applying' row with full
+  //      recovery data BEFORE the Shopify write, then flip it to 'applied'
+  //      after. If the final flip fails, the 'applying' row survives and is
+  //      reconciled later — a successful Shopify write can never become an
+  //      untracked orphan that rollback cannot reach.
+  return executeTwoPhaseWrite(prisma, {
+    executionId,
+    store,
+    rawProduct,
+    issueId:              actionItem.issueId,
+    selectedVariantIndex: 0,
+    patchMode,
+    anchorUsed,
+    previousContent:      currentContent,
+    proposedContent,
+    markedContent,
+  });
+}
 
+// ---------------------------------------------------------------------------
+// executeTwoPhaseWrite
+//
+// Orphan-write-safe execution of a content_change apply. Splits the previous
+// "Shopify write then DB create" into phases so a successful Shopify write can
+// never be left without a tracked, rollback-able execution row:
+//
+//   Phase 1  reserve a ContentExecution row with status 'applying' BEFORE the
+//            external write, persisting all recovery data (previousContent,
+//            newContent, resultContent/markedContent, ids, afterReadyAt).
+//   Phase 2  write to Shopify. On failure → mark the row 'failed'.
+//   Phase 3  flip 'applying' → 'applied'. If this fails AFTER a successful
+//            write, the row stays 'applying' with full recovery data and is
+//            reconciled later (never an untracked orphan).
+//   Phase 4  mirror Product.bodyHtml locally (non-fatal).
+//
+// Idempotency: a recent 'applying' row short-circuits (no double write); a
+// stale one is reconciled first. The partial unique index (WHERE status =
+// 'applied') remains the hard backstop at the flip. writeShopify is injectable
+// for tests; it defaults to updateProductDescription so production behaviour is
+// unchanged.
+// ---------------------------------------------------------------------------
+const APPLYING_STALE_MS = 2 * 60 * 1000; // an 'applying' row older than this is stale
+
+// Deterministic 64-bit advisory-lock key (two int4 halves) for one
+// (store, product, issue) tuple. Two independent hashes make cross-tuple
+// collisions ~2^-64, so unrelated applies never spuriously block each other.
+function advisoryLockKey(...parts) {
+  const s = parts.join(':');
+  let h1 = 0x811c9dc5 | 0;
+  let h2 = 0;
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    h1 = Math.imul(h1 ^ c, 0x01000193) | 0;
+    h2 = (Math.imul(31, h2) + c) | 0;
+  }
+  return [h1, h2];
+}
+
+async function executeTwoPhaseWrite(prisma, {
+  executionId,
+  store,
+  rawProduct,
+  issueId,
+  selectedVariantIndex = 0,
+  patchMode,
+  anchorUsed,
+  previousContent,
+  proposedContent,
+  markedContent,
+  writeShopify   = updateProductDescription,
+  readShopifyBody = fetchLiveProductBodyHtml,
+  now = Date.now(),
+}) {
+  // 0. Stale-applying reconciliation. A recent 'applying' row means a sibling
+  //    request is mid-flight → bail without writing. A stale one is reconciled
+  //    against the LIVE Shopify body (outside any transaction, since it does an
+  //    external read).
+  const existing = await prisma.contentExecution.findFirst({
+    where:   { productId: rawProduct.id, issueId, status: 'applying' },
+    orderBy: { createdAt: 'desc' },
+  });
+  if (existing) {
+    const age = now - new Date(existing.createdAt).getTime();
+    if (age < APPLYING_STALE_MS) {
+      return { applied: false, skipped: true, reason: 'apply already in progress' };
+    }
+    const r = await reconcileApplyingExecution(prisma, {
+      execution:        existing,
+      store,
+      shopifyProductId: rawProduct.shopifyProductId,
+      readShopifyBody,
+    });
+    if (r.status === 'applied') {
+      return { applied: false, skipped: true, reason: 'already applied' };
+    }
+    if (r.needsAttention) {
+      return {
+        applied:     false,
+        blockReason: 'A previous apply is in an unknown state and needs review before retrying.',
+      };
+    }
+    // r.status === 'failed' → safe to attempt a fresh apply below.
+  }
+
+  const afterReadyAt = new Date(now + 7 * 24 * 60 * 60 * 1000);
+  const [lockA, lockB] = advisoryLockKey(store.id, rawProduct.id, issueId);
+
+  // Phase 1 — atomic reserve under a Postgres transaction-scoped advisory lock.
+  //   The lock serializes concurrent applies for the SAME (store, product,
+  //   issue) so two near-simultaneous requests cannot both create an 'applying'
+  //   row (and therefore cannot both write to Shopify). The transaction is
+  //   short — lock + recheck + create only, no external calls held. The lock
+  //   auto-releases on commit; by then the 'applying' row is visible, so any
+  //   sibling re-checks it and bails.
+  let reserve;
   try {
-    await prisma.contentExecution.create({
-      data: {
-        id:                   executionId,
-        storeId:              store.id,
-        productId:            rawProduct.id,
-        issueId:              actionItem.issueId,
-        selectedVariantIndex: 0,
-        patchMode,
-        anchorUsed:           patchMode === 'insert_after_anchor' ? '</p>' : null,
-        matchedBlock:         null,
-        previousContent:      currentContent,
-        newContent:           proposedContent,
-        resultContent:        markedContent,
-        status:               'applied',
-        afterReadyAt,
-      },
+    reserve = await prisma.$transaction(async (tx) => {
+      const lockRows = await tx.$queryRaw`SELECT pg_try_advisory_xact_lock(${lockA}, ${lockB}) AS locked`;
+      const locked   = Array.isArray(lockRows) && lockRows[0] && lockRows[0].locked === true;
+      if (!locked) return { outcome: 'busy' };
+
+      // Re-check inside the lock so a just-completed apply is not duplicated.
+      const applied = await tx.contentExecution.findFirst({
+        where: { productId: rawProduct.id, issueId, status: 'applied' },
+      });
+      if (applied) {
+        const undone = await tx.contentExecution.findFirst({
+          where: { referenceExecutionId: applied.id, status: 'rolled_back' },
+        });
+        if (!undone) return { outcome: 'already_applied' };
+      }
+      const racing = await tx.contentExecution.findFirst({
+        where: { productId: rawProduct.id, issueId, status: 'applying' },
+      });
+      if (racing) return { outcome: 'in_progress' };
+
+      await tx.contentExecution.create({
+        data: {
+          id:                   executionId,
+          storeId:              store.id,
+          productId:            rawProduct.id,
+          issueId,
+          selectedVariantIndex,
+          patchMode,
+          anchorUsed,
+          matchedBlock:         null,
+          previousContent,
+          newContent:           proposedContent,
+          resultContent:        markedContent,
+          status:               'applying',
+          afterReadyAt,
+        },
+      });
+      return { outcome: 'reserved' };
     });
   } catch (err) {
     if (err.code === 'P2002') {
       return { applied: false, skipped: true, reason: 'already applied' };
     }
-    throw err;
+    // Reservation failed → the Shopify write never happens.
+    return { applied: false, error: `Could not reserve execution: ${err.message}` };
   }
 
-  // 4b. Update local product
-  await prisma.product.update({
-    where: { id: rawProduct.id },
-    data:  { bodyHtml: markedContent },
-  });
+  if (reserve.outcome === 'busy' || reserve.outcome === 'in_progress') {
+    return { applied: false, skipped: true, reason: 'apply already in progress' };
+  }
+  if (reserve.outcome === 'already_applied') {
+    return { applied: false, skipped: true, reason: 'already applied' };
+  }
+  // reserve.outcome === 'reserved' → proceed.
+
+  // Phase 2 — external Shopify write (outside the transaction).
+  try {
+    await writeShopify(store, rawProduct.shopifyProductId, markedContent);
+  } catch (err) {
+    await prisma.contentExecution
+      .update({ where: { id: executionId }, data: { status: 'failed' } })
+      .catch(() => { /* best-effort; reconciliation can still resolve it */ });
+    return { applied: false, error: `Shopify write failed: ${err.message}` };
+  }
+
+  // Phase 3 — flip 'applying' → 'applied'.
+  try {
+    await prisma.contentExecution.update({
+      where: { id: executionId },
+      data:  { status: 'applied' },
+    });
+  } catch (err) {
+    if (err.code === 'P2002') {
+      // A concurrent apply already holds the applied slot; this attempt loses.
+      await prisma.contentExecution
+        .update({ where: { id: executionId }, data: { status: 'failed' } })
+        .catch(() => {});
+      return { applied: false, skipped: true, reason: 'already applied' };
+    }
+    // Write landed but finalize failed — row stays 'applying' for reconciliation.
+    return {
+      applied:          false,
+      pendingReconcile: true,
+      executionId,
+      error:            'Applied to Shopify but failed to finalize tracking; will reconcile.',
+    };
+  }
+
+  // Phase 4 — local product mirror (non-fatal; execution row is source of truth).
+  await prisma.product
+    .update({ where: { id: rawProduct.id }, data: { bodyHtml: markedContent } })
+    .catch(() => { /* execution already 'applied'; local mirror may lag */ });
 
   return {
     applied:          true,
-    issueId:          actionItem.issueId,
+    issueId,
     productId:        rawProduct.id,
     shopifyProductId: rawProduct.shopifyProductId,
-    previousContent:  currentContent,
+    previousContent,
     appliedContent:   proposedContent,
   };
+}
+
+// ---------------------------------------------------------------------------
+// reconcileApplyingExecution
+//
+// Resolves a single stale/stuck 'applying' row by comparing the AUTHORITATIVE
+// live Shopify body (never the local Product.bodyHtml mirror) against the row's
+// stored content, using the same drift-tolerant compare as rollback. Read-only;
+// never writes to Shopify.
+//
+//   live body ≡ resultContent   → the write landed → promote to 'applied'
+//   live body ≡ previousContent → the write missed  → mark 'failed'
+//   neither                     → unknown/edited    → leave 'applying', flag it
+//   live read fails/unavailable → DO NOT mark failed → leave 'applying', flag it
+//
+// readShopifyBody is injectable for tests; it defaults to fetchLiveProductBodyHtml.
+// ---------------------------------------------------------------------------
+async function reconcileApplyingExecution(prisma, {
+  execution,
+  store,
+  shopifyProductId,
+  readShopifyBody = fetchLiveProductBodyHtml,
+}) {
+  if (!execution || execution.status !== 'applying') {
+    return { reconciled: false, status: execution?.status ?? null };
+  }
+
+  // Never decide applied/failed from a stale local mirror. If the live read
+  // fails, return needsAttention (retry later) rather than risk a false 'failed'
+  // on a change that is actually live on Shopify.
+  let liveBody;
+  try {
+    liveBody = await readShopifyBody(store, shopifyProductId);
+  } catch (err) {
+    return { reconciled: false, status: 'applying', needsAttention: true, reason: 'live Shopify read failed' };
+  }
+
+  if (safeHtmlEquivalent(liveBody, execution.resultContent)) {
+    const afterReadyAt = execution.afterReadyAt
+      ?? new Date(new Date(execution.createdAt).getTime() + 7 * 24 * 60 * 60 * 1000);
+    await prisma.contentExecution.update({
+      where: { id: execution.id },
+      data:  { status: 'applied', afterReadyAt },
+    });
+    return { reconciled: true, status: 'applied' };
+  }
+
+  if (safeHtmlEquivalent(liveBody, execution.previousContent)) {
+    await prisma.contentExecution.update({
+      where: { id: execution.id },
+      data:  { status: 'failed' },
+    });
+    return { reconciled: true, status: 'failed' };
+  }
+
+  // Live body matches neither — a manual edit or an unknown state. Never
+  // overwrite; flag for review.
+  return { reconciled: false, status: 'applying', needsAttention: true };
 }
 
 // ---------------------------------------------------------------------------
@@ -1697,6 +1941,8 @@ module.exports = {
   buildActionPreview,
   checkApplyGate,
   applyContentChange,
+  executeTwoPhaseWrite,
+  reconcileApplyingExecution,
   rollbackContentChange,
   buildBatchPreview,
 };
