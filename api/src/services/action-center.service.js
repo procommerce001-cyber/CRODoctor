@@ -1523,9 +1523,13 @@ async function applyContentChange(prisma, store, rawProduct, actionItem) {
 // ---------------------------------------------------------------------------
 const APPLYING_STALE_MS = 2 * 60 * 1000; // an 'applying' row older than this is stale
 
-// Deterministic 64-bit advisory-lock key (two int4 halves) for one
-// (store, product, issue) tuple. Two independent hashes make cross-tuple
-// collisions ~2^-64, so unrelated applies never spuriously block each other.
+// Deterministic signed 64-bit advisory-lock key (BigInt) for one
+// (store, product, issue) tuple. Two independent 32-bit hashes are packed into
+// the high/low halves, giving ~2^-64 cross-tuple collisions so unrelated
+// applies never spuriously block each other. Returned as a BigInt so Prisma
+// binds it to the single-argument pg_try_advisory_xact_lock(bigint) overload
+// (the two-argument form is (int4,int4) — passing two JS numbers binds them as
+// bigint and resolves to a non-existent (bigint,bigint) overload).
 function advisoryLockKey(...parts) {
   const s = parts.join(':');
   let h1 = 0x811c9dc5 | 0;
@@ -1535,7 +1539,10 @@ function advisoryLockKey(...parts) {
     h1 = Math.imul(h1 ^ c, 0x01000193) | 0;
     h2 = (Math.imul(31, h2) + c) | 0;
   }
-  return [h1, h2];
+  // Pack the two unsigned 32-bit halves into a 64-bit value, then map to the
+  // signed int8 range Postgres advisory keys use.
+  const unsigned = (BigInt(h1 >>> 0) << 32n) | BigInt(h2 >>> 0);
+  return BigInt.asIntN(64, unsigned);
 }
 
 async function executeTwoPhaseWrite(prisma, {
@@ -1585,7 +1592,7 @@ async function executeTwoPhaseWrite(prisma, {
   }
 
   const afterReadyAt = new Date(now + 7 * 24 * 60 * 60 * 1000);
-  const [lockA, lockB] = advisoryLockKey(store.id, rawProduct.id, issueId);
+  const lockKey = advisoryLockKey(store.id, rawProduct.id, issueId);
 
   // Phase 1 — atomic reserve under a Postgres transaction-scoped advisory lock.
   //   The lock serializes concurrent applies for the SAME (store, product,
@@ -1597,7 +1604,7 @@ async function executeTwoPhaseWrite(prisma, {
   let reserve;
   try {
     reserve = await prisma.$transaction(async (tx) => {
-      const lockRows = await tx.$queryRaw`SELECT pg_try_advisory_xact_lock(${lockA}, ${lockB}) AS locked`;
+      const lockRows = await tx.$queryRaw`SELECT pg_try_advisory_xact_lock(${lockKey}) AS locked`;
       const locked   = Array.isArray(lockRows) && lockRows[0] && lockRows[0].locked === true;
       if (!locked) return { outcome: 'busy' };
 
@@ -1639,8 +1646,13 @@ async function executeTwoPhaseWrite(prisma, {
     if (err.code === 'P2002') {
       return { applied: false, skipped: true, reason: 'already applied' };
     }
-    // Reservation failed → the Shopify write never happens.
-    return { applied: false, error: `Could not reserve execution: ${err.message}` };
+    // Reservation failed → the Shopify write never happens. Log the internal
+    // detail server-side; surface only a safe, specific message so the execute
+    // route does not collapse it into a generic "Apply was blocked." and no
+    // SQL/internal detail reaches the UI.
+    console.error('[ActionCenter] execution reservation failed:', err.message);
+    const safe = 'Apply could not start safely. Please try again.';
+    return { applied: false, blockReason: safe, reason: safe };
   }
 
   if (reserve.outcome === 'busy' || reserve.outcome === 'in_progress') {

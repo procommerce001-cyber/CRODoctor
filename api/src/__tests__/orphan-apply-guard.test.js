@@ -100,13 +100,15 @@ function baseArgs(writeShopify, extra = {}) {
 }
 
 // ── A. reservation fails before Shopify write ───────────────────────────────
-test('reservation failure prevents any Shopify write', async () => {
+test('reservation failure prevents any Shopify write (safe message, no SQL leak)', async () => {
   const { prisma, calls } = makePrisma({ createError: new Error('db down') });
   const writer = makeWriter();
   const res = await executeTwoPhaseWrite(prisma, baseArgs(writer));
   assert.equal(writer.calls.length, 0, 'no Shopify write attempted');
   assert.equal(res.applied, false);
-  assert.match(res.error, /reserve/i);
+  assert.match(res.blockReason, /try again/i, 'surfaces a specific user-facing reason');
+  assert.equal(res.reason, res.blockReason);
+  assert.equal(res.error, undefined, 'no raw error/SQL detail returned to the caller');
   assert.equal(calls.productUpdate.length, 0);
 });
 
@@ -306,4 +308,29 @@ test('reconcile: non-applying row is a no-op (no live read)', async () => {
   assert.equal(r.reconciled, false);
   assert.equal(calls.update.length, 0);
   assert.equal(reader.calls, 0, 'no live read for a non-applying row');
+});
+
+// ── Integration probe: the EXACT advisory-lock query form must execute on a
+// real Postgres (this is what the unit mocks could not catch). Acquires a
+// transient transaction-scoped lock (auto-released at commit) — no data
+// mutation. Skips cleanly when DATABASE_URL is not available.
+// ---------------------------------------------------------------------------
+test('advisory-lock query uses a valid Postgres overload (integration probe)', async (t) => {
+  try { require('dotenv').config({ path: require('node:path').join(__dirname, '../../.env') }); } catch { /* dotenv optional */ }
+  if (!process.env.DATABASE_URL) {
+    t.skip('no DATABASE_URL — skipping live advisory-lock probe');
+    return;
+  }
+  const { PrismaClient } = require('@prisma/client');
+  const prisma = new PrismaClient();
+  try {
+    // A signed 64-bit BigInt key, exactly as advisoryLockKey() produces.
+    const lockKey = BigInt.asIntN(64, (123456789n << 32n) | 987654321n);
+    const rows = await prisma.$transaction(async (tx) =>
+      tx.$queryRaw`SELECT pg_try_advisory_xact_lock(${lockKey}) AS locked`);
+    assert.equal(Array.isArray(rows), true);
+    assert.equal(rows[0].locked, true, 'pg_try_advisory_xact_lock(bigint) executed and acquired the lock');
+  } finally {
+    await prisma.$disconnect();
+  }
 });
