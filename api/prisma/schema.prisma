@@ -366,3 +366,19 @@ model PdpEvent {
   @@index([productId, issuedAt])
   @@index([sessionId])
 }
+
+// ---------------------------------------------------------------------------
+// Session — express-session store table for connect-pg-simple.
+// Mapped (not used by app code) purely so Prisma treats public."session" as a
+// managed table and `prisma db push` never drops it again. The table is created
+// by migration 20260418000000_add_session_table; this model matches it exactly
+// (varchar / json / timestamp(6) + IDX_session_expire). Do not reference in code.
+// ---------------------------------------------------------------------------
+model Session {
+  sid    String   @id @db.VarChar
+  sess   Json     @db.Json
+  expire DateTime @db.Timestamp(6)
+
+  @@index([expire], map: "IDX_session_expire")
+  @@map("session")
+}
