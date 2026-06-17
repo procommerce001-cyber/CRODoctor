@@ -3,7 +3,8 @@
 import { useState } from 'react';
 import type { ReviewItem, TopAction, ActivityItem, ContentPreview, ApplyResponse } from '@/lib/api';
 import { fetchContentPreview, applySelected, submitReviewApproval, issueLabel, API_BASE, apiHeaders } from '@/lib/api';
-import { blockReasonLabel, isManualBlockReason, PREVIEW_UNAVAILABLE_MSG, proposedContentLabel } from './previewCopy';
+import { blockReasonLabel, isManualBlockReason, PREVIEW_UNAVAILABLE_MSG, proposedContentLabel,
+         PREVIEW_DISCLAIMER, APPLY_SUCCESS_TITLE, APPLY_SUCCESS_SUB, APPLY_FAILED_MSG, ROLLBACK_FAILED_MSG } from './previewCopy';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -13,7 +14,7 @@ type SectionFilter = 'all' | 'ready' | 'wins' | 'measuring' | 'upnext' | 'protec
 const PILL_CFG: Record<FeedStatus, { label: string; color: string; bg: string; border: string }> = {
   ready:       { label: 'Ready',       color: '#ffffff', bg: '#15803d',                    border: 'transparent' },
   queued:      { label: 'Up next',     color: '#9ca3af', bg: 'rgba(255,255,255,0.05)',      border: 'rgba(255,255,255,0.10)' },
-  live:        { label: 'Live',        color: '#4ade80', bg: 'rgba(34,197,94,0.08)',        border: 'rgba(34,197,94,0.22)' },
+  live:        { label: 'Live on Shopify', color: '#4ade80', bg: 'rgba(34,197,94,0.08)',    border: 'rgba(34,197,94,0.22)' },
   measuring:   { label: 'Measuring',   color: '#fbbf24', bg: 'rgba(251,191,36,0.08)',       border: 'rgba(251,191,36,0.22)' },
   measured:    { label: 'Measured',    color: '#60a5fa', bg: 'rgba(96,165,250,0.08)',       border: 'rgba(96,165,250,0.22)' },
   rolled_back: { label: 'Rolled back', color: '#6b7280', bg: 'rgba(107,114,128,0.06)',      border: 'rgba(107,114,128,0.18)' },
@@ -259,7 +260,7 @@ function HeroNextCard({ row, executing, onRunAction, previewState, onPreview, on
         />
       ) : (
         <button style={un.heroBtn} onClick={onPreview}>
-          Review change before applying
+          Preview fix
         </button>
       )}
       {previewState?.error && (
@@ -281,6 +282,7 @@ function PreviewPanel({ issueId, preview, applyState, isApplying, onApply, onClo
   const hasProposedContent = typeof preview.proposedContent === 'string' && preview.proposedContent.trim().length > 0;
   return (
     <div style={pp.wrap}>
+      <div style={{ fontSize: 12, color: '#9ca3af', marginBottom: 8 }}>{PREVIEW_DISCLAIMER}</div>
       <div style={pp.contextRow}>
         <span style={pp.contextText}>{patchDescription(preview.patchMode)}</span>
         {preview.diffSummary && <span style={pp.diffNote}>{preview.diffSummary.note}</span>}
@@ -311,8 +313,8 @@ function PreviewPanel({ issueId, preview, applyState, isApplying, onApply, onClo
               <div style={pp.reversibility}>You can undo this change anytime.</div>
               {applyState?.applied ? (
                 <div style={pp.successBlock}>
-                  <div style={pp.successText}>✓ Change applied successfully.</div>
-                  <div style={pp.successSub}>We&apos;re measuring its impact now.</div>
+                  <div style={pp.successText}>{APPLY_SUCCESS_TITLE}</div>
+                  <div style={pp.successSub}>{APPLY_SUCCESS_SUB}</div>
                 </div>
               ) : (
                 <div style={pp.actions}>
@@ -544,7 +546,7 @@ export default function OptimizationFeed({
         setApplyStates(s => ({ ...s, [key]: { applying: false, applied: true,  error: null } }));
         setPreviews(p => { const n = { ...p }; delete n[key]; return n; });
       } else {
-        setApplyStates(s => ({ ...s, [key]: { applying: false, applied: false, error: row?.reason ?? 'Apply did not succeed.' } }));
+        setApplyStates(s => ({ ...s, [key]: { applying: false, applied: false, error: row?.reason ?? APPLY_FAILED_MSG } }));
       }
     } catch (err) {
       setApplyStates(s => ({ ...s, [key]: { applying: false, applied: false, error: (err as Error).message } }));
@@ -561,7 +563,7 @@ export default function OptimizationFeed({
       );
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
-        throw new Error(body.error ?? `Rollback failed: ${res.status}`);
+        throw new Error(body.error ?? ROLLBACK_FAILED_MSG);
       }
       setRollbacks(r => ({ ...r, [execId]: { rolling: false, done: true,  error: null } }));
       onRollbackDone?.();
@@ -656,7 +658,7 @@ export default function OptimizationFeed({
             <div style={s.rowMain}>
               {item.productTitle && <span style={{ ...s.product, ...(narrow ? s.truncate : {}) }}>{item.productTitle}</span>}
               <span style={{ ...s.issue, ...(narrow ? s.truncate : {}) }}>{issueLabel(item.issueId)}</span>
-              {!narrow && <span style={s.sub}>{isLive ? 'Applied — tracking begins automatically' : 'Measuring — 7-day window'}</span>}
+              {!narrow && <span style={s.sub}>{isLive ? 'Live on Shopify — collecting data' : 'Measuring · collecting data'}</span>}
             </div>
             <div style={rowActionsStyle}>
               <span style={s.meta}>{formatDate(item.createdAt)}</span>
@@ -665,10 +667,10 @@ export default function OptimizationFeed({
                   style={s.undoBtn}
                   onClick={e => { e.stopPropagation(); setConfirmingRollbacks(r => ({ ...r, [item.executionId]: true })); }}
                 >
-                  Undo
+                  Undo this change
                 </button>
               )}
-              {rb?.done && <span style={s.undoDone}>Undone ✓</span>}
+              {rb?.done && <span style={s.undoDone}>✓ Reverted</span>}
             </div>
           </div>
           {confirmingRb && !rb?.done && (
@@ -680,7 +682,7 @@ export default function OptimizationFeed({
                   disabled={rb?.rolling}
                   onClick={() => doRollback(item.productId, item.issueId, item.executionId)}
                 >
-                  {rb?.rolling ? 'Reverting…' : 'Yes, revert'}
+                  {rb?.rolling ? 'Restoring previous version…' : 'Yes, revert'}
                 </button>
                 <button
                   style={s.undoBtn}

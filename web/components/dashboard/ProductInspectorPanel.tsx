@@ -5,7 +5,8 @@ import type { FeedRow } from './OptimizationFeed';
 import { fetchContentPreview, submitReviewApproval, fetchExecutionDetails } from '@/lib/api';
 import type { ContentPreview, DecisionV2 } from '@/lib/api';
 import DecisionV2Card from './DecisionV2Card';
-import { blockReasonLabel, PREVIEW_UNAVAILABLE_MSG, proposedContentLabel } from './previewCopy';
+import { blockReasonLabel, PREVIEW_UNAVAILABLE_MSG, proposedContentLabel,
+         PREVIEW_DISCLAIMER, APPLY_SUCCESS_TITLE, APPLY_SUCCESS_SUB, ROLLBACK_SUCCESS } from './previewCopy';
 
 const ISSUE_CATEGORY: Record<string, string> = {
   weak_desire_creation:         'Desire & copy',
@@ -37,11 +38,11 @@ const ISSUE_CATEGORY: Record<string, string> = {
 
 const STATUS_CFG: Record<string, { label: string; color: string; bg: string }> = {
   ready:       { label: 'Ready to apply',   color: '#22c55e', bg: 'rgba(34,197,94,0.08)'   },
-  live:        { label: 'Live · measuring', color: '#4ade80', bg: 'rgba(34,197,94,0.06)'   },
-  measuring:   { label: 'Measuring now',    color: '#fbbf24', bg: 'rgba(251,191,36,0.08)'  },
+  live:        { label: 'Live on Shopify',  color: '#4ade80', bg: 'rgba(34,197,94,0.06)'   },
+  measuring:   { label: 'Measuring · collecting data', color: '#fbbf24', bg: 'rgba(251,191,36,0.08)'  },
   measured:    { label: 'Measured',         color: '#60a5fa', bg: 'rgba(96,165,250,0.08)'  },
   queued:      { label: 'Up next',          color: '#9ca3af', bg: 'rgba(255,255,255,0.04)' },
-  rolled_back: { label: 'Protected',        color: '#6b7280', bg: 'rgba(107,114,128,0.06)' },
+  rolled_back: { label: 'Rolled back',      color: '#6b7280', bg: 'rgba(107,114,128,0.06)' },
 };
 
 const DECISION_SIGNAL_LABEL: Record<string, string> = {
@@ -262,8 +263,8 @@ export default function ProductInspectorPanel({
           {/* Success confirmation — shown immediately after apply, persists across feedStatus transitions */}
           {executeSuccess && (
             <div style={p.successBlock}>
-              <div style={p.successText}>✓ Change applied successfully.</div>
-              <div style={p.successSub}>We&apos;re measuring its impact now.</div>
+              <div style={p.successText}>{APPLY_SUCCESS_TITLE}</div>
+              <div style={p.successSub}>{APPLY_SUCCESS_SUB}</div>
             </div>
           )}
 
@@ -293,6 +294,7 @@ export default function ProductInspectorPanel({
                   <div style={p.guardNote}>{blockReasonLabel(pv.data.blockReason)}</div>
                 ) : (
                   <>
+                    <div style={{ fontSize: 12, color: '#9ca3af', marginBottom: 8 }}>{PREVIEW_DISCLAIMER}</div>
                     {pv.data.currentContent && (
                       <div>
                         <div style={p.pvLabel}>Current version on your product page</div>
@@ -359,7 +361,7 @@ export default function ProductInspectorPanel({
           {/* Measuring state — results ETA */}
           {!executeSuccess && row.feedStatus === 'measuring' && action.openMeasurementWindowReadyAt && (
             <div style={p.measuringNote}>
-              Results by {fmtReadyAt(action.openMeasurementWindowReadyAt)}
+              Collecting data — results by {fmtReadyAt(action.openMeasurementWindowReadyAt)}
             </div>
           )}
 
@@ -407,7 +409,7 @@ export default function ProductInspectorPanel({
 
             {/* Rollback — available while change is still live/measuring */}
             {activity.status === 'applied' && onRollback && rbSuccess && (
-              <div style={p.rbSuccess}>{rbSuccess}</div>
+              <div style={p.rbSuccess}>{ROLLBACK_SUCCESS}</div>
             )}
             {activity.status === 'applied' && onRollback && !rbSuccess && !confirmingRollback && (
               <>
@@ -428,7 +430,7 @@ export default function ProductInspectorPanel({
                     disabled={isRolling}
                     onClick={() => onRollback(activity.productId, activity.issueId)}
                   >
-                    {isRolling ? 'Reverting…' : 'Confirm revert'}
+                    {isRolling ? 'Restoring previous version…' : 'Confirm revert'}
                   </button>
                   <button style={p.rbCancelBtn} disabled={isRolling} onClick={() => setConfirmingRollback(false)}>
                     Cancel
