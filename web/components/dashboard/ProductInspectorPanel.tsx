@@ -413,6 +413,7 @@ export default function ProductInspectorPanel({
             )}
             {activity.status === 'applied' && onRollback && !rbSuccess && !confirmingRollback && (
               <>
+                <div style={p.rbHelper}>Need to undo? This restores the previous version.</div>
                 <button style={p.rbBtn} onClick={() => setConfirmingRollback(true)}>
                   Undo this change
                 </button>
@@ -598,9 +599,12 @@ const p: Record<string, React.CSSProperties> = {
   readyHint:  { fontSize: 11, color: '#6b7280', fontStyle: 'italic' as const },
 
   // Rollback section
-  rbBtn:          { background: 'none', border: '1px solid rgba(255,255,255,0.10)', borderRadius: 6,
-                    color: '#9ca3af', cursor: 'pointer', fontSize: 12, padding: '7px 14px',
-                    textAlign: 'left' as const, letterSpacing: '0.01em' },
+  // Secondary destructive CTA — subtle red outline so it reads as a real action,
+  // but stays calmer than the solid-red "Confirm revert" in the confirmation state.
+  rbHelper:       { fontSize: 11, color: '#6b7280', marginBottom: 6 },
+  rbBtn:          { background: 'rgba(248,113,113,0.06)', border: '1px solid rgba(248,113,113,0.30)', borderRadius: 6,
+                    color: '#fca5a5', cursor: 'pointer', fontSize: 12, fontWeight: 600, padding: '7px 14px',
+                    textAlign: 'left' as const, letterSpacing: '0.01em', alignSelf: 'flex-start' as const },
   rbSuccess:      { fontSize: 12, color: '#4ade80', padding: '6px 0' },
   rbConfirm:      { display: 'flex', flexDirection: 'column' as const, gap: 8, padding: '10px 14px',
                     background: 'rgba(248,113,113,0.05)', border: '1px solid rgba(248,113,113,0.18)',

@@ -664,7 +664,7 @@ export default function OptimizationFeed({
               <span style={s.meta}>{formatDate(item.createdAt)}</span>
               {canUndo && !rb?.done && !confirmingRb && (
                 <button
-                  style={s.undoBtn}
+                  style={s.undoCta}
                   onClick={e => { e.stopPropagation(); setConfirmingRollbacks(r => ({ ...r, [item.executionId]: true })); }}
                 >
                   Undo this change
@@ -1079,6 +1079,9 @@ const s: Record<string, React.CSSProperties> = {
   manualNoteClose:  { background: 'none', border: 'none', color: '#6b7280', cursor: 'pointer', fontSize: 11, padding: 0, textAlign: 'left' as const, textDecoration: 'underline', alignSelf: 'flex-start' as const },
   runBtn:   { fontSize: 11, fontWeight: 700, padding: '5px 14px', border: 'none', borderRadius: 5, background: '#16a34a', color: '#fff', cursor: 'pointer', whiteSpace: 'nowrap' as const },
   undoBtn:  { fontSize: 11, padding: '3px 10px', border: '1px solid rgba(255,255,255,0.10)', borderRadius: 4, background: 'rgba(255,255,255,0.04)', color: '#9ca3af', cursor: 'pointer', whiteSpace: 'nowrap' as const },
+  // Secondary destructive CTA — recognizable as a real (reversible) action without
+  // competing with the primary Apply/Review buttons. Subtle red outline, not a fill.
+  undoCta:  { fontSize: 11, fontWeight: 600, padding: '4px 11px', border: '1px solid rgba(248,113,113,0.28)', borderRadius: 4, background: 'rgba(248,113,113,0.06)', color: '#fca5a5', cursor: 'pointer', whiteSpace: 'nowrap' as const },
   undoDone: { fontSize: 11, color: '#4ade80',  whiteSpace: 'nowrap' as const },
   undoError:{ fontSize: 11, color: '#f87171' },
   rbConfirmPanel:   { padding: '8px 14px 10px 42px', background: '#0d120d', borderTop: '1px solid rgba(255,255,255,0.04)', display: 'flex', flexDirection: 'column' as const, gap: 6 },
