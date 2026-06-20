@@ -1,6 +1,20 @@
 export const PREVIEW_UNAVAILABLE_MSG =
   'Preview is unavailable right now. Please try again before applying this change.';
 
+// ── Beta-safe merchant-facing copy (UX Phase 1) ──────────────────────────────
+// Centralised so Apply/Rollback wording stays consistent across the feed and the
+// inspector panel. Copy only — no behaviour is driven from here.
+export const PREVIEW_DISCLAIMER =
+  "This is a preview. Your store hasn't changed yet.";
+export const APPLY_SUCCESS_TITLE = '✓ Live on Shopify.';
+export const APPLY_SUCCESS_SUB =
+  'This change is now on your product page. You can undo it anytime.';
+export const ROLLBACK_SUCCESS = '✓ Reverted. Your previous version is restored.';
+export const APPLY_FAILED_MSG =
+  "We couldn't apply this change. Your store was not modified. Try again, or contact support if it keeps happening.";
+export const ROLLBACK_FAILED_MSG =
+  "We couldn't undo this automatically. Your change may still be live. Try again before editing manually.";
+
 export function isManualBlockReason(reason: string | null): boolean {
   if (!reason) return false;
   const r = reason.toLowerCase();
