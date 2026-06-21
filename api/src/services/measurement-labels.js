@@ -108,10 +108,13 @@ function signalLabelFor(d, sufficiency) {
   }
 }
 
+// Merchant-facing disclaimer. Honest about it being an in-progress measurement,
+// but framed as confident, value-positive monitoring — never academic
+// "no proof" wording (that internal nuance lives in the scores/caveats, not here).
 function disclaimerFor(sufficiency) {
   return sufficiency === 'insufficient'
-    ? 'CRODoctor will wait for more data before recommending action.'
-    : 'This is an early measurement signal, not statistical proof.';
+    ? 'Collecting more data before making a final recommendation.'
+    : 'Tracking impact — we’ll confirm as more visitors see this change.';
 }
 
 function caveatsFor(d) {

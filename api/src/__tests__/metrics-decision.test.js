@@ -231,8 +231,9 @@ const LABEL_FIELDS = [
   'measurementDataSufficiency','measurementDataQuality','measurementSignalLabel',
   'measurementDisclaimer','measurementEvidenceSource','measurementCaveats',
 ];
-// No merchant-facing label may ever imply statistical proof.
-const FORBIDDEN = /statistically significant|proven lift|confirmed (revenue )?lift|guaranteed/i;
+// No merchant-facing label may EITHER imply statistical proof OR use
+// value-dampening "no proof" academic wording. Both are banned from merchant copy.
+const FORBIDDEN = /statistically significant|proven lift|confirmed (revenue )?lift|guaranteed|not statistical proof|not proven|no proof|uncertain result/i;
 
 // 15 — labels are spread into every buildDecisionV2 result (back-compat additive)
 test('decisionV2 includes derived measurement labels alongside existing fields', () => {
@@ -250,7 +251,9 @@ test('insufficient data → not-enough-data label + waits for more data', () => 
     compare: null, exposure: null, confoundedBy: [], confoundSignals: [] }));
   assert.strictEqual(labels.measurementDataSufficiency, 'insufficient');
   assert.strictEqual(labels.measurementSignalLabel, 'Not enough data yet');
-  assert.match(labels.measurementDisclaimer, /wait for more data/i);
+  // Merchant-friendly, value-positive — collecting data, not "no proof".
+  assert.match(labels.measurementDisclaimer, /collecting more data/i);
+  assert.ok(!FORBIDDEN.test(labels.measurementDisclaimer));
   assert.strictEqual(labels.measurementEvidenceSource, 'decision_v2');
 });
 
@@ -290,29 +293,34 @@ test('confoundFlags → merchant-safe caveats, no raw codes', () => {
   assert.strictEqual(labels.measurementDataQuality, 'usable');
 });
 
-// 20 — strong product_cvr signal → high sufficiency but NEVER "significant"
-test('strong measured signal → high sufficiency, never statistical-proof wording', () => {
+// 20 — strong product_cvr signal → high sufficiency, confident merchant copy
+test('strong measured signal → high sufficiency, confident value-positive wording', () => {
   const labels = deriveMeasurementLabels({
     measurementStatus: 'decided', recommendedAction: 'keep', primaryMetric: 'product_cvr',
     confidenceScore: 90, dataQualityScore: 90, confoundFlags: [],
   });
   assert.strictEqual(labels.measurementDataSufficiency, 'high_sufficiency');
   assert.strictEqual(labels.measurementDataQuality, 'good');
-  assert.match(labels.measurementDisclaimer, /not statistical proof/i);
+  // Confident, value-positive, honest — "tracking impact", never "no proof".
+  assert.match(labels.measurementDisclaimer, /tracking impact/i);
+  assert.ok(!FORBIDDEN.test(labels.measurementDisclaimer));
 });
 
-// 21 — no merchant-facing string ever implies statistical proof
-test('no derived label text implies statistical proof', () => {
+// 21 — no merchant-facing string implies statistical proof OR uses value-dampening
+//      "no proof / not proven / not statistically significant" academic wording.
+test('no derived label text implies proof or value-dampening no-proof copy', () => {
   const samples = [
-    deriveMeasurementLabels(null),
+    deriveMeasurementLabels(null),                                              // insufficient disclaimer
     deriveMeasurementLabels({ measurementStatus: 'decided', recommendedAction: 'keep',
       primaryMetric: 'product_cvr', confidenceScore: 99, dataQualityScore: 99, confoundFlags: [] }),
     deriveMeasurementLabels({ measurementStatus: 'decided', recommendedAction: 'undo_suggested',
       primaryMetric: 'exposure_atc_rate', confidenceScore: 70, dataQualityScore: 70, confoundFlags: ['low_traffic'] }),
+    deriveMeasurementLabels({ measurementStatus: 'decided', recommendedAction: 'neutral_no_clear_lift',
+      primaryMetric: 'revenue_per_view', confidenceScore: 40, dataQualityScore: 30, confoundFlags: [] }),
   ];
   for (const s of samples) {
     const text = [s.measurementSignalLabel, s.measurementDisclaimer, ...s.measurementCaveats].join(' ');
-    assert.ok(!FORBIDDEN.test(text), `forbidden proof wording in: ${text}`);
+    assert.ok(!FORBIDDEN.test(text), `forbidden / value-dampening wording in: ${text}`);
   }
 });
 
