@@ -136,6 +136,20 @@ export default function DecisionV2Card({ d, variant = 'light' }: { d: DecisionV2
 
       <p style={s.expl}>{explanationFor(d)}</p>
 
+      {/* Honest signal label + disclaimer (DATA #2B) — directional, never "proof". */}
+      {d.measurementSignalLabel && (
+        <p style={s.signal}>
+          <span style={s.signalLabel}>{d.measurementSignalLabel}</span>
+          {d.measurementDisclaimer && <span style={s.disclaimer}> · {d.measurementDisclaimer}</span>}
+        </p>
+      )}
+
+      {d.measurementCaveats && d.measurementCaveats.length > 0 && (
+        <ul style={s.caveats}>
+          {d.measurementCaveats.map((c, i) => <li key={i}>{c}</li>)}
+        </ul>
+      )}
+
       {d.primaryMetric && d.primaryMetricLift != null && (
         <p style={s.metric}>
           {d.primaryMetric.replace(/_/g, ' ')}:{' '}
@@ -174,6 +188,10 @@ const BASE: Record<string, React.CSSProperties> = {
   chip:       { fontSize: 11, fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase' as const, border: '1px solid', borderRadius: 6, padding: '2px 8px' },
   badge:      { fontSize: 10, fontWeight: 700, color: '#2563eb', background: 'rgba(37,99,235,0.12)', borderRadius: 4, padding: '2px 6px', textTransform: 'uppercase' as const },
   metric:     { fontSize: 12, margin: '0 0 8px' },
+  signal:     { fontSize: 11, margin: '0 0 8px', lineHeight: 1.4 },
+  signalLabel:{ fontWeight: 700, color: '#6b7280' },
+  disclaimer: { color: '#9ca3af', fontStyle: 'italic' as const },
+  caveats:    { fontSize: 11, color: '#9ca3af', margin: '0 0 8px', paddingLeft: 16, lineHeight: 1.45 },
   scores:     { display: 'flex', flexWrap: 'wrap' as const, gap: 8 },
   score:      { display: 'flex', flexDirection: 'column' as const, gap: 1, borderRadius: 6, padding: '4px 8px', minWidth: 84 },
   scoreLabel: { fontSize: 9, fontWeight: 700, textTransform: 'uppercase' as const, letterSpacing: '0.04em' },

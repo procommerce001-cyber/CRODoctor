@@ -3,6 +3,7 @@
 const { getProductActions }           = require('./action-center.service');
 const { PRODUCT_INCLUDE }             = require('../lib/product-include');
 const { fetchWindowedStoreAnalytics, fetchProductAnalytics } = require('./shopify-admin.service');
+const { deriveMeasurementLabels }     = require('./measurement-labels');
 
 // ── Test-order exclusion ─────────────────────────────────────────────────────
 // Applied only to merchant-facing proof surfaces (snapshots, attribution,
@@ -820,7 +821,7 @@ function buildDecisionV2(ctx) {
       base.measurementStatus = compare && compare.success ? 'measuring' : 'not_started';
       reasons.push('window_not_complete');
     }
-    return base;
+    return { ...base, ...deriveMeasurementLabels(base) };
   }
 
   const before = compare.before, after = compare.after, diff = compare.diff;
@@ -1081,7 +1082,7 @@ function buildDecisionV2(ctx) {
   const canAutoUndoLater =
     recommendedAction === 'undo_suggested' && downsideRiskScore >= 60 && !severeConfound;
 
-  return {
+  const decision = {
     measurementStatus,
     recommendedAction,
     primaryMetric,
@@ -1117,6 +1118,7 @@ function buildDecisionV2(ctx) {
       ? 'Paused — external factors (e.g. a store-wide sales change) are distorting this product’s numbers.'
       : null,
   };
+  return { ...decision, ...deriveMeasurementLabels(decision) };
 }
 
 // ---------------------------------------------------------------------------
