@@ -1,6 +1,6 @@
 # CRODoctor Beta Checkpoint — Recent Work
 
-_Factual handoff checkpoint. Last updated: 2026-06-21._
+_Factual handoff checkpoint. Last updated: 2026-06-22._
 
 This document is a point-in-time record of recently completed and in-progress
 work. It changes no product behavior. Where a status is not independently
@@ -15,13 +15,15 @@ verified, it is marked **unknown / needs verification**.
 - **Root redirect `/` → `/dashboard`** — merged into `main` (PR #2) and verified.
 - **API health** — green at last check (`/health` 200; unauthenticated
   `/auth/me`, `/dashboard/selection`, `/auth/onboarding-status` all 401, no 500s).
-- **DATA #2B (honest measurement labels)** — exists on feature branch
-  `data/measurement-honest-labels-no-schema`, **not merged**. Implementation +
-  merchant-facing wording fix are committed and pushed.
-- **No current instruction to deploy or to merge DATA #2B.** Next gate is a
-  final audit, then (if approved) a PR.
+- **DATA #2B (honest measurement labels)** — **merged into `main` via PR #3 and
+  production verified.** `measurement-labels.js` exists on main; merchant-facing
+  copy is confident/value-positive with no "no proof" regression. API health
+  green after merge.
+- **No active implementation branch is currently approved for merge.** Next
+  technical priority (DATA #2C vs migration-history reconciliation) is undecided
+  and must not be started without a separate scoped prompt.
 
-`main` HEAD at checkpoint: **`eb9b965`**.
+`main` HEAD at checkpoint: **`8db2b08`** (Merge pull request #3).
 
 ---
 
@@ -58,21 +60,20 @@ verified, it is marked **unknown / needs verification**.
 
 ---
 
-## 3. In-progress work — DATA #2B (measurement interpretation / honest labels)
-
+### DATA #2B — Measurement interpretation / honest labels
 - **Branch:** `data/measurement-honest-labels-no-schema`
+- **PR:** #3
 - **Commits:**
   - `9803606` — Add honest measurement interpretation labels (implementation)
-  - `c167376` — Refine merchant-facing measurement wording (value fix) **← branch HEAD**
-- **Pushed to origin:** yes (`origin/data/measurement-honest-labels-no-schema` at `c167376`).
-- **Current state:** implementation complete; merchant-facing wording fix
-  complete. **Ready for final audit; not merged.**
+  - `c167376` — Refine merchant-facing measurement wording (value fix)
+- **Merge commit on main:** `8db2b08` (Merge pull request #3)
+- **Status:** **merged into `main`** and **production verified.**
 
-**What it changes**
+**What changed**
 - Adds a pure, no-schema interpretation helper
   (`api/src/services/measurement-labels.js`, `deriveMeasurementLabels()`) that
-  relabels the already-computed `decisionV2` scores into merchant-safe labels:
-  data sufficiency, data quality, signal label, evidence source, disclaimer,
+  reuses the already-computed `decisionV2` scores and exposes safer derived
+  labels: data sufficiency, data quality, measurement signal, evidence source,
   and plain-language caveats.
 - Spreads those derived fields additively into both `buildDecisionV2` return
   paths in `api/src/services/metrics.service.js`.
@@ -80,27 +81,30 @@ verified, it is marked **unknown / needs verification**.
 - Renders signal label + disclaimer + caveats in
   `web/components/dashboard/DecisionV2Card.tsx`.
 - Adds scenario tests in `api/src/__tests__/metrics-decision.test.js`.
+- Merchant-facing wording remains confident and value-positive
+  ("Tracking impact — we'll confirm as more visitors see this change." /
+  "Collecting more data before making a final recommendation."); no
+  customer-facing "not statistical proof / no proof" wording. The earlier
+  value-dampening disclaimer was reframed in `c167376`.
 
-**What it does NOT change**
+**What did NOT change**
 - No Prisma schema, no migrations, no DB writes/persistence.
-- No Shopify writes, no Apply/Rollback logic.
-- No new inference engine; `decisionV2` is reused as the single source.
-- No p-values, Bayesian inference, A/B tests, holdouts, or attribution model.
-- No dependencies added.
+- No Shopify writes, no Apply/Rollback behavior.
+- No env/settings changes, no dependencies.
+- No new statistical inference engine; `decisionV2` is reused as the single
+  source (no p-values, Bayesian, A/B tests, holdouts, or attribution model).
 
-**Merchant-facing wording issue/fix**
-- **Issue (found in audit):** the original measured-state disclaimer
-  ("This is an early measurement signal, not statistical proof.") used
-  value-dampening "no proof" wording on the customer-facing card.
-- **Fix (committed in `c167376`):** reframed to confident, honest copy —
-  "Tracking impact — we'll confirm as more visitors see this change." and
-  "Collecting more data before making a final recommendation." Internal
-  sufficiency/quality/caveat semantics are unchanged. Tests now fail if merchant
-  labels contain proof claims **or** "no proof / not proven / not statistically
-  significant" wording.
+**Verified after merge:** `main` contains `8db2b08`; both commits are ancestors;
+`measurement-labels.js` present; API health green (see §7).
 
-**Readiness:** ready for final DATA #2B audit. **Not ready for merge** until that
-audit passes and a PR is opened and reviewed.
+---
+
+## 3. In-progress work
+
+- **No active implementation branch is currently approved for merge.**
+- **DATA #2B is complete** (merged + production verified — see §2).
+- **DATA #2C has not started.**
+- **Prisma migration-history reconciliation remains paused** (see §5).
 
 ---
 
@@ -132,26 +136,32 @@ audit passes and a PR is opened and reviewed.
 
 ## 6. Recommended next steps (in order)
 
-1. Finish/verify the merchant-facing value fix for DATA #2B. _(Done in `c167376`;
-   confirm in audit.)_
-2. Run the final DATA #2B audit.
-3. If approved, open a PR for `data/measurement-honest-labels-no-schema`.
-4. Merge only after PR checks and a final merge-safety review.
-5. Verify production after merge.
-6. Only after that, consider DATA #2C or migration-history reconciliation.
+1. Optionally delete merged branches on GitHub after confirming they are fully
+   merged into `main`:
+   - `ux/apply-rollback-clarity-phase-1`
+   - `frontend/root-redirect-dashboard`
+   - `data/measurement-honest-labels-no-schema`
+2. Optionally open/merge the docs checkpoint branch
+   (`docs/beta-checkpoint-recent-work`) later if desired.
+3. Decide the next technical priority — **either**:
+   - DATA #2C, **or**
+   - Prisma migration-history reconciliation / Render Pre-Deploy unblock.
+4. **Do not start either without a separate scoped prompt.**
 
 ---
 
 ## 7. Last known commands / checks (non-secret)
 
-- **Main verification:** `git log origin/main` contains `00a365d` (PR #1) and
-  `eb9b965` (PR #2); `main` in sync with `origin/main`.
-- **API health:** `/health` → 200; unauthenticated `/auth/me`,
-  `/dashboard/selection?shop=…`, `/auth/onboarding-status` → 401 (no 500s).
-- **DATA #2B tests:** `cd api && npm test` → 180 pass / 0 fail (includes the new
-  label scenario tests).
-- **Frontend checks:** `cd web && npx tsc --noEmit` → clean; `npm run lint` →
-  0 errors, 11 pre-existing warnings; `npm run build` → passed.
+- **Main verification:** `git log origin/main` contains `00a365d` (PR #1),
+  `eb9b965` (PR #2), and `8db2b08` (PR #3, DATA #2B); `main` in sync with
+  `origin/main`.
+- **PR #3 post-merge API health:** `/health` → 200; unauthenticated `/auth/me`
+  → 401; `/dashboard/selection?shop=jw5kjx-1z.myshopify.com` → 401;
+  `/auth/onboarding-status` → 401 (no 500s).
+- **DATA #2B verification:** `cd api && npm test` → 180 pass / 0 fail (includes
+  the new label scenario tests).
+- **Frontend checks:** `cd web && npx tsc --noEmit` → passed (0 errors);
+  `npm run lint` → 0 errors, 11 pre-existing warnings; `npm run build` → passed.
 
 ---
 
