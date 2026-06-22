@@ -318,6 +318,17 @@ export interface DecisionV2 {
   nextAllowedAction:     string[];
   canAutoUndoLater:      boolean;
   shouldNotTouchReason:  string | null;
+  // Honest measurement interpretation (DATA #2B) — derived, additive, no schema.
+  // Relabels the existing scores above as data sufficiency / quality / directional
+  // signal so the UI never implies statistical proof. Optional for back-compat.
+  measurementDataSufficiency?: 'insufficient' | 'directional' | 'moderate' | 'high_sufficiency';
+  measurementDataQuality?:     'insufficient' | 'weak' | 'usable' | 'good';
+  measurementSignalLabel?:     string;
+  measurementDisclaimer?:      string;
+  measurementEvidenceSource?:
+    | 'decision_v2' | 'product_metrics_snapshot' | 'shopify_analytics'
+    | 'first_party_events' | 'orders_only' | 'mixed' | 'unknown';
+  measurementCaveats?:         string[];
 }
 
 export interface ExecutionDetails {

@@ -219,3 +219,115 @@ test('buildDecisionV2 is pure/synchronous and deterministic', () => {
   assert.strictEqual(a.creditBand, b.creditBand);
   assert.strictEqual(a.creditedLiftPercent, b.creditedLiftPercent);
 });
+
+// ---------------------------------------------------------------------------
+// DATA #2B — honest measurement labels (pure interpretation layer).
+// These never claim statistical proof; they relabel existing decisionV2 scores
+// as sufficiency / quality / directional signal. No schema, no new inference.
+// ---------------------------------------------------------------------------
+const { deriveMeasurementLabels } = require('../services/measurement-labels');
+
+const LABEL_FIELDS = [
+  'measurementDataSufficiency','measurementDataQuality','measurementSignalLabel',
+  'measurementDisclaimer','measurementEvidenceSource','measurementCaveats',
+];
+// No merchant-facing label may EITHER imply statistical proof OR use
+// value-dampening "no proof" academic wording. Both are banned from merchant copy.
+const FORBIDDEN = /statistically significant|proven lift|confirmed (revenue )?lift|guaranteed|not statistical proof|not proven|no proof|uncertain result/i;
+
+// 15 — labels are spread into every buildDecisionV2 result (back-compat additive)
+test('decisionV2 includes derived measurement labels alongside existing fields', () => {
+  const d = buildDecisionV2({ status: 'measured', createdAt: OLD, confidence: 'high',
+    compare: cmp({ pSessB: 600, pSessA: 600, ordB: 30, ordA: 60, storeCvrPct: 0 }),
+    exposure: null, confoundedBy: [], confoundSignals: [] });
+  for (const f of REQUIRED_FIELDS) assert.ok(f in d, `lost existing field: ${f}`);
+  for (const f of LABEL_FIELDS)    assert.ok(f in d, `missing label field: ${f}`);
+});
+
+// 16 — low / not-started data → "Not enough data yet", insufficient, waits
+test('insufficient data → not-enough-data label + waits for more data', () => {
+  const labels = deriveMeasurementLabels(buildDecisionV2({
+    status: 'waiting_for_more_data', createdAt: OLD, confidence: 'insufficient',
+    compare: null, exposure: null, confoundedBy: [], confoundSignals: [] }));
+  assert.strictEqual(labels.measurementDataSufficiency, 'insufficient');
+  assert.strictEqual(labels.measurementSignalLabel, 'Not enough data yet');
+  // Merchant-friendly, value-positive — collecting data, not "no proof".
+  assert.match(labels.measurementDisclaimer, /collecting more data/i);
+  assert.ok(!FORBIDDEN.test(labels.measurementDisclaimer));
+  assert.strictEqual(labels.measurementEvidenceSource, 'decision_v2');
+});
+
+// 17 — cooldown → "Collecting data", still insufficient
+test('cooldown → collecting-data label', () => {
+  const labels = deriveMeasurementLabels(buildDecisionV2({
+    status: 'measured', createdAt: NOW, confidence: 'high',
+    compare: cmp({ pSessB: 600, pSessA: 600, ordB: 30, ordA: 60, storeCvrPct: 0 }),
+    exposure: null, confoundedBy: [], confoundSignals: [] }));
+  assert.strictEqual(labels.measurementSignalLabel, 'Collecting data');
+  assert.strictEqual(labels.measurementDataSufficiency, 'insufficient');
+});
+
+// 18 — orders-only fallback → weak data quality, source orders_only
+test('orders-only fallback → weak quality, orders_only source, no proof', () => {
+  const d = buildDecisionV2({ status: 'measured', createdAt: OLD, confidence: 'high',
+    compare: cmp({ pSessB: null, pSessA: null, ordB: 10, ordA: 20, revB: 1000, revA: 2000, ordPct: 100 }),
+    exposure: null, confoundedBy: [], confoundSignals: [] });
+  assert.strictEqual(d.primaryMetric, 'revenue_per_view');
+  const labels = deriveMeasurementLabels(d);
+  assert.ok(['insufficient','weak'].includes(labels.measurementDataQuality));
+  assert.strictEqual(labels.measurementEvidenceSource, 'orders_only');
+  // Weak source can never be called more than directional.
+  assert.ok(['insufficient','directional'].includes(labels.measurementDataSufficiency));
+});
+
+// 19 — confoundFlags present → safe caveats surfaced
+test('confoundFlags → merchant-safe caveats, no raw codes', () => {
+  const labels = deriveMeasurementLabels({
+    measurementStatus: 'decided', recommendedAction: 'keep', primaryMetric: 'product_cvr',
+    confidenceScore: 80, dataQualityScore: 85,
+    confoundFlags: ['store_revenue_spike', 'overlapping_execution', 'unknown_flag_xyz'],
+  });
+  assert.ok(labels.measurementCaveats.length >= 2);
+  assert.ok(labels.measurementCaveats.every(c => !/_/.test(c)), 'no raw snake_case codes');
+  // Strong score but active confounds → quality downgraded from good.
+  assert.strictEqual(labels.measurementDataQuality, 'usable');
+});
+
+// 20 — strong product_cvr signal → high sufficiency, confident merchant copy
+test('strong measured signal → high sufficiency, confident value-positive wording', () => {
+  const labels = deriveMeasurementLabels({
+    measurementStatus: 'decided', recommendedAction: 'keep', primaryMetric: 'product_cvr',
+    confidenceScore: 90, dataQualityScore: 90, confoundFlags: [],
+  });
+  assert.strictEqual(labels.measurementDataSufficiency, 'high_sufficiency');
+  assert.strictEqual(labels.measurementDataQuality, 'good');
+  // Confident, value-positive, honest — "tracking impact", never "no proof".
+  assert.match(labels.measurementDisclaimer, /tracking impact/i);
+  assert.ok(!FORBIDDEN.test(labels.measurementDisclaimer));
+});
+
+// 21 — no merchant-facing string implies statistical proof OR uses value-dampening
+//      "no proof / not proven / not statistically significant" academic wording.
+test('no derived label text implies proof or value-dampening no-proof copy', () => {
+  const samples = [
+    deriveMeasurementLabels(null),                                              // insufficient disclaimer
+    deriveMeasurementLabels({ measurementStatus: 'decided', recommendedAction: 'keep',
+      primaryMetric: 'product_cvr', confidenceScore: 99, dataQualityScore: 99, confoundFlags: [] }),
+    deriveMeasurementLabels({ measurementStatus: 'decided', recommendedAction: 'undo_suggested',
+      primaryMetric: 'exposure_atc_rate', confidenceScore: 70, dataQualityScore: 70, confoundFlags: ['low_traffic'] }),
+    deriveMeasurementLabels({ measurementStatus: 'decided', recommendedAction: 'neutral_no_clear_lift',
+      primaryMetric: 'revenue_per_view', confidenceScore: 40, dataQualityScore: 30, confoundFlags: [] }),
+  ];
+  for (const s of samples) {
+    const text = [s.measurementSignalLabel, s.measurementDisclaimer, ...s.measurementCaveats].join(' ');
+    assert.ok(!FORBIDDEN.test(text), `forbidden / value-dampening wording in: ${text}`);
+  }
+});
+
+// 22 — pure & null-safe
+test('deriveMeasurementLabels is pure and null-safe', () => {
+  const a = deriveMeasurementLabels(null);
+  assert.strictEqual(a.measurementEvidenceSource, 'unknown');
+  assert.strictEqual(a.measurementDataSufficiency, 'insufficient');
+  assert.deepStrictEqual(a.measurementCaveats, []);
+});
