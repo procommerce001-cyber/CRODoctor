@@ -9,7 +9,7 @@
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
     "db:push": "prisma db push",
-    "test": "node --test src/__tests__/classifyArchetype.test.js src/__tests__/content-safety-validator.test.js src/__tests__/trust-bullets.test.js src/__tests__/rollback-guard.test.js src/__tests__/trust-badges.test.js src/__tests__/metrics-decision.test.js src/__tests__/resolve-store.test.js src/__tests__/rate-limits.test.js src/__tests__/oauth-state.test.js src/__tests__/orphan-apply-guard.test.js"
+    "test": "node --test src/__tests__/classifyArchetype.test.js src/__tests__/content-safety-validator.test.js src/__tests__/trust-bullets.test.js src/__tests__/rollback-guard.test.js src/__tests__/trust-badges.test.js src/__tests__/metrics-decision.test.js src/__tests__/resolve-store.test.js src/__tests__/rate-limits.test.js src/__tests__/oauth-state.test.js src/__tests__/orphan-apply-guard.test.js src/__tests__/product-opportunity.test.js"
   },
   "dependencies": {
     "@prisma/client": "^5.14.0",
