@@ -18,7 +18,9 @@
 //   not replacing it. The prompt explicitly prevents repetition of existing copy.
 // ---------------------------------------------------------------------------
 
-const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages';
+const { callAnthropicWithRetry } = require('./anthropic-fetch');
+const { CRO_SYSTEM_MESSAGE }     = require('./system-message');
+
 const MODEL             = 'claude-haiku-4-5-20251001';
 const TIMEOUT_MS        = 10_000;
 const MAX_TOKENS        = 300;
@@ -154,26 +156,16 @@ async function generateShortDescriptionExpansionWithLLM(product, copyPlan, revie
   if (!process.env.ANTHROPIC_API_KEY) return null;
 
   const prompt     = buildExpansionPrompt(product, copyPlan, reviews);
-  const controller = new AbortController();
-  const timer      = setTimeout(() => controller.abort(), TIMEOUT_MS);
 
   try {
-    const res = await fetch(ANTHROPIC_API_URL, {
-      method:  'POST',
-      signal:  controller.signal,
-      headers: {
-        'Content-Type':      'application/json',
-        'x-api-key':         process.env.ANTHROPIC_API_KEY,
-        'anthropic-version': '2023-06-01',
-      },
-      body: JSON.stringify({
-        model:      MODEL,
-        max_tokens: MAX_TOKENS,
-        messages:   [{ role: 'user', content: prompt }],
-      }),
-    });
+    const res = await callAnthropicWithRetry({
+      model:      MODEL,
+      max_tokens: MAX_TOKENS,
+      system:     CRO_SYSTEM_MESSAGE,
+      messages:   [{ role: 'user', content: prompt }],
+    }, TIMEOUT_MS);
 
-    if (!res.ok) return null;
+    if (!res) return null;
 
     const data = await res.json();
     const text = validateOutput(data?.content?.[0]?.text);
@@ -198,8 +190,6 @@ async function generateShortDescriptionExpansionWithLLM(product, copyPlan, revie
     return { variants: [variant], bestGuess: variant };
   } catch (_) {
     return null;
-  } finally {
-    clearTimeout(timer);
   }
 }
 
