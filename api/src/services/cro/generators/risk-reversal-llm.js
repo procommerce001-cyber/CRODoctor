@@ -15,6 +15,7 @@
 
 const { buildCopyRole, detectCategory } = require('../copy-role');
 const { callAnthropicWithRetry }        = require('./anthropic-fetch');
+const { CRO_SYSTEM_MESSAGE }            = require('./system-message');
 
 const MODEL      = 'claude-haiku-4-5-20251001';
 const TIMEOUT_MS = 20_000;
@@ -248,6 +249,7 @@ async function generateRiskReversalWithLLM(product, copyPlan, reviews = []) {
     const res = await callAnthropicWithRetry({
       model:      MODEL,
       max_tokens: MAX_TOKENS,
+      system:     CRO_SYSTEM_MESSAGE,
       messages:   [{ role: 'user', content: prompt }],
     }, TIMEOUT_MS);
 
