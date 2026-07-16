@@ -25,6 +25,7 @@ const { generateTrustBulletsWithLLM }        = require('./cro/generators/trust-b
 const { generateDescriptionWithLLM }         = require('./cro/generators/description-llm');
 const { generateShortDescriptionExpansionWithLLM } = require('./cro/generators/short-description-llm');
 const { fetchProductReviews }                = require('./cro/product-reviews');
+const { validateGeneratorOutputContract }    = require('./cro/output-contract-validator');
 
 // Private — must only be called from applyContentChange or rollbackContentChange.
 // Every call MUST create a ContentExecution record in the same operation.
@@ -94,6 +95,47 @@ const V1_RULE_ALLOWLIST = new Set([
 // ---------------------------------------------------------------------------
 
 const VALID_REVIEW_STATUSES = new Set(['pending', 'approved', 'rejected', 'deferred']);
+
+// ---------------------------------------------------------------------------
+// acceptGeneratorOutput — generation-time output-contract gate (PR 1B)
+//
+// Runs the pure Output Contract Validator against a CRO generator's LLM output
+// BEFORE that output can become generatedFix / proposedContent / preview.
+// Returns the ORIGINAL output object when it is accepted, or null when it must
+// be discarded so the caller falls back to its existing template fix.
+//
+//   validator ok (no severity)     → return output (keep LLM output)
+//   validator ok, severity:'warn'  → return output (unknown issueType; do not block)
+//   validator ok, severity:'fallback' → return null (drop → template fallback)
+//   output null/undefined          → return null
+//   validator throws (unexpected)  → return output (fail open to current behavior)
+//
+// Pure, synchronous, no I/O, no logging, no mutation, no normalization. Never
+// throws. Does NOT validate template fallbacks — only the LLM output passed in.
+// `validatorOverride` exists solely to make the throw path testable without
+// require-cache manipulation; runtime callers pass only (issueType, output).
+// ---------------------------------------------------------------------------
+function acceptGeneratorOutput(issueType, output, validatorOverride) {
+  if (output == null) return null;
+
+  const validate = validatorOverride || validateGeneratorOutputContract;
+
+  let result;
+  try {
+    result = validate({ issueType, output });
+  } catch (_) {
+    // Validator unexpectedly threw — fail open, keep current behavior.
+    return output;
+  }
+
+  // Anything other than an explicit ok result is treated as a fallback signal.
+  if (!result || result.ok !== true) return null;
+
+  // ok with severity:'fallback' would be contradictory; drop to be safe.
+  if (result.severity === 'fallback') return null;
+
+  return output;
+}
 
 // ---------------------------------------------------------------------------
 // classifyFix — derive applyType, canAutoApply, humanReviewRequired
@@ -516,7 +558,10 @@ async function getProductActions(rawProduct, { prisma, storeId } = {}) {
           }
 
           const enriched =
-            (await generateDesireBlockWithLLM(rawProduct, copyPlan, reviews))
+            acceptGeneratorOutput(
+              'weak_desire_creation',
+              await generateDesireBlockWithLLM(rawProduct, copyPlan, reviews),
+            )
             ?? generateDesireBlock(rawProduct, copyPlan);
           const item     = actionableItems[wdcIdx];
           actionableItems[wdcIdx] = {
@@ -576,7 +621,10 @@ async function getProductActions(rawProduct, { prisma, storeId } = {}) {
         const profile  = await getLatestProductPerformanceProfile(prisma, rawProduct.id);
         const copyPlan = buildCopyPlan(rawProduct, profile);
         if (copyPlan) {
-          const llmFix = await generateRiskReversalWithLLM(rawProduct, copyPlan, sharedReviews);
+          const llmFix = acceptGeneratorOutput(
+            'no_risk_reversal',
+            await generateRiskReversalWithLLM(rawProduct, copyPlan, sharedReviews),
+          );
           if (llmFix) {
             const item = actionableItems[nrrIdx];
             actionableItems[nrrIdx] = {
@@ -617,7 +665,10 @@ async function getProductActions(rawProduct, { prisma, storeId } = {}) {
         const profile  = await getLatestProductPerformanceProfile(prisma, rawProduct.id);
         const copyPlan = buildCopyPlan(rawProduct, profile);
         if (copyPlan) {
-          const llmFix = await generateTrustBulletsWithLLM(rawProduct, copyPlan, sharedReviews);
+          const llmFix = acceptGeneratorOutput(
+            'no_trust_bullets',
+            await generateTrustBulletsWithLLM(rawProduct, copyPlan, sharedReviews),
+          );
           if (llmFix) {
             const item = actionableItems[ntbIdx];
             actionableItems[ntbIdx] = {
@@ -659,7 +710,10 @@ async function getProductActions(rawProduct, { prisma, storeId } = {}) {
         const profile  = await getLatestProductPerformanceProfile(prisma, rawProduct.id);
         const copyPlan = buildCopyPlan(rawProduct, profile);
         if (copyPlan) {
-          const llmFix = await generateDescriptionWithLLM(rawProduct, copyPlan, sharedReviews);
+          const llmFix = acceptGeneratorOutput(
+            'no_description',
+            await generateDescriptionWithLLM(rawProduct, copyPlan, sharedReviews),
+          );
           if (llmFix) {
             const item = actionableItems[ndIdx];
             actionableItems[ndIdx] = {
@@ -685,7 +739,10 @@ async function getProductActions(rawProduct, { prisma, storeId } = {}) {
         const profile  = await getLatestProductPerformanceProfile(prisma, rawProduct.id);
         const copyPlan = buildCopyPlan(rawProduct, profile);
         if (copyPlan) {
-          const llmFix = await generateShortDescriptionExpansionWithLLM(rawProduct, copyPlan, sharedReviews);
+          const llmFix = acceptGeneratorOutput(
+            'description_too_short',
+            await generateShortDescriptionExpansionWithLLM(rawProduct, copyPlan, sharedReviews),
+          );
           if (llmFix) {
             const item = actionableItems[dtsIdx];
             actionableItems[dtsIdx] = {
@@ -1957,4 +2014,5 @@ module.exports = {
   reconcileApplyingExecution,
   rollbackContentChange,
   buildBatchPreview,
+  acceptGeneratorOutput,
 };
