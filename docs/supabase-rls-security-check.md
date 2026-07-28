@@ -21,6 +21,17 @@ revoke all on table public._prisma_migrations from public;
 commit;
 ```
 
+## Current status
+
+- Supabase Security Advisor UI shows **0 errors** for `crodoctor-staging` after the
+  manual fix above.
+- This automated guard is **available for future verification** but has **not been
+  run against the live database**, because no confirmed staging DB password /
+  connection string is available locally.
+- Running the guard later with the staging DB URL gives an extra, independent
+  DB-level confirmation. There is **no need to reset the DB password just for this**
+  unless the team wants that additional verification now.
+
 ## Expected fixed state
 
 | Check | Expected |
