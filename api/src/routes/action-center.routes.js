@@ -6,6 +6,7 @@ const router  = express.Router();
 const {
   getProductActions,
   getStoreQueue,
+  listProductRecommendations,
   saveReviewState,
   getReviewStateForProduct,
   buildActionPreview,
@@ -14,6 +15,12 @@ const {
   rollbackContentChange,
   buildBatchPreview,
 } = require('../services/action-center.service');
+
+const { getLatestProductPerformanceProfile } = require('../services/product-performance.service');
+const {
+  isDiagnosticsEnabled,
+  buildOpportunityDiagnostics,
+} = require('../services/product-opportunity-input.adapter');
 
 const {
   previewContentExecution,
@@ -547,6 +554,61 @@ router.get('/queue', async (req, res) => {
   } catch (err) {
     console.error('[ActionCenter] GET /queue error:', err.message);
     res.status(500).json({ error: 'Internal error during queue generation.' });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// GET /action-center/opportunity-diagnostics?shop=
+//
+// INTERNAL, READ-ONLY, FLAG-GATED (PR A — Option A of the wiring plan).
+// Disabled by default: returns 404 unless PRODUCT_OPPORTUNITY_DIAGNOSTICS=true.
+// When enabled, computes ProductOpportunityScore diagnostics from EXISTING,
+// LLM-FREE data loaders and returns them for internal observation only. It does
+// NOT change /queue, ranking, Apply/Rollback, Shopify writes, or any
+// merchant-facing behavior. It never calls Shopify or Anthropic.
+// ---------------------------------------------------------------------------
+router.get('/opportunity-diagnostics', async (req, res) => {
+  // Fail-closed: behave as if the route does not exist when the flag is off.
+  if (!isDiagnosticsEnabled()) {
+    return res.status(404).json({ error: 'Not found.' });
+  }
+
+  const prisma = req.app.get('prisma');
+  try {
+    const store = await resolveStore(prisma, req.query.shop, res, req);
+    if (!store) return;
+
+    const rawProducts = await prisma.product.findMany({
+      where:   { storeId: store.id },
+      orderBy: { createdAt: 'desc' },
+      take:    50,                    // same cap as /queue: no full-catalog scan
+      include: PRODUCT_INCLUDE,
+    });
+
+    // Assemble read-only context per product using the LLM-FREE listing path
+    // (listProductRecommendations) — never getProductActions, which can trigger
+    // an Anthropic call. Failures per product are non-fatal (empty context).
+    const contexts = [];
+    for (const rawProduct of rawProducts) {
+      let actions = [];
+      try {
+        const rec = await listProductRecommendations(rawProduct, { prisma, storeId: store.id });
+        actions = (rec && rec.actions) || [];
+      } catch (_) { actions = []; }
+
+      let profile = null;
+      try {
+        profile = await getLatestProductPerformanceProfile(prisma, rawProduct.id);
+      } catch (_) { profile = null; }
+
+      contexts.push({ rawProduct, actions, profile });
+    }
+
+    const result = buildOpportunityDiagnostics(contexts);
+    res.json(result);
+  } catch (err) {
+    console.error('[ActionCenter] GET /opportunity-diagnostics error:', err.message);
+    res.status(500).json({ error: 'Internal error during diagnostics.' });
   }
 });
 
