@@ -21,6 +21,7 @@ const {
   isDiagnosticsEnabled,
   buildOpportunityDiagnostics,
 } = require('../services/product-opportunity-input.adapter');
+const { buildStoreBaseline } = require('../services/store-baseline.service');
 
 const {
   previewContentExecution,
@@ -605,6 +606,34 @@ router.get('/opportunity-diagnostics', async (req, res) => {
     }
 
     const result = buildOpportunityDiagnostics(contexts);
+
+    // OBSERVATION-ONLY store baseline (Store Baseline Engine, Option A).
+    // Attached as internal diagnostics metadata behind the SAME flag. It does
+    // NOT feed ProductOpportunityScore scoring and does NOT affect ranking.
+    // Only the ProductPerformanceProfile fields are available here, so revenue
+    // and raw product views are honestly null (→ metrics null + missingData).
+    // Non-fatal: any failure leaves storeBaseline null, never crashes the route.
+    try {
+      const days = contexts
+        .map((c) => c.profile && c.profile.windowDays)
+        .find((d) => typeof d === 'number' && Number.isFinite(d)) ?? null;
+      const baselineRows = contexts.map((c) => ({
+        sessions:     c.profile ? c.profile.sessions  : null,
+        productViews: null,                    // not present on ProductPerformanceProfile
+        atc:          c.profile ? c.profile.atcCount  : null,
+        orders:       c.profile ? c.profile.orderCount : null,
+        revenue:      null,                    // not present on ProductPerformanceProfile
+      }));
+      result.storeBaseline = buildStoreBaseline({
+        shop: req.query.shop,
+        timeWindow: days != null ? { days } : null,
+        products: baselineRows,
+        sources: ['performance_profile'],
+      });
+    } catch (_) {
+      result.storeBaseline = null;
+    }
+
     res.json(result);
   } catch (err) {
     console.error('[ActionCenter] GET /opportunity-diagnostics error:', err.message);
