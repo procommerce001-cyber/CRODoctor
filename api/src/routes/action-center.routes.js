@@ -21,7 +21,7 @@ const {
   isDiagnosticsEnabled,
   buildOpportunityDiagnostics,
 } = require('../services/product-opportunity-input.adapter');
-const { buildStoreBaseline } = require('../services/store-baseline.service');
+const { buildStoreBaseline, assembleStoreBaselineRows } = require('../services/store-baseline.service');
 
 const {
   previewContentExecution,
@@ -607,28 +607,37 @@ router.get('/opportunity-diagnostics', async (req, res) => {
 
     const result = buildOpportunityDiagnostics(contexts);
 
-    // OBSERVATION-ONLY store baseline (Store Baseline Engine, Option A).
+    // OBSERVATION-ONLY store baseline (Store Baseline Engine).
     // Attached as internal diagnostics metadata behind the SAME flag. It does
     // NOT feed ProductOpportunityScore scoring and does NOT affect ranking.
-    // Only the ProductPerformanceProfile fields are available here, so revenue
-    // and raw product views are honestly null (→ metrics null + missingData).
-    // Non-fatal: any failure leaves storeBaseline null, never crashes the route.
+    //
+    // Funnel fields (sessions/atc/orders) come from ProductPerformanceProfile
+    // (rolling window). Revenue/orders for AOV come from the latest standalone
+    // ProductMetricsSnapshot (cumulative) and are passed ONLY as the dedicated
+    // AOV pair — never as funnel orders — so cumulative data can never
+    // contaminate CVR / ATC→purchase. Raw product views stay null (PdpEvent
+    // deferred). Non-fatal: any failure leaves storeBaseline null.
     try {
+      const productIds = rawProducts.map((p) => p.id);
+      // Single query (no N+1): latest standalone snapshot is selected in JS.
+      const snapshots = productIds.length
+        ? await prisma.productMetricsSnapshot.findMany({
+            where:   { productId: { in: productIds }, phase: 'standalone' },
+            orderBy: { snapshotDate: 'desc' },
+            select:  { productId: true, revenue: true, orderCount: true, unitsSold: true, snapshotDate: true },
+          })
+        : [];
+
       const days = contexts
         .map((c) => c.profile && c.profile.windowDays)
         .find((d) => typeof d === 'number' && Number.isFinite(d)) ?? null;
-      const baselineRows = contexts.map((c) => ({
-        sessions:     c.profile ? c.profile.sessions  : null,
-        productViews: null,                    // not present on ProductPerformanceProfile
-        atc:          c.profile ? c.profile.atcCount  : null,
-        orders:       c.profile ? c.profile.orderCount : null,
-        revenue:      null,                    // not present on ProductPerformanceProfile
-      }));
+
+      const baselineRows = assembleStoreBaselineRows(contexts, snapshots);
       result.storeBaseline = buildStoreBaseline({
         shop: req.query.shop,
         timeWindow: days != null ? { days } : null,
         products: baselineRows,
-        sources: ['performance_profile'],
+        sources: ['performance_profile', 'metrics_snapshot'],
       });
     } catch (_) {
       result.storeBaseline = null;
