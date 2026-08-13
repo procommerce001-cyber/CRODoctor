@@ -6,7 +6,12 @@
 // All theme operations target a DRAFT theme — never the published one.
 // ---------------------------------------------------------------------------
 
+const { shouldBlockShopifyWrites, createBetaReadOnlyError } = require('./beta-safety.service');
+
 const API_VERSION = '2024-01';
+
+// HTTP methods that mutate the store. Blocked fail-closed in beta read-only mode.
+const MUTATING_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
 function baseUrl(shopDomain) {
   return `https://${shopDomain}/admin/api/${API_VERSION}`;
@@ -20,6 +25,12 @@ function headers(accessToken) {
 }
 
 async function shopifyFetch(url, options = {}) {
+  // Fail-closed kill switch: never issue a mutating Shopify request when the
+  // controlled-beta write block is active. Reads (GET) are unaffected.
+  const method = (options.method || 'GET').toUpperCase();
+  if (MUTATING_METHODS.has(method) && shouldBlockShopifyWrites()) {
+    throw createBetaReadOnlyError();
+  }
   const res = await fetch(url, options);
   if (!res.ok) {
     const text = await res.text();
@@ -118,6 +129,10 @@ async function deleteAsset(store, themeId, assetKey) {
 // ---------------------------------------------------------------------------
 
 async function updateProductDescription(store, shopifyProductId, bodyHtml) {
+  // Mandatory chokepoint guard: fail closed before any Shopify call.
+  if (shouldBlockShopifyWrites()) {
+    throw createBetaReadOnlyError();
+  }
   const { product } = await shopifyFetch(
     `${baseUrl(store.shopDomain)}/products/${shopifyProductId}.json`,
     {
@@ -392,6 +407,7 @@ module.exports = {
   getAsset,
   putAsset,
   deleteAsset,
+  updateProductDescription,
   updateImageAltText,
   previewUrl,
   fetchOrderMetrics,

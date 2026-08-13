@@ -22,6 +22,7 @@ const {
   buildOpportunityDiagnostics,
 } = require('../services/product-opportunity-input.adapter');
 const { buildStoreBaseline, assembleStoreBaselineRows } = require('../services/store-baseline.service');
+const { getBetaReadOnlyRouteBlock } = require('../services/beta-safety.service');
 
 const {
   previewContentExecution,
@@ -94,6 +95,9 @@ router.get('/products/:id', async (req, res) => {
 // Body: { shop: string, productIds: string[], dryRun?: boolean }
 // ---------------------------------------------------------------------------
 router.post('/batch-apply-safe', async (req, res) => {
+  // Fail-closed beta guard: block before any DB/Shopify work.
+  const betaBlock = getBetaReadOnlyRouteBlock();
+  if (betaBlock) return res.status(betaBlock.status).json(betaBlock.body);
   const prisma = req.app.get('prisma');
   try {
     const { shop, productIds = [], dryRun = false } = req.body;
@@ -256,6 +260,9 @@ router.post('/batch-apply-safe', async (req, res) => {
 // Safety: max 10 items, sequential execution.
 // ---------------------------------------------------------------------------
 router.post('/batch-apply-selected', async (req, res) => {
+  // Fail-closed beta guard: block before any DB/Shopify work.
+  const betaBlock = getBetaReadOnlyRouteBlock();
+  if (betaBlock) return res.status(betaBlock.status).json(betaBlock.body);
   const prisma = req.app.get('prisma');
   try {
     const { shop, selection = [] } = req.body;
@@ -757,6 +764,9 @@ router.get('/review-state', async (req, res) => {
 //   3. reviewStatus === "approved"
 // ---------------------------------------------------------------------------
 router.post('/products/:id/apply', async (req, res) => {
+  // Fail-closed beta guard: block before any DB/Shopify work.
+  const betaBlock = getBetaReadOnlyRouteBlock();
+  if (betaBlock) return res.status(betaBlock.status).json(betaBlock.body);
   const prisma = req.app.get('prisma');
   try {
     const { shop, issueId } = req.body;
@@ -905,6 +915,9 @@ router.get('/products/:id/executions', async (req, res) => {
 //   3. Not already rolled back (idempotent — returns skipped if so)
 // ---------------------------------------------------------------------------
 router.post('/products/:id/rollback', async (req, res) => {
+  // Fail-closed beta guard: block before any DB/Shopify work.
+  const betaBlock = getBetaReadOnlyRouteBlock();
+  if (betaBlock) return res.status(betaBlock.status).json(betaBlock.body);
   const prisma = req.app.get('prisma');
   try {
     const { shop, issueId } = req.body;
