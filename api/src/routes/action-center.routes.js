@@ -18,11 +18,11 @@ const {
 
 const { getLatestProductPerformanceProfile } = require('../services/product-performance.service');
 const {
-  isDiagnosticsEnabled,
   buildOpportunityDiagnostics,
 } = require('../services/product-opportunity-input.adapter');
 const { buildStoreBaseline, assembleStoreBaselineRows } = require('../services/store-baseline.service');
 const { getBetaReadOnlyRouteBlock } = require('../services/beta-safety.service');
+const { getBetaDiagnosticsRouteBlock } = require('../services/beta-enrollment.service');
 
 const {
   previewContentExecution,
@@ -576,10 +576,13 @@ router.get('/queue', async (req, res) => {
 // merchant-facing behavior. It never calls Shopify or Anthropic.
 // ---------------------------------------------------------------------------
 router.get('/opportunity-diagnostics', async (req, res) => {
-  // Fail-closed: behave as if the route does not exist when the flag is off.
-  if (!isDiagnosticsEnabled()) {
-    return res.status(404).json({ error: 'Not found.' });
-  }
+  // Fail-closed diagnostics enrollment gate (PR B): the route behaves as if it
+  // does not exist unless PRODUCT_OPPORTUNITY_DIAGNOSTICS=true AND the shop is in
+  // DIAGNOSTICS_STORE_ALLOWLIST. Runs BEFORE any DB/Shopify work. Returns 404
+  // (not 403) so enrollment state never leaks. The global flag alone is NOT
+  // enough — a real-store Beta 0 must be scoped to explicitly enrolled stores.
+  const enrollBlock = getBetaDiagnosticsRouteBlock(req.query.shop);
+  if (enrollBlock) return res.status(enrollBlock.status).json(enrollBlock.body);
 
   const prisma = req.app.get('prisma');
   try {
