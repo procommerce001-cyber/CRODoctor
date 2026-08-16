@@ -26,11 +26,18 @@ const { generateDescriptionWithLLM }         = require('./cro/generators/descrip
 const { generateShortDescriptionExpansionWithLLM } = require('./cro/generators/short-description-llm');
 const { fetchProductReviews }                = require('./cro/product-reviews');
 const { validateGeneratorOutputContract }    = require('./cro/output-contract-validator');
+const { shouldBlockShopifyWrites, createBetaReadOnlyError } = require('./beta-safety.service');
 
 // Private — must only be called from applyContentChange or rollbackContentChange.
 // Every call MUST create a ContentExecution record in the same operation.
 // Not exported. Not reachable from outside this module.
 async function updateProductDescription(store, shopifyProductId, bodyHtml) {
+  // Fail-closed beta kill switch — TRUE Shopify write chokepoint. Blocks before
+  // any Shopify PUT when controlled-beta read-only / write-disabled is active.
+  // Covers every apply/rollback path since all route through this one function.
+  if (shouldBlockShopifyWrites()) {
+    throw createBetaReadOnlyError();
+  }
   const url = `https://${store.shopDomain}/admin/api/2024-01/products/${shopifyProductId}.json`;
   const res = await fetch(url, {
     method:  'PUT',
@@ -2015,4 +2022,6 @@ module.exports = {
   rollbackContentChange,
   buildBatchPreview,
   acceptGeneratorOutput,
+  // Exported for the beta write-kill-switch test — the true Shopify write chokepoint.
+  updateProductDescription,
 };

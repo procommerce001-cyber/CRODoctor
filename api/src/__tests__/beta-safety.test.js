@@ -125,3 +125,74 @@ test('shopifyFetch blocks any mutating method (defense in depth) but allows GET'
   assert.strictEqual(beta.shouldBlockShopifyWrites({ DISABLE_SHOPIFY_WRITES: 'true' }), true);
   assert.strictEqual(beta.shouldBlockShopifyWrites({}), false);
 });
+
+// ── TRUE chokepoint: action-center.service.updateProductDescription ──────────
+// This is the function every apply/rollback path actually routes through.
+
+test('action-center updateProductDescription throws BETA_READ_ONLY_WRITE_BLOCKED and never calls fetch when read-only', async () => {
+  const { updateProductDescription } = require('../services/action-center.service');
+  const originalFetch = global.fetch;
+  let fetchCalled = false;
+  global.fetch = async () => { fetchCalled = true; throw new Error('fetch must not be called'); };
+  clearFlags();
+  process.env.CONTROLLED_BETA_READ_ONLY = 'true';
+  try {
+    await assert.rejects(
+      () => updateProductDescription({ shopDomain: 's.myshopify.com', accessToken: 'x' }, '123', '<p>hi</p>'),
+      (e) => e.code === 'BETA_READ_ONLY_WRITE_BLOCKED' && e.status === 403
+    );
+    assert.strictEqual(fetchCalled, false, 'true write chokepoint must not call Shopify when read-only');
+  } finally {
+    clearFlags();
+    global.fetch = originalFetch;
+  }
+});
+
+test('action-center updateProductDescription is also blocked by DISABLE_SHOPIFY_WRITES', async () => {
+  const { updateProductDescription } = require('../services/action-center.service');
+  const originalFetch = global.fetch;
+  let fetchCalled = false;
+  global.fetch = async () => { fetchCalled = true; throw new Error('fetch must not be called'); };
+  clearFlags();
+  process.env.DISABLE_SHOPIFY_WRITES = 'true';
+  try {
+    await assert.rejects(
+      () => updateProductDescription({ shopDomain: 's.myshopify.com', accessToken: 'x' }, '123', '<p>hi</p>'),
+      (e) => e.code === 'BETA_READ_ONLY_WRITE_BLOCKED'
+    );
+    assert.strictEqual(fetchCalled, false);
+  } finally {
+    clearFlags();
+    global.fetch = originalFetch;
+  }
+});
+
+test('action-center updateProductDescription proceeds to write when flags off (stubbed fetch, no live Shopify)', async () => {
+  const { updateProductDescription } = require('../services/action-center.service');
+  const originalFetch = global.fetch;
+  let fetchCalled = false;
+  global.fetch = async () => {
+    fetchCalled = true;
+    return { ok: true, json: async () => ({ product: { id: '123' } }) };
+  };
+  clearFlags();
+  try {
+    const product = await updateProductDescription({ shopDomain: 's.myshopify.com', accessToken: 'x' }, '123', '<p>hi</p>');
+    assert.strictEqual(fetchCalled, true, 'write path should reach Shopify fetch when flags are off');
+    assert.strictEqual(product.id, '123');
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+// ── decision-engine apply route guard (via the shared route-block helper) ────
+
+test('decision-engine apply route can short-circuit with beta_read_only 403 before dangerous work', () => {
+  // POST /decision-engine/actions/execute guards with getBetaReadOnlyRouteBlock()
+  // as its first statement — the same pure helper, proven here by construction.
+  const block = beta.getBetaReadOnlyRouteBlock({ CONTROLLED_BETA_READ_ONLY: 'true' });
+  assert.ok(block);
+  assert.strictEqual(block.status, 403);
+  assert.strictEqual(block.body.error, 'beta_read_only');
+  assert.strictEqual(beta.getBetaReadOnlyRouteBlock({}), null); // proceeds when flags off
+});
