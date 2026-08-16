@@ -7,6 +7,7 @@ const { getTopDecisionActions, compareProductMetrics } = require('../services/me
 const { resolveStore }                       = require('../lib/resolve-store');
 const { getProductActions, applyContentChange } = require('../services/action-center.service');
 const { PRODUCT_INCLUDE }                    = require('../lib/product-include');
+const { getBetaReadOnlyRouteBlock }          = require('../services/beta-safety.service');
 
 // ---------------------------------------------------------------------------
 // GET /decision-engine/top-actions?shop=<shopDomain>
@@ -42,6 +43,10 @@ router.get('/top-actions', async (req, res) => {
 // Idempotent — calling twice returns the existing record.
 // ---------------------------------------------------------------------------
 router.post('/actions/execute', async (req, res) => {
+  // Fail-closed beta guard: block before any DB/Shopify work (this route reaches
+  // applyContentChange → the true Shopify write chokepoint).
+  const betaBlock = getBetaReadOnlyRouteBlock();
+  if (betaBlock) return res.status(betaBlock.status).json(betaBlock.body);
   const prisma = req.app.get('prisma');
   try {
     if (!req.query.shop) return res.status(400).json({ error: 'shop is required' });
