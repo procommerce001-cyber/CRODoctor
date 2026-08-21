@@ -13,6 +13,7 @@
 |---|---|---|---|
 | 1 | 2026-08-18 | Initial runbook | Engineering |
 | 2 | 2026-08-19 | Revised after safety review (`RUNBOOK_REVIEW_BLOCKED_NEEDS_REVISIONS`): store lifecycle, OAuth scopes/consent, ScriptTag install behavior, data handling, offboarding, diagnostics sample limits | Engineering |
+| 3 | 2026-08-19 | Revised after re-review (N1–N6): merchant embedded app UI access, dev-store rehearsal, env restart / running-instance confirmation, restart-vs-deploy distinction, per-callback blocked-event reconciliation, manual tracker endpoint forbidden | Engineering |
 
 ---
 
@@ -80,9 +81,12 @@ Any deployment that occurred around the PR #14 / PR #15 merges was **automatic p
 - Product updates (description, title, metafields, images, tags, anything).
 - Theme updates.
 - **ScriptTag / tracker installation on the client storefront.**
+- **Manual tracker registration — do not call `POST /auth/ensure-tracker`, or any other standalone `ensureScriptTag` entry point, at any time during Beta 0.**
+- **Tracker registration "tests" of any kind against the client store.**
 - Cart updates.
 - Checkout changes.
 - Manual theme/code edits to the client store.
+- **Directing or encouraging the merchant to open or use the CRODoctor embedded app UI (Section 10.4).**
 - Merchant-facing dashboard promises.
 - Merchant-facing uplift claims.
 - Public case study claims.
@@ -151,6 +155,31 @@ Accepted truthy values for the boolean flags: `true`, `1`, `yes`, `on` (case-ins
 - ⚠️ If any **write-disable flag is missing or not truthy, Beta 0 is not approved.** Do not connect the store. Fix the environment first.
 - ⚠️ Setting `PRODUCT_OPPORTUNITY_DIAGNOSTICS=true` **without** the allowlist does not expose anything, but it is still an incomplete configuration — do not treat it as "ready."
 
+### 5.4 Applying the flags — restart and running-instance confirmation
+
+**Reading the values in the Render dashboard is not proof that the live process is using them.** Flags are read from the process environment at call time, so until the service has restarted with the new configuration, **the running instance is still serving the old values** — including, potentially, an unset write-disable flag during an OAuth install.
+
+Required sequence, in this order:
+
+1. Set the env values.
+2. **Confirm the service restart completed successfully.**
+3. **Confirm the running instance is the post-restart one** and is healthy.
+4. Only then start the OAuth install.
+
+- ⛔ **If there is any uncertainty about whether the running process picked up the flags, STOP before OAuth install.** Do not install and check afterwards — that is the exact window Section 5.1 exists to close.
+- Verify operationally (deployment/restart status, service health, log timestamps). **Do not** add code-level verification endpoints for this, and **never** print secrets or full env dumps to confirm a flag.
+
+#### Env restart vs. code deploy — not the same thing
+
+Changing env vars typically triggers a **Render service restart**. This is **expected and required** when setting the Beta 0 flags, and it is **not** the "no deploy" violation described in Section 13.
+
+| Action | During preflight (before OAuth install) | During the live session |
+|---|---|---|
+| Env-var change + resulting service restart | **Allowed and required** — part of approved preflight | **Forbidden** unless aborting or offboarding per Sections 18/19 |
+| Code deploy / manual deploy | Forbidden unless separately approved | **Forbidden** |
+
+- ⚠️ **Do not change env flags mid-run.** The only exceptions are executing the abort procedure (Section 18) or offboarding (Section 19). Changing a flag mid-session invalidates the read-only proof for that session.
+
 ---
 
 ## 6. Install-Time ScriptTag Behavior (Expected, Not a Bug)
@@ -161,11 +190,13 @@ Accepted truthy values for the boolean flags: `true`, `1`, `yes`, `on` (case-ins
 
 **Therefore, during Beta 0:**
 
-- ✅ **Expect** one `BETA_READ_ONLY_WRITE_BLOCKED` event in the logs during the OAuth install window, originating from `ensureScriptTag`.
-- ✅ **Record it as evidence the kill switch worked.** It is the system behaving exactly as designed.
-- ✅ **Do not abort the run because of it.**
-- ⛔ **Any other** `BETA_READ_ONLY_WRITE_BLOCKED` event — a different origin, or *any* occurrence outside the OAuth install window — **is a stop condition** and must be investigated before continuing (Section 17).
+- ✅ **Expect one `BETA_READ_ONLY_WRITE_BLOCKED` event per OAuth callback / install attempt**, originating from `ensureScriptTag`. `ensureScriptTag` runs on **every** OAuth callback, so a re-install or re-authentication legitimately produces another event.
+- ✅ **Reconcile count, origin, and timing — do not match on a fixed number.** The event count should **equal the number of OAuth install/auth callbacks actually performed**. Record how many callbacks occurred and confirm the counts agree.
+- ✅ **Record these as evidence the kill switch worked.** It is the system behaving exactly as designed.
+- ✅ **Do not abort the run because of them.**
+- ⛔ **Any `BETA_READ_ONLY_WRITE_BLOCKED` event from a different origin, outside the OAuth install/auth window, or in excess of the number of callbacks performed, is a stop condition** and must be investigated before continuing (Section 17).
 - ⛔ If a ScriptTag **was** created (verify in Shopify admin), the flags were not active at install time. Stop and follow Section 18.
+- ⛔ Do not generate these events deliberately. Calling `POST /auth/ensure-tracker` or any standalone tracker-registration entry point during Beta 0 is forbidden (Section 3.2) and is itself a stop condition.
 
 **Downstream consequence — expected missing data.** Because the tracker is intentionally not installed, no PDP events are captured for this store. **`productViews` and related view-derived fields will be null/missing. This is expected in Beta 0.** Do not chase it as a bug, do not work around it, and do not let it be silently defaulted — record it honestly as `missingData` (Section 15, Section 16).
 
@@ -220,6 +251,30 @@ The first Beta 0 store must satisfy **all** of the following:
 
 If any criterion fails, choose a different store or a different window. Do not proceed on a "close enough" basis.
 
+### 8.1 Non-client Development Store Rehearsal
+
+> **Mandatory before any real-store Beta 0.** The full procedure must be rehearsed end-to-end on a **non-client development / test Shopify store** first.
+
+The whole premise of this runbook is that we do not improvise on a real client. Executing this procedure for the first time on the real client would violate that premise — and the read-only scope set (Section 7.1) is **currently unverified**. If those scopes turn out to be insufficient for ingest or analytics, discovering it mid-run means either an incomplete run or sending the merchant back through re-authorization.
+
+The rehearsal must validate **all** of the following:
+
+- The chosen **OAuth scope set** — and specifically **whether read-only scopes are sufficient** for Beta 0 ingest, analytics, and diagnostics.
+- **Write-disable flags are active before install**, including the restart / running-instance confirmation (Section 5.4).
+- The **OAuth install** completes successfully with those flags on.
+- The **expected `BETA_READ_ONLY_WRITE_BLOCKED` behavior** from `ensureScriptTag`, and that the observed event count reconciles against the number of callbacks (Section 6).
+- **No ScriptTag was actually created** — verified in the store's admin.
+- **Initial ingest / sync behavior**, including what is and is not populated.
+- The **authenticated diagnostics path** returns successfully for an allowlisted store.
+- **ProductOpportunityScore and Store Baseline output can be captured** in the intended format.
+- **Embedded app UI visibility** — exactly what a merchant would see (Section 10.4).
+- **Offboarding**: allowlist removal, diagnostics flag off, app uninstall, token revocation (Section 19).
+
+**If read-only scopes prove insufficient**, decide and document the fallback write-scope strategy — including the merchant pre-brief wording (Section 7.2) — **before any real merchant is involved**. Do not resolve this question on a live client store.
+
+- ⛔ **If the dev-store rehearsal fails, real-store Beta 0 is blocked** until the cause is fixed and the rehearsal is repeated successfully.
+- ⚠️ **A development-store rehearsal is not evidence that diagnostics quality is good on real commercial data.** A dev store has synthetic products, little or no order history, and no real traffic. The rehearsal proves the **safety and lifecycle procedure** works — nothing about the usefulness of the findings. Do not let a smooth rehearsal create confidence about output quality.
+
 ---
 
 ## 9. Required Approvals
@@ -262,6 +317,7 @@ If any criterion fails, choose a different store or a different window. Do not p
 - **Any future change would require separate, explicit approval** from them.
 - They may ask us to stop and disconnect at any time (Section 19 defines how).
 - What data we access and how long we keep it (Section 11).
+- **Not to open or use the CRODoctor app inside Shopify Admin during the run** (Section 10.4).
 
 ### 10.2 Suggested wording — read-only scopes (Section 7.1)
 
@@ -271,7 +327,24 @@ If any criterion fails, choose a different store or a different window. Do not p
 
 > We'd like to connect your store to CRODoctor in read-only mode for analysis only. One thing to expect before you click install: **Shopify's permission screen will list write permissions** (for example, editing products). That is because the app also contains "apply changes" features built for a later stage. **Those are switched off in code for this run** — we will not apply anything, will not edit products or theme, will not install storefront scripts, and will not touch cart or checkout. We're only reading your product and performance data to see what our system identifies, and comparing that to our own manual review. Any actual change in future would need your separate written approval, and you can ask us to disconnect at any time.
 
-### 10.4 Do not promise
+### 10.4 Merchant Embedded App UI Access
+
+**After OAuth install, CRODoctor appears in the merchant's Shopify Admin → Apps list, and the merchant can open the embedded app UI at any time.** Installing the app is what grants that access; nothing in Beta 0's read-only posture prevents it.
+
+This matters because **Beta 0 is internal diagnostics only**. The embedded UI was not built for a read-only evaluation run and may display scores, recommendations, Apply / Auto-Apply / Rollback controls, uplift-flavored copy, or CTAs that contradict what the merchant was told. Clicking an Apply control would be **blocked** by the kill switch (Section 4) — so the risk here is **not a write**. The risk is a broken promise, a confused merchant, and a claim we cannot support.
+
+Required:
+
+- **The merchant must be instructed not to open or use the CRODoctor app UI inside Shopify Admin during Beta 0**, unless a separate UI review has approved exactly what they will see.
+- **The operator must review the embedded app UI in a safe / development context BEFORE the real-store run** (Section 8.1), and record what a merchant would actually see.
+- **Do not rely on the merchant "not clicking around" as the only control.** An instruction is a courtesy, not a guardrail; the verified UI review is the guardrail.
+- **If the merchant-visible UI cannot be verified safe, Beta 0 is blocked** — or proceeds only with explicit release owner **and** product owner approval of the residual risk, plus a merchant pre-brief covering what they may see.
+
+Tell the merchant, in the pre-brief:
+
+> Please **do not open or use the CRODoctor app inside your Shopify Admin** during this read-only Beta 0 unless we explicitly ask you to. This run is internal diagnostics only — we're reading your data and reviewing it on our side. The app screen includes features built for later phases that aren't part of this run, so anything you see there won't reflect what we're actually doing.
+
+### 10.5 Do not promise
 
 - Guaranteed uplift.
 - Revenue increase.
@@ -340,12 +413,21 @@ Complete **every** item before the OAuth install. Any unchecked box blocks the r
 - [ ] Store canonical `*.myshopify.com` domain confirmed (not a custom domain).
 - [ ] Merchant written approval captured.
 - [ ] OAuth scope strategy approved: read-only scopes preferred, OR merchant pre-brief completed if write scopes will appear.
+- [ ] **Full procedure rehearsed on a non-client development store** with the intended OAuth scope strategy; ingest, diagnostics, ScriptTag-block behavior, embedded UI visibility, and offboarding all verified (Section 8.1).
+- [ ] Read-only scope set confirmed sufficient during rehearsal — or fallback write-scope strategy decided and documented before involving the merchant.
+- [ ] **Embedded app UI reviewed by the operator in a safe / dev context** before the real-store run (Section 10.4).
+- [ ] Operator recorded whether merchant-visible UI contains any uplift claims, scores, recommendations, Apply controls, Auto-Apply controls, Rollback controls, or confusing CTAs.
+- [ ] **Merchant instructed not to open or use the CRODoctor app UI** during Beta 0.
+- [ ] If merchant-visible UI could not be verified safe: release owner AND product owner explicitly approved the residual UI risk, and the merchant was pre-briefed.
+- [ ] Operator knows **not to call any ScriptTag / tracker registration endpoint** (`POST /auth/ensure-tracker` or equivalent) at any point during Beta 0.
 - [ ] `CONTROLLED_BETA_READ_ONLY=true` configured and confirmed in the live environment.
 - [ ] `DISABLE_SHOPIFY_WRITES=true` configured and confirmed.
 - [ ] `APPLY_DISABLED=true` configured and confirmed.
 - [ ] `PRODUCT_OPPORTUNITY_DIAGNOSTICS=true` configured and confirmed.
 - [ ] `DIAGNOSTICS_STORE_ALLOWLIST` contains **only** the approved store, as a plain canonical host.
 - [ ] **All five flags verified BEFORE OAuth install** (Section 5.1 ordering gate).
+- [ ] Env values set, **service restart completed successfully**, and the **running instance confirmed** to be serving the new values (Section 5.4).
+- [ ] **No OAuth install started before restart confirmation.**
 - [ ] Install-time ScriptTag behavior understood by the operator (Section 6) — the expected blocked event will not be mistaken for a failure, and a created ScriptTag will be.
 - [ ] Data handling decided: environment approved, access list agreed, retention period set, deletion owner named (Section 11).
 - [ ] No Apply / Rollback / Batch Apply / Decision Execute will be called during the session.
@@ -367,15 +449,15 @@ Complete **every** item before the OAuth install. Any unchecked box blocks the r
 1. **Confirm the runbook is signed off** — Section 22 complete, release owner and product owner both signed.
 2. **Confirm merchant consent and OAuth scope communication** — written approval captured; merchant pre-briefed on the consent screen (Section 7).
 3. **Confirm the canonical store domain.** Verify the exact `*.myshopify.com` host with the merchant or the Shopify admin URL.
-4. **Verify all Render/env flags — BEFORE OAuth install.** Read back all five flags from Section 5 in the live environment. Confirm values, not just presence. This is the Section 5.1 ordering gate; do not proceed past it on assumption.
+4. **Verify all Render/env flags — BEFORE OAuth install.** Read back all five flags from Section 5 in the live environment. Confirm values, not just presence. **Then confirm the service restart completed and the running instance is serving those values** (Section 5.4) — dashboard values alone are not proof. This is the Section 5.1 ordering gate; do not proceed past it on assumption. If uncertain whether the running process picked up the flags, **stop before OAuth install**.
 5. **Confirm `DIAGNOSTICS_STORE_ALLOWLIST` contains only the approved canonical store.** One entry. Exact match. Plain host.
 6. **Confirm write-disable flags are active** (`CONTROLLED_BETA_READ_ONLY`, `DISABLE_SHOPIFY_WRITES`, `APPLY_DISABLED` all truthy).
-7. **Confirm no deploy or manual code change is happening** during this session. Any deploy requires separate approval.
+7. **Confirm no code deploy or manual code change is happening** during this session. A **code deploy** requires separate approval and is forbidden during the live session. Note the distinction (Section 5.4): the **env-change service restart performed during preflight is expected and required**, and is not a code deploy. Do not change env flags again mid-run except to abort (Section 18) or offboard (Section 19).
 
 **Connect**
 
 8. **Start the OAuth install and connect the approved store only.** No other store.
-9. **Expect and record the known install-time `BETA_READ_ONLY_WRITE_BLOCKED` event** from `ensureScriptTag`, if it appears (Section 6). Record it as kill-switch evidence. Do not abort on it.
+9. **Expect and record the known install-time `BETA_READ_ONLY_WRITE_BLOCKED` events** from `ensureScriptTag` — **one per OAuth callback / install attempt** (Section 6). Record the number of callbacks performed and reconcile the event count, origin, and timing. Record them as kill-switch evidence. Do not abort on them.
 10. **Confirm no ScriptTag / tracker was actually installed** — check the store's script tags in the Shopify admin. If one exists, stop and follow Section 18.
 11. **Confirm initial ingest/sync behavior.** Record what was actually ingested. **Do not claim full catalog coverage unless it has been proven** for this store (see Section 14).
 
@@ -428,8 +510,19 @@ Abort owner:
 Deployed commit verified:
 Section 22 sign-off confirmed:   yes / no
 
+Dev-store rehearsal completed + passed (Section 8.1):  yes / no
+  Read-only scopes confirmed sufficient:  yes / no / fallback documented
+
 OAuth scopes granted:            <read-only set / write scopes present>
 Merchant pre-briefed on consent screen:  yes / no
+Merchant instructed not to open the app UI (Section 10.4):  yes / no
+Embedded app UI reviewed by operator beforehand:  yes / no
+  What a merchant would see (claims / scores / Apply controls / CTAs):
+
+Env application:
+  Service restart completed:                yes / no
+  Running instance confirmed post-restart:  yes / no
+  OAuth install started only after that:    yes / no
 
 Data handling:
   Environment approved by data owner:
@@ -444,8 +537,11 @@ Flags confirmed BEFORE OAuth install (value read back from live env):
   DIAGNOSTICS_STORE_ALLOWLIST:      <host only, single entry>
 
 Install-time ScriptTag:
-  BETA_READ_ONLY_WRITE_BLOCKED from ensureScriptTag seen:  yes / no
+  OAuth install/auth callbacks performed (count):          ___
+  BETA_READ_ONLY_WRITE_BLOCKED from ensureScriptTag (count): ___   <-- should equal callbacks
+  Counts reconcile:                                        yes / no
   ScriptTag actually created on storefront (admin check):  yes / no   <-- must be NO
+  Any tracker registration endpoint called:                yes / no   <-- must be NO
 
 Diagnostics endpoint used:
   GET /action-center/opportunity-diagnostics?shop=<host>
@@ -485,8 +581,12 @@ Errors encountered:
 Performance concerns (slow queries, timeouts, heavy load):
   -
 
-BETA_READ_ONLY_WRITE_BLOCKED events outside the install window:  yes / no
+BETA_READ_ONLY_WRITE_BLOCKED events outside the install/auth window,
+from another origin, or in excess of the callback count:  yes / no
   (if yes, this is a STOP CONDITION — detail + investigation)
+
+Merchant interacted with the embedded app UI:  yes / no
+  (if yes, record what they saw and whether it was reviewed)
 
 Offboarding completed (Section 19):  yes / no
   Store removed from allowlist:
@@ -513,14 +613,17 @@ Complete **after** the session. This is the evidence that Beta 0 was genuinely r
 - [ ] No Decision Engine execute endpoint was called (`POST /decision-engine/actions/execute`).
 - [ ] No Shopify product / theme / cart / checkout mutation was performed.
 - [ ] **No ScriptTag / tracker was created on the storefront** — verified in the Shopify admin.
-- [ ] `BETA_READ_ONLY_WRITE_BLOCKED` events reconciled: the install-window `ensureScriptTag` event (if present) is recorded as expected kill-switch evidence, and **no other occurrences exist**.
+- [ ] `BETA_READ_ONLY_WRITE_BLOCKED` events reconciled by **count, origin, and timing**: events from `ensureScriptTag` within the OAuth install/auth window are recorded as expected kill-switch evidence, the **count equals the number of OAuth install/auth callbacks actually performed**, and **no other occurrences exist**.
+- [ ] **No ScriptTag / tracker registration endpoint was called** (`POST /auth/ensure-tracker` or equivalent) at any point during the run.
+- [ ] **Merchant did not interact with the CRODoctor embedded app UI** during the run — or any interaction was recorded and reviewed.
+- [ ] **No merchant-facing uplift claim, Apply control, Auto-Apply control, Rollback control, or confusing CTA was exposed** without approval.
 - [ ] Webhook activity reviewed (see note below) — no webhook-triggered mutation to Shopify.
 - [ ] No product or theme changes observed in the Shopify admin (spot-check the products that appeared in diagnostics).
 - [ ] Internal diagnostics output was captured.
 - [ ] No merchant-facing page changed.
 - [ ] Offboarding completed per Section 19.
 
-> **`BETA_READ_ONLY_WRITE_BLOCKED` — how to read it.** One occurrence during the OAuth install window, originating from `ensureScriptTag`, is **expected** in Beta 0 and confirms the kill switch worked (Section 6). Record it; do not abort. **Any other occurrence — different origin, or any time outside the install window — is a stop condition**: our system attempted a write during a read-only run, and the call path must be investigated before continuing. A working safety net is not a licence to keep driving at it.
+> **`BETA_READ_ONLY_WRITE_BLOCKED` — how to read it.** Occurrences originating from `ensureScriptTag` during the OAuth install/auth window are **expected** in Beta 0 and confirm the kill switch worked — **one per OAuth callback / install attempt**, so re-auth or re-install legitimately produces more than one (Section 6). Reconcile the count against the number of callbacks performed rather than matching a fixed number; record them, do not abort. **Any occurrence from a different origin, outside the install/auth window, or in excess of the number of callbacks performed, is a stop condition**: our system attempted a write during a read-only run, and the call path must be investigated before continuing. A working safety net is not a licence to keep driving at it.
 
 > **Webhooks.** Shopify webhooks may arrive as part of normal app lifecycle and sync. Receiving them is **not** an operator write and should not be treated as one. However, **any webhook-triggered mutation toward Shopify would be a stop condition.** Check logs for unexpected webhook side effects before signing off this checklist.
 
@@ -531,8 +634,11 @@ Complete **after** the session. This is the evidence that Beta 0 was genuinely r
 **Stop immediately** if any of the following occurs:
 
 - Any write attempt occurs, **other than** the expected install-window `ensureScriptTag` block described in Section 6.
-- Any `BETA_READ_ONLY_WRITE_BLOCKED` event outside the OAuth install window, or from any origin other than `ensureScriptTag`.
+- Any `BETA_READ_ONLY_WRITE_BLOCKED` event outside the OAuth install/auth window, from any origin other than `ensureScriptTag`, or **in excess of the number of OAuth callbacks actually performed**.
 - A ScriptTag / tracker was actually created on the storefront.
+- **Any ScriptTag / tracker registration endpoint was called** (`POST /auth/ensure-tracker` or equivalent), or any tracker registration "test" was attempted.
+- **The merchant sees unintended UI, an unintended claim, an Apply / Auto-Apply / Rollback control, or any confusing merchant-facing promise** (Section 10.4).
+- **Uncertainty about whether the running instance picked up the env flags** — stop *before* OAuth install (Section 5.4).
 - Any Shopify product / theme / cart / checkout change is detected.
 - Any webhook-triggered mutation toward Shopify.
 - Any tenant leakage is suspected.
@@ -542,7 +648,6 @@ Complete **after** the session. This is the evidence that Beta 0 was genuinely r
 - Query performance is concerning (long-running queries, timeouts, elevated load on the store's data).
 - ProductOpportunityScore produces **fake confidence** — high confidence on thin or absent data.
 - Store Baseline **overclaims** — presents missing data as known.
-- The merchant sees unintended UI or unintended claims.
 - **The operator is unsure.** Uncertainty is a valid and sufficient stop condition. Stopping costs a session; guessing costs a client.
 
 ---
@@ -591,7 +696,7 @@ Convene after every session and produce:
 
 - **Internal summary** — what ran, what was found, what broke.
 - **CRO quality review** — were the diagnostics genuinely useful to a CRO practitioner, given the sample limits in Section 14?
-- **Engineering safety review** — did every guardrail behave as designed? Was the install-time ScriptTag block the only blocked-write event? Any surprises in logs?
+- **Engineering safety review** — did every guardrail behave as designed? Did the blocked-write events reconcile exactly against the OAuth callbacks performed, with no other origin or timing? Did the merchant-visible UI match what the operator reviewed? Any surprises in logs?
 - **Data quality review** — was `missingData` honest? Were confidence labels defensible? Any overclaiming? Was the sample treated as a sample?
 - **Data handling review** — retention on track, access list respected, deletion owner still assigned.
 - **Decision**, one of:
@@ -608,6 +713,8 @@ Beta 0 passes **only if all** of the following hold:
 
 - Zero Shopify writes (the blocked install-time ScriptTag attempt is not a write — nothing reached the store).
 - Zero product / theme / cart / checkout / ScriptTag changes.
+- **No unintended merchant-facing UI or claim was exposed during Beta 0** (Section 10.4).
+- Blocked-write events reconciled cleanly: `ensureScriptTag` origin, install/auth window, count matching the callbacks performed — and nothing else.
 - Diagnostics complete without critical errors.
 - No tenant leakage (no other store's data appears anywhere).
 - No secret leakage (no tokens, URLs, or keys in logs or output).
