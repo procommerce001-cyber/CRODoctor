@@ -14,6 +14,7 @@
 | 1 | 2026-08-18 | Initial runbook | Engineering |
 | 2 | 2026-08-19 | Revised after safety review (`RUNBOOK_REVIEW_BLOCKED_NEEDS_REVISIONS`): store lifecycle, OAuth scopes/consent, ScriptTag install behavior, data handling, offboarding, diagnostics sample limits | Engineering |
 | 3 | 2026-08-19 | Revised after re-review (N1–N6): merchant embedded app UI access, dev-store rehearsal, env restart / running-instance confirmation, restart-vs-deploy distinction, per-callback blocked-event reconciliation, manual tracker endpoint forbidden | Engineering |
+| 4 | 2026-08-21 | Final review edits (S1–S2): `SHOPIFY_SCOPES` treated as a configured-and-verified live value under the restart gate (it is captured at module load), install-URL generation gated on restart confirmation; revision label de-staled | Engineering |
 
 ---
 
@@ -45,7 +46,7 @@ Beta 0 is an **internal evaluation run using a real store's data**. The merchant
 
 Point-in-time values recorded when this runbook was written. **These are not live status.** Every real run must record its own current values in a fresh run record (Section 15).
 
-| Item | Value at rev 2 (2026-08-19) |
+| Item | Value as recorded on 2026-08-21 |
 |---|---|
 | Approved main commit | `4c4bee9` (or later, if re-verified) |
 | PR #14 — write kill switch | Merged and verified (`df1fa76`) |
@@ -134,6 +135,16 @@ Both must already be **merged into `main` and post-merge verified**:
 
 Accepted truthy values for the boolean flags: `true`, `1`, `yes`, `on` (case-insensitive). Anything else — including unset — reads as false.
 
+**Plus one more required Beta 0 environment value — `SHOPIFY_SCOPES`:**
+
+| Env value | Beta 0 requirement |
+|---|---|
+| `SHOPIFY_SCOPES` | **Preferred value:** `read_products,read_orders,read_analytics`. If write scopes remain, that requires release owner **and** product owner approval plus a merchant pre-brief (Section 7.2). **Must be set and verified live before generating any Shopify install URL.** |
+
+> ⚠️ **`SHOPIFY_SCOPES` is read once at process/module load** for the OAuth install flow — unlike the five flags above, which are read at call time. **Changing it in Render does not affect an already-running process.** After setting or changing `SHOPIFY_SCOPES`, the service must restart successfully and the running instance must be confirmed **before any OAuth install URL is generated or shown to the merchant**. Otherwise Shopify will present the merchant with the **old** scope set — silently contradicting the pre-brief you just gave them.
+>
+> **Approving a scope strategy is not configuring it, and configuring it is not effective until the restart is confirmed.** All three steps are required.
+
 ### 5.2 Allowlist format rules
 
 - Use the **canonical `*.myshopify.com` host only**.
@@ -157,16 +168,18 @@ Accepted truthy values for the boolean flags: `true`, `1`, `yes`, `on` (case-ins
 
 ### 5.4 Applying the flags — restart and running-instance confirmation
 
-**Reading the values in the Render dashboard is not proof that the live process is using them.** Flags are read from the process environment at call time, so until the service has restarted with the new configuration, **the running instance is still serving the old values** — including, potentially, an unset write-disable flag during an OAuth install.
+**This section applies to every env value that affects Beta 0 or OAuth install behavior** — the five flags in Section 5.1, **`SHOPIFY_SCOPES`**, and anything else touching the install flow.
+
+**Reading the values in the Render dashboard is not proof that the live process is using them.** The flags are read from the process environment at call time, so until the service has restarted, **the running instance is still serving the old values** — including, potentially, an unset write-disable flag during an OAuth install. **`SHOPIFY_SCOPES` is stricter still: it is captured once at module load**, so a change to it cannot take effect at all without a restart.
 
 Required sequence, in this order:
 
-1. Set the env values.
+1. Set the env values — the five flags **and** `SHOPIFY_SCOPES`.
 2. **Confirm the service restart completed successfully.**
 3. **Confirm the running instance is the post-restart one** and is healthy.
-4. Only then start the OAuth install.
+4. Only then **generate or share the Shopify install URL**, and start the OAuth install.
 
-- ⛔ **If there is any uncertainty about whether the running process picked up the flags, STOP before OAuth install.** Do not install and check afterwards — that is the exact window Section 5.1 exists to close.
+- ⛔ **If there is any uncertainty about whether the running process picked up the flags or the scope value, STOP before generating the install URL.** Do not install and check afterwards — that is the exact window Section 5.1 exists to close.
 - Verify operationally (deployment/restart status, service health, log timestamps). **Do not** add code-level verification endpoints for this, and **never** print secrets or full env dumps to confirm a flag.
 
 #### Env restart vs. code deploy — not the same thing
@@ -221,6 +234,8 @@ This gives defense in depth at the Shopify grant level — the token itself cann
 **`write_products` and `write_script_tags` must NOT be included for Beta 0 unless explicitly approved by the release owner AND the product owner.** Note that omitting `write_script_tags` also permanently prevents tracker installation, which is already the intended Beta 0 state (Section 6).
 
 > Changing scopes affects the OAuth grant. Decide and configure this **before** install; changing scopes later requires the merchant to re-authorize.
+>
+> **Deciding is not enough.** The value must be **set in the live environment, the service restarted, and the running instance confirmed** before any install URL is generated (Section 5.4). `SHOPIFY_SCOPES` is captured at module load, so an unrestarted process will still build the install URL from the old scope set.
 
 ### 7.2 Fallback — if write scopes remain visible
 
@@ -412,7 +427,12 @@ Complete **every** item before the OAuth install. Any unchecked box blocks the r
 - [ ] Latest full test suite known green at 320/320 or later.
 - [ ] Store canonical `*.myshopify.com` domain confirmed (not a custom domain).
 - [ ] Merchant written approval captured.
-- [ ] OAuth scope strategy approved: read-only scopes preferred, OR merchant pre-brief completed if write scopes will appear.
+- [ ] OAuth scope strategy approved: read-only scopes preferred, OR merchant pre-brief completed if write scopes will appear. *(Approval only — configuration and verification are the boxes that follow.)*
+- [ ] **`SHOPIFY_SCOPES` set to the approved Beta 0 value in the live environment.**
+- [ ] If using read-only scopes, the value is exactly `read_products,read_orders,read_analytics`.
+- [ ] If write scopes remain visible: release owner AND product owner approved the fallback strategy, and the merchant pre-brief is completed (Section 7.2).
+- [ ] **Service restarted successfully after setting/changing `SHOPIFY_SCOPES`.**
+- [ ] **Running instance confirmed after restart BEFORE generating or sharing any Shopify install URL.**
 - [ ] **Full procedure rehearsed on a non-client development store** with the intended OAuth scope strategy; ingest, diagnostics, ScriptTag-block behavior, embedded UI visibility, and offboarding all verified (Section 8.1).
 - [ ] Read-only scope set confirmed sufficient during rehearsal — or fallback write-scope strategy decided and documented before involving the merchant.
 - [ ] **Embedded app UI reviewed by the operator in a safe / dev context** before the real-store run (Section 10.4).
@@ -426,8 +446,8 @@ Complete **every** item before the OAuth install. Any unchecked box blocks the r
 - [ ] `PRODUCT_OPPORTUNITY_DIAGNOSTICS=true` configured and confirmed.
 - [ ] `DIAGNOSTICS_STORE_ALLOWLIST` contains **only** the approved store, as a plain canonical host.
 - [ ] **All five flags verified BEFORE OAuth install** (Section 5.1 ordering gate).
-- [ ] Env values set, **service restart completed successfully**, and the **running instance confirmed** to be serving the new values (Section 5.4).
-- [ ] **No OAuth install started before restart confirmation.**
+- [ ] Env values set (five flags **and** `SHOPIFY_SCOPES`), **service restart completed successfully**, and the **running instance confirmed** to be serving the new values (Section 5.4).
+- [ ] **No install URL generated or shared, and no OAuth install started, before restart confirmation.**
 - [ ] Install-time ScriptTag behavior understood by the operator (Section 6) — the expected blocked event will not be mistaken for a failure, and a created ScriptTag will be.
 - [ ] Data handling decided: environment approved, access list agreed, retention period set, deletion owner named (Section 11).
 - [ ] No Apply / Rollback / Batch Apply / Decision Execute will be called during the session.
@@ -449,14 +469,14 @@ Complete **every** item before the OAuth install. Any unchecked box blocks the r
 1. **Confirm the runbook is signed off** — Section 22 complete, release owner and product owner both signed.
 2. **Confirm merchant consent and OAuth scope communication** — written approval captured; merchant pre-briefed on the consent screen (Section 7).
 3. **Confirm the canonical store domain.** Verify the exact `*.myshopify.com` host with the merchant or the Shopify admin URL.
-4. **Verify all Render/env flags — BEFORE OAuth install.** Read back all five flags from Section 5 in the live environment. Confirm values, not just presence. **Then confirm the service restart completed and the running instance is serving those values** (Section 5.4) — dashboard values alone are not proof. This is the Section 5.1 ordering gate; do not proceed past it on assumption. If uncertain whether the running process picked up the flags, **stop before OAuth install**.
+4. **Verify all Render/env values — BEFORE generating the install URL.** Read back all five flags from Section 5 **and `SHOPIFY_SCOPES`** in the live environment. Confirm values, not just presence. **Then confirm the service restart completed and the running instance is serving those values** (Section 5.4) — dashboard values alone are not proof, and `SHOPIFY_SCOPES` cannot take effect at all without a restart. This is the Section 5.1 ordering gate; do not proceed past it on assumption. If uncertain whether the running process picked up the flags or the scope value, **stop before generating or sharing any install URL**.
 5. **Confirm `DIAGNOSTICS_STORE_ALLOWLIST` contains only the approved canonical store.** One entry. Exact match. Plain host.
 6. **Confirm write-disable flags are active** (`CONTROLLED_BETA_READ_ONLY`, `DISABLE_SHOPIFY_WRITES`, `APPLY_DISABLED` all truthy).
 7. **Confirm no code deploy or manual code change is happening** during this session. A **code deploy** requires separate approval and is forbidden during the live session. Note the distinction (Section 5.4): the **env-change service restart performed during preflight is expected and required**, and is not a code deploy. Do not change env flags again mid-run except to abort (Section 18) or offboard (Section 19).
 
 **Connect**
 
-8. **Start the OAuth install and connect the approved store only.** No other store.
+8. **Generate the install URL and start the OAuth install for the approved store only** — only after step 4's restart/running-instance confirmation. No other store.
 9. **Expect and record the known install-time `BETA_READ_ONLY_WRITE_BLOCKED` events** from `ensureScriptTag` — **one per OAuth callback / install attempt** (Section 6). Record the number of callbacks performed and reconcile the event count, origin, and timing. Record them as kill-switch evidence. Do not abort on them.
 10. **Confirm no ScriptTag / tracker was actually installed** — check the store's script tags in the Shopify admin. If one exists, stop and follow Section 18.
 11. **Confirm initial ingest/sync behavior.** Record what was actually ingested. **Do not claim full catalog coverage unless it has been proven** for this store (see Section 14).
@@ -513,6 +533,7 @@ Section 22 sign-off confirmed:   yes / no
 Dev-store rehearsal completed + passed (Section 8.1):  yes / no
   Read-only scopes confirmed sufficient:  yes / no / fallback documented
 
+SHOPIFY_SCOPES value set in live env:    <value>
 OAuth scopes granted:            <read-only set / write scopes present>
 Merchant pre-briefed on consent screen:  yes / no
 Merchant instructed not to open the app UI (Section 10.4):  yes / no
@@ -520,9 +541,10 @@ Embedded app UI reviewed by operator beforehand:  yes / no
   What a merchant would see (claims / scores / Apply controls / CTAs):
 
 Env application:
-  Service restart completed:                yes / no
-  Running instance confirmed post-restart:  yes / no
-  OAuth install started only after that:    yes / no
+  Service restarted after scope/env changes:      yes / no
+  Running instance confirmed post-restart:        yes / no
+  Install URL generated only after confirmation:  yes / no
+  OAuth install started only after that:          yes / no
 
 Data handling:
   Environment approved by data owner:
@@ -638,7 +660,8 @@ Complete **after** the session. This is the evidence that Beta 0 was genuinely r
 - A ScriptTag / tracker was actually created on the storefront.
 - **Any ScriptTag / tracker registration endpoint was called** (`POST /auth/ensure-tracker` or equivalent), or any tracker registration "test" was attempted.
 - **The merchant sees unintended UI, an unintended claim, an Apply / Auto-Apply / Rollback control, or any confusing merchant-facing promise** (Section 10.4).
-- **Uncertainty about whether the running instance picked up the env flags** — stop *before* OAuth install (Section 5.4).
+- **Uncertainty about whether the running instance picked up the env flags or `SHOPIFY_SCOPES`** — stop *before* generating or sharing any install URL (Section 5.4).
+- **The consent screen shows a scope set that does not match what the merchant was pre-briefed on** — stop; do not let the merchant complete the install.
 - Any Shopify product / theme / cart / checkout change is detected.
 - Any webhook-triggered mutation toward Shopify.
 - Any tenant leakage is suspected.
