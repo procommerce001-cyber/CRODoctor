@@ -30,7 +30,7 @@ PR #16 was documentation-only: the merge added `docs/controlled-beta-0-ops-runbo
 | **#11** | Store Baseline Engine architecture plan | Merged (`c1c828d`) | Docs-only plan; no runtime change. |
 | **#12** | Store Baseline internal helper (Option A) | Merged + verified (`01d305f`) | Pure helper, observation-only on the diagnostics endpoint behind the same flag. Does not feed scoring. |
 | **#13** | Snapshot revenue/orders feed into Store Baseline diagnostics | Merged + verified (`3bd709f`) | Window-safe by design: cumulative snapshot data enters only via a dedicated AOV pair, never as funnel orders, so it cannot contaminate rolling-window CVR. |
-| **#14** | Controlled Beta Write Kill Switch | Merged + verified (`df1fa76`) | Fail-closed. Blocks **all mutating HTTP methods** at the Shopify transport layer (`shopifyFetch`), plus the product-description chokepoint and five apply/rollback/execute routes. Fully inert when flags are off. |
+| **#14** | Controlled Beta Write Kill Switch | Merged + verified (`df1fa76`) | Fail-closed. Blocks all mutating HTTP methods **routed through `shopifyFetch`**, plus the product-description chokepoint and five apply/rollback/execute routes. Fully inert when flags are off. ⚠️ **Known gap:** `registerWebhooks` uses raw/global `fetch` and **bypasses this guard** — see Section 6.6. Coverage is not universal. |
 | **#15** | Diagnostics Store Allowlist Gate | Merged + verified (`4c4bee9`) | Fail-closed enrollment gate. `PRODUCT_OPPORTUNITY_DIAGNOSTICS=true` alone is **no longer sufficient** — the shop must be in `DIAGNOSTICS_STORE_ALLOWLIST`. Blocked requests 404 before any DB work, with an identical body in every case so enrollment state cannot leak. |
 | **#16** | Controlled Beta 0 Ops Runbook | Merged + verified (`9a59f4c`) | Documentation only. Establishes the operational procedure and the sign-off gate that must precede any real-store run. |
 
@@ -68,6 +68,7 @@ All of the following must be satisfied, in addition to the runbook's own preflig
 - [ ] Product owner sign-off on the runbook (Section 22).
 - [ ] OAuth scope strategy decided (Section 6 below).
 - [ ] Approved data environment decided (Section 6 below).
+- [ ] **Webhook registration lifecycle decided and recorded** (Section 6.6) — accepted, routed through the kill switch, or disabled/deferred.
 - [ ] Merchant consent captured in writing.
 - [ ] Render / env flags verified in the live environment.
 - [ ] Service restart completed successfully after env changes.
@@ -112,6 +113,21 @@ All of the following must be satisfied, in addition to the runbook's own preflig
 - Findings are sample-scoped. A store's largest real opportunity may sit in an older product the sample never reaches.
 - Do not present results as store-wide unless full-catalog coverage is implemented and verified.
 
+### 6.6 Known open decision: webhook registration lifecycle — NOT DECIDED
+
+**Decision record:** `docs/decisions/webhook-registration-lifecycle-beta0.md` · **Runbook:** §6.1
+
+- The Beta 0 decision brief found that install-time webhook registration (`registerWebhooks`) uses **raw/global `fetch`** to `POST` to `webhooks.json` for `orders/create`, `products/update`, and `app/uninstalled`.
+- These writes **bypass the PR #14 `shopifyFetch` kill switch** and succeed even with every write-disable flag active. They also produce **no `BETA_READ_ONLY_WRITE_BLOCKED` event**, so the blocked-event reconciliation does not surface them.
+- They **are** Shopify Admin app-lifecycle writes. They are **not** product / theme / cart / checkout / storefront content mutations, and nothing a shopper sees changes.
+- ⚠️ **Consequence:** the phrase **"zero Shopify writes" is too broad** and must not be used unqualified — in the runbook, in a report, or to a merchant. The accurate promise is: no product, theme, storefront, cart, checkout, or code changes.
+- **Before real-store Beta 0, owners must decide one of:**
+  1. **accept** webhook registration as documented app-lifecycle behaviour (requires merchant disclosure);
+  2. **route** it through `shopifyFetch` / the kill switch in a later code PR;
+  3. **disable or defer** it for Beta 0 in a later code PR.
+- **The dev-store rehearsal must record** whether webhooks are created, the count and topics, whether registration succeeds under the chosen `SHOPIFY_SCOPES`, and whether they are cleaned up on uninstall / offboarding.
+- ⛔ **Real-store Beta 0 and real-store OAuth install remain blocked until this decision is made and documented.** The rehearsal observes the behaviour; it does not approve it.
+
 ---
 
 ## 7. Current forbidden actions
@@ -130,7 +146,9 @@ All of the following must be satisfied, in addition to the runbook's own preflig
 - No merchant-facing uplift claims.
 - No public case study claims.
 - No unsupported dashboard promises.
+- **No unqualified "zero Shopify writes" claim** — to a merchant, in a report, or in our own docs (Section 6.6).
 - **No real-store connection before sign-off.**
+- **No real-store OAuth install while the webhook lifecycle decision is unrecorded** (Section 6.6).
 
 > **Why the claim restrictions matter:** CRODoctor cannot yet prove lift. It has before/after data only, with no A/B capability. Any claim of measured improvement would be unsupported until the Change→Outcome model and measurement readiness work exist.
 
@@ -140,13 +158,15 @@ All of the following must be satisfied, in addition to the runbook's own preflig
 
 In order:
 
-1. **Decide the OAuth scope strategy** (Section 6.1) — this gates the rehearsal, because the rehearsal must exercise the scope set you intend to use.
-2. **Decide the approved data environment** (Section 6.2) — required before any real merchant data is ingested.
-3. **Prepare the dev-store rehearsal plan.**
-4. **Run the non-client development store rehearsal** and record the result.
-5. **Only after the rehearsal passes and both sign-offs are captured**, consider selecting one real-store Beta 0 candidate.
+1. **Open and merge the webhook lifecycle docs patch** — so the runbook, this checkpoint, and the decision record agree before anyone acts on them.
+2. **Decide the OAuth scope strategy** (Section 6.1) — this gates the rehearsal, because the rehearsal must exercise the scope set you intend to use.
+3. **Decide the approved data environment** (Section 6.2) — required before any real merchant data is ingested.
+4. **Decide the webhook lifecycle strategy** (Section 6.6) — or explicitly defer it until after the rehearsal, since the rehearsal produces the evidence for it. It must be recorded before any *real-store* install either way.
+5. **Prepare the dev-store rehearsal plan.**
+6. **Run the non-client development store rehearsal** and record the result — including webhook behaviour.
+7. **Only after the rehearsal passes, all decisions are recorded, and both sign-offs are captured**, consider selecting one real-store Beta 0 candidate.
 
-Steps 1 and 2 are decisions, not engineering work, and both are prerequisites for step 4.
+Steps 2–4 are decisions, not engineering work. Steps 2 and 3 must precede the rehearsal; step 4 may be informed *by* the rehearsal but must be recorded before a real store.
 
 ---
 
@@ -156,5 +176,6 @@ Steps 1 and 2 are decisions, not engineering work, and both are prerequisites fo
 |---|---|
 | `docs/controlled-beta-0-ops-runbook.md` | The operational source of truth for any Beta 0 run — preflight, execution, proof, abort, offboarding, sign-off gate. |
 | `docs/project-checkpoint-current-status.md` | This file — where the project stands and what remains before a real-store run. |
+| `docs/decisions/webhook-registration-lifecycle-beta0.md` | Open decision record: install-time webhook registration bypasses the kill switch. Blocks real-store Beta 0 until resolved. |
 
 Related planning documents: `docs/product-opportunity-score-wiring-plan.md`, `docs/store-baseline-engine-plan.md`, `docs/supabase-rls-security-check.md`, `docs/cro-foundation.md`.

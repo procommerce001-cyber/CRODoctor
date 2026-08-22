@@ -15,6 +15,7 @@
 | 2 | 2026-08-19 | Revised after safety review (`RUNBOOK_REVIEW_BLOCKED_NEEDS_REVISIONS`): store lifecycle, OAuth scopes/consent, ScriptTag install behavior, data handling, offboarding, diagnostics sample limits | Engineering |
 | 3 | 2026-08-19 | Revised after re-review (N1–N6): merchant embedded app UI access, dev-store rehearsal, env restart / running-instance confirmation, restart-vs-deploy distinction, per-callback blocked-event reconciliation, manual tracker endpoint forbidden | Engineering |
 | 4 | 2026-08-21 | Final review edits (S1–S2): `SHOPIFY_SCOPES` treated as a configured-and-verified live value under the restart gate (it is captured at module load), install-URL generation gated on restart confirmation; revision label de-staled | Engineering |
+| 5 | 2026-08-22 | Webhook registration lifecycle documented (§6.1): install-time `webhooks.json` POSTs bypass the PR #14 kill switch and produce no blocked event. "Zero Shopify writes" replaced with accurate storefront-content wording throughout; merchant script corrected; app-lifecycle disclosure added (§10.3a); preflight, rehearsal, proof, stop conditions, success criteria and offboarding updated. **Open owner decision — blocks real-store Beta 0.** | Engineering |
 
 ---
 
@@ -92,6 +93,8 @@ Any deployment that occurred around the PR #14 / PR #15 merges was **automatic p
 - Merchant-facing uplift claims.
 - Public case study claims.
 - **Any claim that CRODoctor improved revenue.** Measurement does not exist yet; such a claim would be unsupported.
+- **Any unqualified claim of "zero Shopify writes"** — to a merchant, in a report, or in this runbook. Install-time webhook registration is an app-lifecycle write the kill switch does not block (Section 6.1). State the accurate promise instead: no product, theme, storefront, cart, checkout, or code changes.
+- **A real-store OAuth install while the Section 6.1 webhook lifecycle decision is unrecorded.**
 
 ---
 
@@ -100,7 +103,8 @@ Any deployment that occurred around the PR #14 / PR #15 merges was **automatic p
 Both must already be **merged into `main` and post-merge verified**:
 
 **PR #14 — Controlled Beta Write Kill Switch**
-- Guards **all mutating HTTP methods** at the Shopify transport layer (`shopify-admin.service.js` → `shopifyFetch`): when the kill switch is on, any `POST`/`PUT`/`PATCH`/`DELETE` toward Shopify throws before leaving our process.
+- Guards all mutating HTTP methods **routed through `shopifyFetch`** (`shopify-admin.service.js`): when the kill switch is on, any `POST`/`PUT`/`PATCH`/`DELETE` issued via that helper throws before leaving our process.
+- ⚠️ **Coverage is not universal.** Call sites that use the raw/global `fetch` bypass this guard entirely — `registerWebhooks` does exactly that at install time (Section 6.1). Do not read "kill switch on" as "no Shopify write is possible."
 - Additionally guards the product-description write chokepoint (`action-center.service.js:updateProductDescription`).
 - Guards the dangerous routes: `POST /action-center/batch-apply-safe`, `POST /action-center/batch-apply-selected`, `POST /action-center/products/:id/apply`, `POST /action-center/products/:id/rollback`, `POST /decision-engine/actions/execute`.
 - Fail-closed. Blocked routes return `403 { error: "beta_read_only", ... }`; blocked writes throw an error carrying code `BETA_READ_ONLY_WRITE_BLOCKED`.
@@ -213,6 +217,36 @@ Changing env vars typically triggers a **Render service restart**. This is **exp
 
 **Downstream consequence — expected missing data.** Because the tracker is intentionally not installed, no PDP events are captured for this store. **`productViews` and related view-derived fields will be null/missing. This is expected in Beta 0.** Do not chase it as a bug, do not work around it, and do not let it be silently defaulted — record it honestly as `missingData` (Section 15, Section 16).
 
+### 6.1 Webhook Registration During Install — known open lifecycle behavior
+
+> **This behaviour is NOT yet approved for a real merchant.** It is an open decision that must be resolved before real-store Beta 0. See `docs/decisions/webhook-registration-lifecycle-beta0.md`.
+
+**What happens.** During the OAuth callback / initial sync, CRODoctor calls `registerWebhooks`, which issues `POST` requests to Shopify's `webhooks.json` for the topics `orders/create`, `products/update`, and `app/uninstalled`. **These are Shopify Admin API writes.**
+
+**Why the kill switch does not stop them.** `registerWebhooks` uses the raw/global `fetch`, **not** `shopifyFetch`. PR #14's write kill switch lives inside `shopifyFetch`, so **these webhook POSTs are not blocked** even when `CONTROLLED_BETA_READ_ONLY`, `DISABLE_SHOPIFY_WRITES`, and `APPLY_DISABLED` are all active.
+
+**Two consequences the operator must understand:**
+
+1. **They produce no `BETA_READ_ONLY_WRITE_BLOCKED` event.** Because they never reach `shopifyFetch`, nothing blocks them and nothing is logged as blocked. They are therefore **invisible to the Section 16 blocked-event reconciliation** — do not expect the reconciliation to surface them.
+2. **"Zero Shopify writes" is not an accurate description of a Beta 0 run.** This runbook does not make that claim. See Section 20.1.
+
+**What this behaviour is, and is not:**
+
+- It **is** an app-lifecycle write: it creates webhook subscription resources in the merchant's Shopify Admin app configuration.
+- It **is not** a product, theme, cart, checkout, ScriptTag, or storefront content change. Nothing a customer or shopper can see changes.
+- It is **standard behaviour for Shopify apps** and is ordinarily required for the app to function.
+- ⚠️ **None of that makes it automatically acceptable for a real client.** Do not describe it as "safe" without qualification, and do not treat "it's normal for apps" as approval. It modifies state inside the merchant's Shopify account, and we told the merchant we would not change things.
+
+**Required handling:**
+
+- **Dev-store rehearsal (Section 8.1): observe and record it.** This is precisely where the real behaviour must be established — whether the POSTs succeed, how many, which topics, and whether they are removed on uninstall.
+- **Normal, expected webhook registration during a dev-store rehearsal install is NOT a stop condition by itself.** Record it and continue.
+- **Before real-store Beta 0, owners must choose one of:**
+  1. **Accept** webhook registration as documented app-lifecycle behaviour — which then **requires** disclosure in merchant communication (Section 10.3a) and reconciliation in the proof checklist;
+  2. **Route it through `shopifyFetch`** / the kill switch in a later code PR, then verify;
+  3. **Disable or defer** webhook registration for Beta 0 in a later code PR, then verify.
+- ⛔ **Real-store Beta 0 and real-store OAuth install are blocked until that decision is made and recorded.** This runbook does not make the decision.
+
 ---
 
 ## 7. OAuth Scopes / Merchant Consent
@@ -279,6 +313,14 @@ The rehearsal must validate **all** of the following:
 - The **OAuth install** completes successfully with those flags on.
 - The **expected `BETA_READ_ONLY_WRITE_BLOCKED` behavior** from `ensureScriptTag`, and that the observed event count reconciles against the number of callbacks (Section 6).
 - **No ScriptTag was actually created** — verified in the store's admin.
+- **Webhook registration behaviour (Section 6.1)** — record all of:
+  - whether webhook registration occurred at all;
+  - **how many** webhook subscriptions were created;
+  - **which topics** were registered, if visible;
+  - whether registration **succeeded under the chosen `SHOPIFY_SCOPES`** (a read-only scope set may or may not permit it — this is one of the questions the rehearsal exists to answer);
+  - whether the subscriptions were **removed on uninstall / offboarding**;
+  - the operator's assessment of whether this behaviour is acceptable before a real merchant.
+  > **The rehearsal observes this behaviour. It does not approve it.** A clean dev-store result is evidence for the owner decision, not a substitute for it. Real-store Beta 0 stays blocked until Section 6.1's decision is recorded.
 - **Initial ingest / sync behavior**, including what is and is not populated.
 - The **authenticated diagnostics path** returns successfully for an allowlisted store.
 - **ProductOpportunityScore and Store Baseline output can be captured** in the intended format.
@@ -336,7 +378,17 @@ The rehearsal must validate **all** of the following:
 
 ### 10.2 Suggested wording — read-only scopes (Section 7.1)
 
-> We'd like to connect your store to CRODoctor in read-only mode. We will look at your product and performance data to see what conversion opportunities our system identifies, and compare that to our own manual review. We will not change anything on your store — no product edits, no theme edits, no storefront scripts, no checkout changes. Nothing will be applied. If we later want to make any change, we'll come back to you for approval first, and you can ask us to disconnect at any time.
+> We'd like to connect your store to CRODoctor in read-only mode. We will look at your product and performance data to see what conversion opportunities our system identifies, and compare that to our own manual review. **We will not change your products, theme, storefront, cart, checkout, code, or any customer-facing page.** Nothing will be applied. If we later want to make any change, we'll come back to you for approval first, and you can ask us to disconnect at any time.
+
+> ⚠️ **Do not tell a merchant "zero writes" or "we will not change anything on your store"** while install-time webhook registration remains unresolved (Section 6.1). The precise promise above — no products, theme, storefront, cart, checkout, code, or customer-facing pages — is accurate and is what should be used.
+
+### 10.3a App-lifecycle disclosure — required if webhook registration is accepted
+
+If owners select **Option A** in Section 6.1 (accept webhook registration as app-lifecycle behaviour), the merchant communication **must** disclose it before install. Add:
+
+> For the app to run normally, it also sets up standard background notifications (webhook subscriptions) inside your Shopify admin so it knows when products or orders change. That's app configuration, not a change to your store — it doesn't touch your products, theme, checkout, or anything a customer sees, and it's removed when the app is uninstalled.
+
+If owners select **Option B or C** (route through the kill switch, or disable/defer), **no such disclosure is needed** — but the corresponding code change must be implemented and verified **before** the real-store OAuth install.
 
 ### 10.3 Suggested wording — if write scopes remain visible (Section 7.2)
 
@@ -449,6 +501,11 @@ Complete **every** item before the OAuth install. Any unchecked box blocks the r
 - [ ] Env values set (five flags **and** `SHOPIFY_SCOPES`), **service restart completed successfully**, and the **running instance confirmed** to be serving the new values (Section 5.4).
 - [ ] **No install URL generated or shared, and no OAuth install started, before restart confirmation.**
 - [ ] Install-time ScriptTag behavior understood by the operator (Section 6) — the expected blocked event will not be mistaken for a failure, and a created ScriptTag will be.
+- [ ] **Webhook registration behaviour reviewed and understood** by the operator (Section 6.1) — including that it bypasses the kill switch and produces no blocked event.
+- [ ] **Dev-store rehearsal recorded whether webhook subscriptions were created during install**, with count, topics, and cleanup result.
+- [ ] **For real-store Beta 0, the webhook lifecycle decision is made and recorded** — accepted app-lifecycle behaviour, routed through the kill switch, or disabled/deferred (`docs/decisions/webhook-registration-lifecycle-beta0.md`).
+- [ ] If **accepted**: merchant communication includes the app-lifecycle disclosure (Section 10.3a).
+- [ ] If **not accepted**: a code-level prevention strategy has been implemented **and verified** — **no real-store OAuth install may start before that.**
 - [ ] Data handling decided: environment approved, access list agreed, retention period set, deletion owner named (Section 11).
 - [ ] No Apply / Rollback / Batch Apply / Decision Execute will be called during the session.
 - [ ] No theme / product / cart / checkout / ScriptTag changes planned.
@@ -565,6 +622,15 @@ Install-time ScriptTag:
   ScriptTag actually created on storefront (admin check):  yes / no   <-- must be NO
   Any tracker registration endpoint called:                yes / no   <-- must be NO
 
+Install-time webhook registration (Section 6.1 — app-lifecycle, NOT blocked by kill switch):
+  Webhook registration occurred:                           yes / no
+  Subscriptions created (count):                           ___
+  Topics registered:                                       ___
+  Succeeded under the chosen SHOPIFY_SCOPES:               yes / no / partial
+  Removed on uninstall / offboarding:                      yes / no / n-a
+  Owner decision recorded (accept / route / disable):      ___   <-- required before REAL-store run
+  Operator assessment (acceptable before a real merchant?):
+
 Diagnostics endpoint used:
   GET /action-center/opportunity-diagnostics?shop=<host>
 
@@ -633,8 +699,15 @@ Complete **after** the session. This is the evidence that Beta 0 was genuinely r
 - [ ] No Rollback endpoint was called (`POST /action-center/products/:id/rollback`).
 - [ ] No Batch Apply endpoint was called (`/action-center/batch-apply-safe`, `/action-center/batch-apply-selected`).
 - [ ] No Decision Engine execute endpoint was called (`POST /decision-engine/actions/execute`).
-- [ ] No Shopify product / theme / cart / checkout mutation was performed.
+- [ ] **No product / theme / cart / checkout / storefront content mutation was performed.**
 - [ ] **No ScriptTag / tracker was created on the storefront** — verified in the Shopify admin.
+- [ ] **No Apply / Rollback / Auto-Apply / Batch Apply / Decision Execute occurred.**
+- [ ] **Webhook registration reconciled** (Section 6.1):
+  - app-lifecycle webhook subscriptions created: **yes / no**
+  - count and topics recorded: ______
+  - confirmed these are **not** product / theme / cart / checkout / storefront mutations
+  - removed on uninstall / offboarding (where applicable): **yes / no**
+  - status: **accepted as app-lifecycle behaviour** *(owner decision recorded)* **or marked as a blocker before real-store Beta 0**
 - [ ] `BETA_READ_ONLY_WRITE_BLOCKED` events reconciled by **count, origin, and timing**: events from `ensureScriptTag` within the OAuth install/auth window are recorded as expected kill-switch evidence, the **count equals the number of OAuth install/auth callbacks actually performed**, and **no other occurrences exist**.
 - [ ] **No ScriptTag / tracker registration endpoint was called** (`POST /auth/ensure-tracker` or equivalent) at any point during the run.
 - [ ] **Merchant did not interact with the CRODoctor embedded app UI** during the run — or any interaction was recorded and reviewed.
@@ -662,8 +735,13 @@ Complete **after** the session. This is the evidence that Beta 0 was genuinely r
 - **The merchant sees unintended UI, an unintended claim, an Apply / Auto-Apply / Rollback control, or any confusing merchant-facing promise** (Section 10.4).
 - **Uncertainty about whether the running instance picked up the env flags or `SHOPIFY_SCOPES`** — stop *before* generating or sharing any install URL (Section 5.4).
 - **The consent screen shows a scope set that does not match what the merchant was pre-briefed on** — stop; do not let the merchant complete the install.
-- Any Shopify product / theme / cart / checkout change is detected.
+- Any Shopify product / theme / cart / checkout / storefront content change is detected.
 - Any webhook-triggered mutation toward Shopify.
+- **Webhook registration occurs outside the approved install / lifecycle window** (Section 6.1). *Normal, expected webhook registration during a rehearsal install is not a stop condition by itself.*
+- **Webhook topics differ from the expected set** (`orders/create`, `products/update`, `app/uninstalled`).
+- **Webhook subscriptions remain active after uninstall / offboarding** when they should have been removed.
+- **The owner decision on webhook lifecycle is missing** before a real-store OAuth install — stop *before* install.
+- **Merchant communication omits the app-lifecycle webhook disclosure** when Option A has been accepted for real-store Beta 0 (Section 10.3a).
 - Any tenant leakage is suspected.
 - Any secret appears in logs or output.
 - Diagnostics returns another store's data.
@@ -706,10 +784,11 @@ Complete **after** the session. This is the evidence that Beta 0 was genuinely r
 3. **Keep write-disable flags active** unless separately approved to change them.
 4. **Uninstall the app from the store admin** if the merchant requests disconnect, or if the beta run is complete and no further approved run is scheduled.
 5. **Confirm the token / access is revoked**, where applicable.
-6. **Confirm with the merchant** that the run is complete and that no changes were made to their store.
-7. **Record offboarding in the run log** (Section 15).
+6. **Confirm webhook subscriptions are removed or no longer active** after uninstall / offboarding, and **record the cleanup result** (Section 6.1). ⛔ If subscriptions remain unexpectedly, treat it as a **stop condition / incident** (Sections 17–18) and resolve it before any real merchant is involved.
+7. **Confirm with the merchant** that the run is complete and that **no changes were made to their products, theme, storefront, cart, checkout, or code**.
+8. **Record offboarding in the run log** (Section 15).
 
-A merchant may ask to stop and disconnect at any time (Section 10.1). When they do, execute steps 1–7 immediately and confirm completion back to them in writing.
+A merchant may ask to stop and disconnect at any time (Section 10.1). When they do, execute steps 1–8 immediately and confirm completion back to them in writing.
 
 ---
 
@@ -734,8 +813,9 @@ Convene after every session and produce:
 
 Beta 0 passes **only if all** of the following hold:
 
-- Zero Shopify writes (the blocked install-time ScriptTag attempt is not a write — nothing reached the store).
-- Zero product / theme / cart / checkout / ScriptTag changes.
+- **Zero product / theme / cart / checkout / storefront content mutations.** (Deliberately *not* phrased as "zero Shopify writes" — install-time webhook registration is an app-lifecycle write that the kill switch does not block. See Section 6.1.)
+- **No ScriptTag / tracker installation** — the blocked install-time attempt is not a write; nothing reached the storefront.
+- **Webhook registration behaviour fully reconciled and documented** — count, topics, and cleanup recorded — and **either accepted as app-lifecycle behaviour by owner decision, or flagged as a blocker before real-store Beta 0.**
 - **No unintended merchant-facing UI or claim was exposed during Beta 0** (Section 10.4).
 - Blocked-write events reconciled cleanly: `ensureScriptTag` origin, install/auth window, count matching the callbacks performed — and nothing else.
 - Diagnostics complete without critical errors.
