@@ -2,7 +2,7 @@
 
 **Date raised:** 2026-08-22
 **Raised by:** Beta 0 decision brief (pre-rehearsal analysis)
-**Related:** `docs/controlled-beta-0-ops-runbook.md` §6.1, §10.3a, §16, §17, §20.1, §19 · `docs/project-checkpoint-current-status.md`
+**Related:** runbook (`docs/controlled-beta-0-ops-runbook.md`) §6.1, §10.4, §16, §17, §19, §20.1 · checkpoint (`docs/project-checkpoint-current-status.md`) §6.6
 
 ---
 
@@ -55,7 +55,7 @@ This document records an open question and a *provisional* direction. **It is no
 
 **Requirements**
 - Release owner **and** product owner sign-off.
-- Merchant communication updated per runbook §10.3a **before** install.
+- Merchant communication updated per runbook §10.4 **before** install.
 - Proof checklist reconciles count, topics, and cleanup on uninstall.
 - Data owner consulted **if** webhook payloads will be persisted (`orders/create` carries order data).
 
@@ -63,7 +63,7 @@ This document records an open question and a *provisional* direction. **It is no
 
 **Pros**
 - Closes the bypass; restores a single, honest chokepoint for every Shopify write.
-- Makes "no Shopify writes while the kill switch is on" true again, with no merchant disclosure needed.
+- **Would** create a single enforced chokepoint for Shopify Admin writes — making "no Shopify writes while the kill switch is on" accurate for the first time, with no merchant disclosure needed. *(It has never been true: the bypass has existed since the kill switch was introduced.)*
 - Produces a visible `BETA_READ_ONLY_WRITE_BLOCKED` event, so the reconciliation model covers it.
 
 **Cons**
@@ -97,7 +97,7 @@ This document records an open question and a *provisional* direction. **It is no
 1. **For the dev-store rehearsal:** proceed as-is and **observe**. Record whether registration occurs, the count, the topics, whether it succeeds under the chosen read-only `SHOPIFY_SCOPES`, and whether the subscriptions are removed on uninstall. The rehearsal is exactly the right place to learn this, and it involves no client.
 2. **For real-store Beta 0:** **do not proceed** until owners select A, B, or C and record it here.
 3. **Provisional lean: Option A**, on the reasoning that webhook registration is genuinely necessary for the app to work, is invisible to shoppers, and is honestly disclosable in one sentence — whereas B and C buy a cleaner sentence at the cost of degrading the very behaviour the rehearsal is meant to validate. **This lean should be re-examined against the rehearsal evidence**, particularly if registration turns out to fail under read-only scopes (in which case C becomes nearly free).
-4. **If Option A is selected:** update merchant communication (§10.3a) and the proof checklist, and confirm whether webhook payload retention needs data-owner approval.
+4. **If Option A is selected:** update merchant communication (runbook §10.4) and the proof checklist, and confirm whether webhook payload retention needs data-owner approval.
 5. **If Option B or C is selected:** implement and verify a code PR **before** the real-store OAuth install, and confirm what the absence of webhooks degrades.
 
 ---

@@ -15,7 +15,7 @@
 | 2 | 2026-08-19 | Revised after safety review (`RUNBOOK_REVIEW_BLOCKED_NEEDS_REVISIONS`): store lifecycle, OAuth scopes/consent, ScriptTag install behavior, data handling, offboarding, diagnostics sample limits | Engineering |
 | 3 | 2026-08-19 | Revised after re-review (N1–N6): merchant embedded app UI access, dev-store rehearsal, env restart / running-instance confirmation, restart-vs-deploy distinction, per-callback blocked-event reconciliation, manual tracker endpoint forbidden | Engineering |
 | 4 | 2026-08-21 | Final review edits (S1–S2): `SHOPIFY_SCOPES` treated as a configured-and-verified live value under the restart gate (it is captured at module load), install-URL generation gated on restart confirmation; revision label de-staled | Engineering |
-| 5 | 2026-08-22 | Webhook registration lifecycle documented (§6.1): install-time `webhooks.json` POSTs bypass the PR #14 kill switch and produce no blocked event. "Zero Shopify writes" replaced with accurate storefront-content wording throughout; merchant script corrected; app-lifecycle disclosure added (§10.3a); preflight, rehearsal, proof, stop conditions, success criteria and offboarding updated. **Open owner decision — blocks real-store Beta 0.** | Engineering |
+| 5 | 2026-08-22 | Webhook registration lifecycle documented (§6.1): install-time `webhooks.json` POSTs bypass the PR #14 kill switch and produce no blocked event. "Zero Shopify writes" replaced with accurate storefront-content wording throughout; merchant script corrected; app-lifecycle disclosure added (§10.4, with §10.4–10.6 renumbered); preflight, rehearsal, proof, stop conditions, success criteria and offboarding updated. **Open owner decision — blocks real-store Beta 0.** | Engineering |
 
 ---
 
@@ -88,7 +88,7 @@ Any deployment that occurred around the PR #14 / PR #15 merges was **automatic p
 - Cart updates.
 - Checkout changes.
 - Manual theme/code edits to the client store.
-- **Directing or encouraging the merchant to open or use the CRODoctor embedded app UI (Section 10.4).**
+- **Directing or encouraging the merchant to open or use the CRODoctor embedded app UI (Section 10.5).**
 - Merchant-facing dashboard promises.
 - Merchant-facing uplift claims.
 - Public case study claims.
@@ -242,7 +242,7 @@ Changing env vars typically triggers a **Render service restart**. This is **exp
 - **Dev-store rehearsal (Section 8.1): observe and record it.** This is precisely where the real behaviour must be established — whether the POSTs succeed, how many, which topics, and whether they are removed on uninstall.
 - **Normal, expected webhook registration during a dev-store rehearsal install is NOT a stop condition by itself.** Record it and continue.
 - **Before real-store Beta 0, owners must choose one of:**
-  1. **Accept** webhook registration as documented app-lifecycle behaviour — which then **requires** disclosure in merchant communication (Section 10.3a) and reconciliation in the proof checklist;
+  1. **Accept** webhook registration as documented app-lifecycle behaviour — which then **requires** disclosure in merchant communication (Section 10.4) and reconciliation in the proof checklist;
   2. **Route it through `shopifyFetch`** / the kill switch in a later code PR, then verify;
   3. **Disable or defer** webhook registration for Beta 0 in a later code PR, then verify.
 - ⛔ **Real-store Beta 0 and real-store OAuth install are blocked until that decision is made and recorded.** This runbook does not make the decision.
@@ -324,7 +324,7 @@ The rehearsal must validate **all** of the following:
 - **Initial ingest / sync behavior**, including what is and is not populated.
 - The **authenticated diagnostics path** returns successfully for an allowlisted store.
 - **ProductOpportunityScore and Store Baseline output can be captured** in the intended format.
-- **Embedded app UI visibility** — exactly what a merchant would see (Section 10.4).
+- **Embedded app UI visibility** — exactly what a merchant would see (Section 10.5).
 - **Offboarding**: allowlist removal, diagnostics flag off, app uninstall, token revocation (Section 19).
 
 **If read-only scopes prove insufficient**, decide and document the fallback write-scope strategy — including the merchant pre-brief wording (Section 7.2) — **before any real merchant is involved**. Do not resolve this question on a live client store.
@@ -374,7 +374,7 @@ The rehearsal must validate **all** of the following:
 - **Any future change would require separate, explicit approval** from them.
 - They may ask us to stop and disconnect at any time (Section 19 defines how).
 - What data we access and how long we keep it (Section 11).
-- **Not to open or use the CRODoctor app inside Shopify Admin during the run** (Section 10.4).
+- **Not to open or use the CRODoctor app inside Shopify Admin during the run** (Section 10.5).
 
 ### 10.2 Suggested wording — read-only scopes (Section 7.1)
 
@@ -382,19 +382,21 @@ The rehearsal must validate **all** of the following:
 
 > ⚠️ **Do not tell a merchant "zero writes" or "we will not change anything on your store"** while install-time webhook registration remains unresolved (Section 6.1). The precise promise above — no products, theme, storefront, cart, checkout, code, or customer-facing pages — is accurate and is what should be used.
 
-### 10.3a App-lifecycle disclosure — required if webhook registration is accepted
+### 10.3 Suggested wording — if write scopes remain visible (Section 7.2)
 
-If owners select **Option A** in Section 6.1 (accept webhook registration as app-lifecycle behaviour), the merchant communication **must** disclose it before install. Add:
+> We'd like to connect your store to CRODoctor in read-only mode for analysis only. One thing to expect before you click install: **Shopify's permission screen will list write permissions** (for example, editing products). That is because the app also contains "apply changes" features built for a later stage. **Those are switched off in code for this run** — we will not apply anything, will not edit products or theme, will not install storefront scripts, and will not touch cart or checkout. We're only reading your product and performance data to see what our system identifies, and comparing that to our own manual review. Any actual change in future would need your separate written approval, and you can ask us to disconnect at any time.
+
+### 10.4 App-lifecycle webhook disclosure — required if webhook registration is accepted
+
+If owners select **Option A** in Section 6.1 (accept webhook registration as app-lifecycle behaviour), the merchant communication **must** disclose it before install. Add to whichever script applies (10.2 or 10.3):
 
 > For the app to run normally, it also sets up standard background notifications (webhook subscriptions) inside your Shopify admin so it knows when products or orders change. That's app configuration, not a change to your store — it doesn't touch your products, theme, checkout, or anything a customer sees, and it's removed when the app is uninstalled.
 
 If owners select **Option B or C** (route through the kill switch, or disable/defer), **no such disclosure is needed** — but the corresponding code change must be implemented and verified **before** the real-store OAuth install.
 
-### 10.3 Suggested wording — if write scopes remain visible (Section 7.2)
+⛔ Until the Section 6.1 decision is recorded, **no real-store OAuth install may start**, and this disclosure requirement stays unresolved. Webhook registration is **not** approved for a real merchant.
 
-> We'd like to connect your store to CRODoctor in read-only mode for analysis only. One thing to expect before you click install: **Shopify's permission screen will list write permissions** (for example, editing products). That is because the app also contains "apply changes" features built for a later stage. **Those are switched off in code for this run** — we will not apply anything, will not edit products or theme, will not install storefront scripts, and will not touch cart or checkout. We're only reading your product and performance data to see what our system identifies, and comparing that to our own manual review. Any actual change in future would need your separate written approval, and you can ask us to disconnect at any time.
-
-### 10.4 Merchant Embedded App UI Access
+### 10.5 Merchant Embedded App UI Access
 
 **After OAuth install, CRODoctor appears in the merchant's Shopify Admin → Apps list, and the merchant can open the embedded app UI at any time.** Installing the app is what grants that access; nothing in Beta 0's read-only posture prevents it.
 
@@ -411,7 +413,7 @@ Tell the merchant, in the pre-brief:
 
 > Please **do not open or use the CRODoctor app inside your Shopify Admin** during this read-only Beta 0 unless we explicitly ask you to. This run is internal diagnostics only — we're reading your data and reviewing it on our side. The app screen includes features built for later phases that aren't part of this run, so anything you see there won't reflect what we're actually doing.
 
-### 10.5 Do not promise
+### 10.6 Do not promise
 
 - Guaranteed uplift.
 - Revenue increase.
@@ -487,7 +489,7 @@ Complete **every** item before the OAuth install. Any unchecked box blocks the r
 - [ ] **Running instance confirmed after restart BEFORE generating or sharing any Shopify install URL.**
 - [ ] **Full procedure rehearsed on a non-client development store** with the intended OAuth scope strategy; ingest, diagnostics, ScriptTag-block behavior, embedded UI visibility, and offboarding all verified (Section 8.1).
 - [ ] Read-only scope set confirmed sufficient during rehearsal — or fallback write-scope strategy decided and documented before involving the merchant.
-- [ ] **Embedded app UI reviewed by the operator in a safe / dev context** before the real-store run (Section 10.4).
+- [ ] **Embedded app UI reviewed by the operator in a safe / dev context** before the real-store run (Section 10.5).
 - [ ] Operator recorded whether merchant-visible UI contains any uplift claims, scores, recommendations, Apply controls, Auto-Apply controls, Rollback controls, or confusing CTAs.
 - [ ] **Merchant instructed not to open or use the CRODoctor app UI** during Beta 0.
 - [ ] If merchant-visible UI could not be verified safe: release owner AND product owner explicitly approved the residual UI risk, and the merchant was pre-briefed.
@@ -504,7 +506,7 @@ Complete **every** item before the OAuth install. Any unchecked box blocks the r
 - [ ] **Webhook registration behaviour reviewed and understood** by the operator (Section 6.1) — including that it bypasses the kill switch and produces no blocked event.
 - [ ] **Dev-store rehearsal recorded whether webhook subscriptions were created during install**, with count, topics, and cleanup result.
 - [ ] **For real-store Beta 0, the webhook lifecycle decision is made and recorded** — accepted app-lifecycle behaviour, routed through the kill switch, or disabled/deferred (`docs/decisions/webhook-registration-lifecycle-beta0.md`).
-- [ ] If **accepted**: merchant communication includes the app-lifecycle disclosure (Section 10.3a).
+- [ ] If **accepted**: merchant communication includes the app-lifecycle disclosure (Section 10.4).
 - [ ] If **not accepted**: a code-level prevention strategy has been implemented **and verified** — **no real-store OAuth install may start before that.**
 - [ ] Data handling decided: environment approved, access list agreed, retention period set, deletion owner named (Section 11).
 - [ ] No Apply / Rollback / Batch Apply / Decision Execute will be called during the session.
@@ -593,7 +595,7 @@ Dev-store rehearsal completed + passed (Section 8.1):  yes / no
 SHOPIFY_SCOPES value set in live env:    <value>
 OAuth scopes granted:            <read-only set / write scopes present>
 Merchant pre-briefed on consent screen:  yes / no
-Merchant instructed not to open the app UI (Section 10.4):  yes / no
+Merchant instructed not to open the app UI (Section 10.5):  yes / no
 Embedded app UI reviewed by operator beforehand:  yes / no
   What a merchant would see (claims / scores / Apply controls / CTAs):
 
@@ -695,13 +697,12 @@ Complete **after** the session. This is the evidence that Beta 0 was genuinely r
 
 - [ ] Write-disable flags were active for the entire session, and verified **before** OAuth install (start and end).
 - [ ] Diagnostics allowlist contained only the approved store.
-- [ ] No Apply endpoint was called (`POST /action-center/products/:id/apply`).
+- [ ] No Apply or Auto-Apply endpoint was called (`POST /action-center/products/:id/apply`).
 - [ ] No Rollback endpoint was called (`POST /action-center/products/:id/rollback`).
 - [ ] No Batch Apply endpoint was called (`/action-center/batch-apply-safe`, `/action-center/batch-apply-selected`).
 - [ ] No Decision Engine execute endpoint was called (`POST /decision-engine/actions/execute`).
 - [ ] **No product / theme / cart / checkout / storefront content mutation was performed.**
 - [ ] **No ScriptTag / tracker was created on the storefront** — verified in the Shopify admin.
-- [ ] **No Apply / Rollback / Auto-Apply / Batch Apply / Decision Execute occurred.**
 - [ ] **Webhook registration reconciled** (Section 6.1):
   - app-lifecycle webhook subscriptions created: **yes / no**
   - count and topics recorded: ______
@@ -732,7 +733,7 @@ Complete **after** the session. This is the evidence that Beta 0 was genuinely r
 - Any `BETA_READ_ONLY_WRITE_BLOCKED` event outside the OAuth install/auth window, from any origin other than `ensureScriptTag`, or **in excess of the number of OAuth callbacks actually performed**.
 - A ScriptTag / tracker was actually created on the storefront.
 - **Any ScriptTag / tracker registration endpoint was called** (`POST /auth/ensure-tracker` or equivalent), or any tracker registration "test" was attempted.
-- **The merchant sees unintended UI, an unintended claim, an Apply / Auto-Apply / Rollback control, or any confusing merchant-facing promise** (Section 10.4).
+- **The merchant sees unintended UI, an unintended claim, an Apply / Auto-Apply / Rollback control, or any confusing merchant-facing promise** (Section 10.5).
 - **Uncertainty about whether the running instance picked up the env flags or `SHOPIFY_SCOPES`** — stop *before* generating or sharing any install URL (Section 5.4).
 - **The consent screen shows a scope set that does not match what the merchant was pre-briefed on** — stop; do not let the merchant complete the install.
 - Any Shopify product / theme / cart / checkout / storefront content change is detected.
@@ -741,7 +742,7 @@ Complete **after** the session. This is the evidence that Beta 0 was genuinely r
 - **Webhook topics differ from the expected set** (`orders/create`, `products/update`, `app/uninstalled`).
 - **Webhook subscriptions remain active after uninstall / offboarding** when they should have been removed.
 - **The owner decision on webhook lifecycle is missing** before a real-store OAuth install — stop *before* install.
-- **Merchant communication omits the app-lifecycle webhook disclosure** when Option A has been accepted for real-store Beta 0 (Section 10.3a).
+- **Merchant communication omits the app-lifecycle webhook disclosure** when Option A has been accepted for real-store Beta 0 (Section 10.4).
 - Any tenant leakage is suspected.
 - Any secret appears in logs or output.
 - Diagnostics returns another store's data.
@@ -816,7 +817,7 @@ Beta 0 passes **only if all** of the following hold:
 - **Zero product / theme / cart / checkout / storefront content mutations.** (Deliberately *not* phrased as "zero Shopify writes" — install-time webhook registration is an app-lifecycle write that the kill switch does not block. See Section 6.1.)
 - **No ScriptTag / tracker installation** — the blocked install-time attempt is not a write; nothing reached the storefront.
 - **Webhook registration behaviour fully reconciled and documented** — count, topics, and cleanup recorded — and **either accepted as app-lifecycle behaviour by owner decision, or flagged as a blocker before real-store Beta 0.**
-- **No unintended merchant-facing UI or claim was exposed during Beta 0** (Section 10.4).
+- **No unintended merchant-facing UI or claim was exposed during Beta 0** (Section 10.5).
 - Blocked-write events reconciled cleanly: `ensureScriptTag` origin, install/auth window, count matching the callbacks performed — and nothing else.
 - Diagnostics complete without critical errors.
 - No tenant leakage (no other store's data appears anywhere).
