@@ -85,6 +85,8 @@ All of the following must be satisfied, in addition to the runbook's own preflig
 
 ### 6.1 `SHOPIFY_SCOPES` strategy — NOT DECIDED
 
+> A recommendation now exists in `docs/decisions/shopify-scopes-and-data-environment-beta0.md` (covering §6.1 and §6.2). It is **pending owner sign-off** and is not yet a decision.
+
 - **Preferred Beta 0 value:** `read_products,read_orders,read_analytics`
 - Fallback write scopes require **release owner + product owner approval** *and* a merchant pre-brief before install.
 - ⚠️ `SHOPIFY_SCOPES` is captured **at module load**, so a change cannot take effect without a service restart. Setting it and immediately generating an install URL presents the merchant with the **old** scope set — contradicting whatever pre-brief was just delivered.
@@ -177,5 +179,6 @@ Steps 2–4 are decisions, not engineering work. Steps 2 and 3 must precede the 
 | `docs/controlled-beta-0-ops-runbook.md` | The operational source of truth for any Beta 0 run — preflight, execution, proof, abort, offboarding, sign-off gate. |
 | `docs/project-checkpoint-current-status.md` | This file — where the project stands and what remains before a real-store run. |
 | `docs/decisions/webhook-registration-lifecycle-beta0.md` | Open decision record: install-time webhook registration bypasses the kill switch. Blocks real-store Beta 0 until resolved. |
+| `docs/decisions/shopify-scopes-and-data-environment-beta0.md` | Covers `SHOPIFY_SCOPES` (§6.1) and the approved data environment (§6.2). Status: **recommended decision pending owner sign-off** — not yet an approval. |
 
 Related planning documents: `docs/product-opportunity-score-wiring-plan.md`, `docs/store-baseline-engine-plan.md`, `docs/supabase-rls-security-check.md`, `docs/cro-foundation.md`.
