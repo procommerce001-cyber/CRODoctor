@@ -81,7 +81,7 @@ All of the following must be satisfied, in addition to the runbook's own preflig
 
 ## 6. Required env / operational decisions ahead
 
-**None of these are decided yet.** Each blocks the dev-store rehearsal or the real run.
+**Two items are now signed for non-client dev-store rehearsal use only (§6.1 and §6.2). The remaining items are not yet decided or completed. Real-store Beta 0 remains blocked.**
 
 ### 6.1 `SHOPIFY_SCOPES` strategy — ACCEPTED FOR NON-CLIENT REHEARSAL USE
 
@@ -160,17 +160,30 @@ All of the following must be satisfied, in addition to the runbook's own preflig
 
 ## 8. Recommended next step
 
-In order:
+**Completed:**
 
-1. **Open and merge the webhook lifecycle docs patch** — so the runbook, this checkpoint, and the decision record agree before anyone acts on them.
-2. **Decide the OAuth scope strategy** (Section 6.1) — this gates the rehearsal, because the rehearsal must exercise the scope set you intend to use.
-3. **Decide the approved data environment** (Section 6.2) — required before any real merchant data is ingested.
-4. **Decide the webhook lifecycle strategy** (Section 6.6) — or explicitly defer it until after the rehearsal, since the rehearsal produces the evidence for it. It must be recorded before any *real-store* install either way.
-5. **Prepare the dev-store rehearsal plan.**
-6. **Run the non-client development store rehearsal** and record the result — including webhook behaviour.
-7. **Only after the rehearsal passes, all decisions are recorded, and both sign-offs are captured**, consider selecting one real-store Beta 0 candidate.
+- PR #17 merged the webhook lifecycle / checkpoint docs patch.
+- PR #18 merged the scopes / data-environment decision record.
+- Scopes and data environment are **signed for non-client dev-store rehearsal use only** (2026-08-25).
 
-Steps 2–4 are decisions, not engineering work. Steps 2 and 3 must precede the rehearsal; step 4 may be informed *by* the rehearsal but must be recorded before a real store.
+**Current live next step:**
+
+1. **Merge this docs-only sign-off PR** after review.
+2. **Then write the dev-store rehearsal plan** — this is the live piece of work.
+
+**Still required (none of these are done):**
+
+- **Webhook lifecycle decision** (Section 6.6) — remains separate and open. It may be informed by the rehearsal, but must be recorded before any **real-store OAuth install**.
+- A **written dev-store rehearsal plan**.
+- `SHOPIFY_SCOPES` **env value set** in the live environment.
+- The **five write-disable / diagnostics flags** set and verified.
+- **Service restart completed and running instance confirmed** — before any install URL is generated.
+- **Non-client development store only** — no real merchant store, no real merchant data.
+- **Runbook §22 sign-off** (release owner + product owner) — still blank, and separate from the sign-off recorded here.
+- **Dedicated Beta 0 environment/database** provisioned before any real merchant data.
+- **Merchant consent** and a **final go / no-go**.
+
+⛔ **Real-store Beta 0 remains blocked.** Signing the scopes and data-environment decisions removed one blocker for the rehearsal; it did not make the rehearsal ready to run, and it approved nothing about a real store.
 
 ---
 
