@@ -8,9 +8,9 @@
 
 ## Status
 
-**RECOMMENDED DECISION — PENDING OWNER SIGN-OFF.**
+**ACCEPTED FOR NON-CLIENT DEV-STORE REHEARSAL USE — REAL-STORE BETA 0 STILL BLOCKED.**
 
-This is a recommendation, not an approval. No option in this document takes effect until the sign-off table is filled.
+The scopes and data-environment decisions are accepted for non-client dev-store rehearsal use only. This does not approve real-store Beta 0, real-store OAuth install, write scopes, webhook lifecycle, merchant consent, or diagnostics against a real store.
 
 ---
 
@@ -113,11 +113,16 @@ If the dedicated Beta 0 environment is not ready:
 
 ## Dev-store rehearsal impact
 
-- May proceed only after these two decisions are accepted for rehearsal use.
-- Must use non-client development store data.
-- Must validate the selected `SHOPIFY_SCOPES`.
-- Must not connect a real merchant store.
-- Must not approve the webhook lifecycle for a real merchant by itself.
+- ✅ The scopes and data-environment decisions are **now accepted for non-client dev-store rehearsal use** (signed 2026-08-25).
+- ⚠️ **This does not mean the rehearsal is ready to run.** It removes one blocker, not all of them. Still required before the rehearsal starts:
+  - a **written dev-store rehearsal plan**;
+  - the `SHOPIFY_SCOPES` value **set in the live environment**, plus the five write-disable/diagnostics flags;
+  - **service restart completed and running instance confirmed** — mandatory before any install URL is generated, because `SHOPIFY_SCOPES` is captured at module load;
+  - a plan to **record webhook registration behaviour** during the rehearsal.
+- Must use a **non-client development store only**, with no real merchant data.
+- Must validate the selected `SHOPIFY_SCOPES` — read-only sufficiency remains **unverified**.
+- **Must not connect a real merchant store.**
+- **Must not approve the webhook lifecycle for a real merchant by itself.**
 
 ---
 
@@ -126,8 +131,8 @@ If the dedicated Beta 0 environment is not ready:
 Real-store Beta 0 remains blocked until:
 
 - [ ] Runbook sign-off.
-- [ ] `SHOPIFY_SCOPES` decision signed.
-- [ ] Data environment decision signed.
+- [x] `SHOPIFY_SCOPES` decision signed. *(2026-08-25 — accepted for non-client rehearsal use only.)*
+- [x] Data environment decision signed. *(2026-08-25 — accepted for non-client rehearsal use only.)*
 - [ ] Webhook lifecycle decision recorded.
 - [ ] Non-client dev-store rehearsal passed.
 - [ ] Merchant consent captured.
@@ -139,11 +144,11 @@ Real-store Beta 0 remains blocked until:
 
 | Role | Name | Decision | Date |
 |---|---|---|---|
-| Release owner | | | |
-| Product owner | | | |
-| Data owner | | | |
+| Release owner | Dekel Hillel | Approved scope strategy as written, with no write scopes. | 2026-08-25 |
+| Product owner | Dekel Hillel | Approved merchant-trust framing and accepted later re-authorisation for write-capable phases. | 2026-08-25 |
+| Data owner | Dekel Hillel | Approved staging for non-client rehearsal only; dedicated environment required before real merchant data. | 2026-08-25 |
 
-**Until this table is filled, this record is a recommendation only.**
+**This sign-off accepts the scopes and data-environment decisions for non-client dev-store rehearsal use only. Real-store Beta 0 remains blocked.**
 
 ---
 
