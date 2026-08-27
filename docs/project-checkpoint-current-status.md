@@ -169,7 +169,7 @@ All of the following must be satisfied, in addition to the runbook's own preflig
 **Current live next step:**
 
 1. **Merge this docs-only sign-off PR** after review.
-2. **Then write the dev-store rehearsal plan** — this is the live piece of work.
+2. **Then write the dev-store rehearsal plan** — this is the live piece of work. *(A draft exists in conversation but is not yet saved: it needs cleanup first. State as of 2026-08-27 is captured in `docs/checkpoints/project-checkpoint-after-pr19-rehearsal-draft-2026-08-27.md`; intended save path is `docs/rehearsals/non-client-dev-store-rehearsal-plan-beta0.md`.)*
 
 **Still required (none of these are done):**
 
@@ -195,5 +195,6 @@ All of the following must be satisfied, in addition to the runbook's own preflig
 | `docs/project-checkpoint-current-status.md` | This file — where the project stands and what remains before a real-store run. |
 | `docs/decisions/webhook-registration-lifecycle-beta0.md` | Open decision record: install-time webhook registration bypasses the kill switch. Blocks real-store Beta 0 until resolved. |
 | `docs/decisions/shopify-scopes-and-data-environment-beta0.md` | Covers `SHOPIFY_SCOPES` (§6.1) and the approved data environment (§6.2). Status: **signed 2026-08-25 — accepted for non-client dev-store rehearsal use only.** Does not approve real-store Beta 0. |
+| `docs/checkpoints/project-checkpoint-after-pr19-rehearsal-draft-2026-08-27.md` | Point-in-time checkpoint at main `a4c79e6`, taken before the dev-store rehearsal plan is cleaned and saved. |
 
 Related planning documents: `docs/product-opportunity-score-wiring-plan.md`, `docs/store-baseline-engine-plan.md`, `docs/supabase-rls-security-check.md`, `docs/cro-foundation.md`.
