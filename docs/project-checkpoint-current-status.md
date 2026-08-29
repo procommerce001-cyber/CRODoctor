@@ -101,6 +101,8 @@ All of the following must be satisfied, in addition to the runbook's own preflig
 
 ### 6.3 Dev-store rehearsal — NOT DONE
 
+> A written plan now exists at `docs/rehearsals/non-client-dev-store-rehearsal-plan-beta0.md` (saved 2026-08-29). It is a **draft plan, not approved for execution** — it still needs review, a docs PR, and merge, and the rehearsal itself still requires env setup, service restart, and running-instance confirmation.
+
 - Must be completed on a **non-client development / test store** before any real client is involved.
 - Validates scopes, install, flags-before-install, the expected blocked ScriptTag event, no-ScriptTag verification, ingest, authenticated diagnostics, output capture, embedded UI visibility, and offboarding.
 - ⚠️ A rehearsal proves the **safety and lifecycle procedure** works. It is **not** evidence that diagnostics quality is good on real commercial data.
@@ -168,13 +170,13 @@ All of the following must be satisfied, in addition to the runbook's own preflig
 
 **Current live next step:**
 
-1. **Merge this docs-only sign-off PR** after review.
-2. **Then write the dev-store rehearsal plan** — this is the live piece of work. *(A draft exists in conversation but is not yet saved: it needs cleanup first. State as of 2026-08-27 is captured in `docs/checkpoints/project-checkpoint-after-pr19-rehearsal-draft-2026-08-27.md`; intended save path is `docs/rehearsals/non-client-dev-store-rehearsal-plan-beta0.md`.)*
+1. **The dev-store rehearsal plan is now written and saved** at `docs/rehearsals/non-client-dev-store-rehearsal-plan-beta0.md` (2026-08-29). It is a **draft plan, not approved for execution**.
+2. **Review that plan, open a docs PR, and merge it** after a merge-safety review — this is the live piece of work.
 
 **Still required (none of these are done):**
 
 - **Webhook lifecycle decision** (Section 6.6) — remains separate and open. It may be informed by the rehearsal, but must be recorded before any **real-store OAuth install**.
-- A **written dev-store rehearsal plan**.
+- **Review, PR, and merge of the saved rehearsal plan.**
 - `SHOPIFY_SCOPES` **env value set** in the live environment.
 - The **five write-disable / diagnostics flags** set and verified.
 - **Service restart completed and running instance confirmed** — before any install URL is generated.
@@ -196,5 +198,6 @@ All of the following must be satisfied, in addition to the runbook's own preflig
 | `docs/decisions/webhook-registration-lifecycle-beta0.md` | Open decision record: install-time webhook registration bypasses the kill switch. Blocks real-store Beta 0 until resolved. |
 | `docs/decisions/shopify-scopes-and-data-environment-beta0.md` | Covers `SHOPIFY_SCOPES` (§6.1) and the approved data environment (§6.2). Status: **signed 2026-08-25 — accepted for non-client dev-store rehearsal use only.** Does not approve real-store Beta 0. |
 | `docs/checkpoints/project-checkpoint-after-pr19-rehearsal-draft-2026-08-27.md` | Point-in-time checkpoint at main `a4c79e6`, taken before the dev-store rehearsal plan is cleaned and saved. |
+| `docs/rehearsals/non-client-dev-store-rehearsal-plan-beta0.md` | Non-client dev-store rehearsal plan, saved 2026-08-29. Status: **draft plan, not approved for execution.** Does not approve real-store Beta 0. |
 
 Related planning documents: `docs/product-opportunity-score-wiring-plan.md`, `docs/store-baseline-engine-plan.md`, `docs/supabase-rls-security-check.md`, `docs/cro-foundation.md`.
