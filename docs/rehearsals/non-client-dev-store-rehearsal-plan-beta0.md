@@ -118,10 +118,10 @@ Every install or OAuth action is scoped to the named non-client development stor
 ### Phase C — Read-only ingest / diagnostics rehearsal
 
 - **Goal:** determine whether the read-only scope set is sufficient.
-- **Allowed:** observe ingest and sync; call the internal diagnostics path for the development store from an authenticated operator context; capture ProductOpportunityScore and Store Baseline output.
-- **Forbidden:** any write; Apply or Rollback; any other endpoint; treating an authentication failure as an allowlist-gate failure.
-- **Evidence:** what ingested and what did not; every scope-related error verbatim with the exact failing call; diagnostics payload shape; products evaluated against total catalogue size; missing-data fields, expecting product views to be null.
-- **Abort if:** diagnostics returns another store's data; unexpected server errors; secrets appear in logs; performance concerns.
+- **Allowed:** observe ingest and sync; call the internal diagnostics path for the development store from an authenticated operator context; capture ProductOpportunityScore and Store Baseline output; view the embedded app UI for the named non-client development store only.
+- **Forbidden:** any write; Apply or Rollback; any other endpoint; treating an authentication failure as an allowlist-gate failure; opening the embedded app UI for any other store.
+- **Evidence:** what ingested and what did not; every scope-related error verbatim with the exact failing call; diagnostics payload shape; products evaluated against total catalogue size; missing-data fields, expecting product views to be null; embedded app UI visibility — what the operator would see, and confirmation that no Apply, Rollback, or Auto-Apply path is reachable from the UI.
+- **Abort if:** diagnostics returns another store's data; unexpected server errors; secrets appear in logs; performance concerns; the embedded UI exposes Apply, Rollback, Auto-Apply, real-store data, another store's data, or any write-capable action.
 
 ### Phase D — Webhook behavior observation
 
@@ -195,6 +195,7 @@ Abort if any of the following occurs.
 - No product, theme, cart, checkout, or storefront mutation.
 - No ScriptTag created.
 - Diagnostics route behaviour understood.
+- Embedded app UI visibility verified without exposing write actions or real-store data.
 - Sufficiency of `read_analytics` is known, or the exact failing call is recorded.
 - Webhook behaviour recorded.
 - Cleanup and offboarding completed.
