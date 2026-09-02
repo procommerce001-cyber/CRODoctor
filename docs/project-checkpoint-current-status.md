@@ -170,8 +170,8 @@ All of the following must be satisfied, in addition to the runbook's own preflig
 
 **Current live next step:**
 
-1. **The dev-store rehearsal plan is now written and saved** at `docs/rehearsals/non-client-dev-store-rehearsal-plan-beta0.md` (2026-08-29). It is a **draft plan, not approved for execution**.
-2. **Review that plan, open a docs PR, and merge it** after a merge-safety review — this is the live piece of work.
+1. **The dev-store rehearsal plan is written, merged, and on main** at `docs/rehearsals/non-client-dev-store-rehearsal-plan-beta0.md` (PR #21). It remains a **draft plan, not approved for execution**.
+2. **Run an operational readiness review for the non-client dev-store rehearsal** — this is the live piece of work, and it is not a documentation task. **Do not generate any install URL or touch Shopify** until the named dev store, owners, env setup plan, service restart, running-instance confirmation, and explicit execution approval are complete.
 
 **Still required (none of these are done):**
 
@@ -199,5 +199,6 @@ All of the following must be satisfied, in addition to the runbook's own preflig
 | `docs/decisions/shopify-scopes-and-data-environment-beta0.md` | Covers `SHOPIFY_SCOPES` (§6.1) and the approved data environment (§6.2). Status: **signed 2026-08-25 — accepted for non-client dev-store rehearsal use only.** Does not approve real-store Beta 0. |
 | `docs/checkpoints/project-checkpoint-after-pr19-rehearsal-draft-2026-08-27.md` | Point-in-time checkpoint at main `a4c79e6`, taken before the dev-store rehearsal plan is cleaned and saved. |
 | `docs/rehearsals/non-client-dev-store-rehearsal-plan-beta0.md` | Non-client dev-store rehearsal plan, saved 2026-08-29. Status: **draft plan, not approved for execution.** Does not approve real-store Beta 0. |
+| `docs/checkpoints/project-checkpoint-after-pr21-docs-complete-2026-09-01.md` | Point-in-time checkpoint at main `00703b4`: documentation track complete, operational rehearsal not started. |
 
 Related planning documents: `docs/product-opportunity-score-wiring-plan.md`, `docs/store-baseline-engine-plan.md`, `docs/supabase-rls-security-check.md`, `docs/cro-foundation.md`.
