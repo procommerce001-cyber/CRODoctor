@@ -24,6 +24,36 @@ const TOPICS = [
   'app/uninstalled',
 ];
 
+// Shopify's duplicate-webhook 422 is a Rails uniqueness validation, surfaced as
+// e.g. { "errors": { "address": ["for this topic has already been taken"] } }.
+// Validation failures (invalid topic, bad address, missing scope) return 422
+// with different messages, so the message — not the status — is the signal.
+// Returns false on anything unparseable, so unknown 422s fail closed.
+const DUPLICATE_SIGNATURE = /already been taken|already exists/i;
+
+function isDuplicateWebhookError(text) {
+  if (typeof text !== 'string' || text.trim() === '') return false;
+  try {
+    const body = JSON.parse(text);
+    const errors = body && body.errors;
+    if (!errors) return false;
+    const flat = typeof errors === 'string' ? errors : JSON.stringify(errors);
+    return DUPLICATE_SIGNATURE.test(flat);
+  } catch {
+    return false; // malformed body — do not assume duplicate
+  }
+}
+
+// Keep error detail useful for debugging but bounded, and never echo request
+// headers or credentials (Shopify error bodies do not contain the token, but
+// the response is untrusted input).
+function sanitizeError(text) {
+  if (typeof text !== 'string') return 'non-text error response';
+  const trimmed = text.trim();
+  if (trimmed === '') return 'empty error response';
+  return trimmed.length > 300 ? `${trimmed.slice(0, 300)}…` : trimmed;
+}
+
 /**
  * @param {{ shopDomain: string, accessToken: string }} store
  * @param {string} appBaseUrl  - public HTTPS root of this server (APP_BASE_URL)
@@ -64,13 +94,26 @@ async function registerWebhooks(store, appBaseUrl) {
         }
       );
 
-      // 422 = webhook already registered for this topic + address — idempotent
-      if (res.ok || res.status === 422) {
+      if (res.ok) {
         results.push({ topic, success: true });
-      } else {
+      } else if (res.status === 422) {
+        // Shopify returns 422 both for "already registered" AND for genuine
+        // validation errors (invalid topic, bad address, missing scope). The
+        // status alone cannot tell them apart — only the body can. Treat as
+        // idempotent success ONLY on a confirmed duplicate; anything else,
+        // including a body we cannot parse, fails closed.
         const text = await res.text();
-        console.error(`[WebhookReg] failed to register ${topic}: ${res.status} ${text}`);
-        results.push({ topic, success: false, error: text });
+        if (isDuplicateWebhookError(text)) {
+          results.push({ topic, success: true, duplicate: true });
+        } else {
+          const detail = sanitizeError(text);
+          console.error(`[WebhookReg] 422 (not a duplicate) for ${topic}: ${detail}`);
+          results.push({ topic, success: false, error: detail });
+        }
+      } else {
+        const detail = sanitizeError(await res.text());
+        console.error(`[WebhookReg] failed to register ${topic}: ${res.status} ${detail}`);
+        results.push({ topic, success: false, error: detail });
       }
     } catch (err) {
       console.error(`[WebhookReg] network error registering ${topic}:`, err.message);

@@ -240,23 +240,58 @@ test('registerWebhooks is also blocked by CONTROLLED_BETA_READ_ONLY (no dev-only
   }
 });
 
-test('registerWebhooks lifecycle behaviour preserved when flags are off (422 still treated as success)', async () => {
+test('registerWebhooks treats a CONFIRMED duplicate 422 as idempotent success', async () => {
   const { registerWebhooks } = require('../services/webhook-registration.service');
   const originalFetch = global.fetch;
   const posted = [];
   global.fetch = async (url, opts) => {
-    posted.push({ url, method: opts.method });
-    return { ok: false, status: 422, text: async () => 'already exists' };
+    posted.push(opts.method);
+    return { ok: false, status: 422,
+      text: async () => JSON.stringify({ errors: { address: ['for this topic has already been taken'] } }) };
   };
   clearFlags();
   try {
-    const results = await registerWebhooks({ shopDomain: 's.myshopify.com', accessToken: 'x' }, 'https://app.example');
+    const r = await registerWebhooks({ shopDomain: 's.myshopify.com', accessToken: 'x' }, 'https://app.example');
     assert.strictEqual(posted.length, 3, 'all three lifecycle topics attempted');
-    assert.ok(posted.every(p => p.method === 'POST'));
-    assert.ok(results.every(r => r.success === true), '422 remains idempotent success');
-  } finally {
-    global.fetch = originalFetch;
-  }
+    assert.ok(r.every(x => x.success === true && x.duplicate === true));
+  } finally { global.fetch = originalFetch; }
+});
+
+test('registerWebhooks does NOT treat a validation 422 as success', async () => {
+  const { registerWebhooks } = require('../services/webhook-registration.service');
+  const originalFetch = global.fetch;
+  global.fetch = async () => ({ ok: false, status: 422,
+    text: async () => JSON.stringify({ errors: { topic: ['is invalid'] } }) });
+  clearFlags();
+  try {
+    const r = await registerWebhooks({ shopDomain: 's.myshopify.com', accessToken: 'x' }, 'https://app.example');
+    assert.ok(r.every(x => x.success === false), 'invalid topic must not be reported as success');
+    assert.ok(r.every(x => typeof x.error === 'string' && x.error.includes('is invalid')));
+  } finally { global.fetch = originalFetch; }
+});
+
+test('registerWebhooks fails closed on a malformed/unknown 422 body', async () => {
+  const { registerWebhooks } = require('../services/webhook-registration.service');
+  const originalFetch = global.fetch;
+  clearFlags();
+  try {
+    for (const body of ['<html>gateway</html>', '', '{"errors":']) {
+      global.fetch = async () => ({ ok: false, status: 422, text: async () => body });
+      const r = await registerWebhooks({ shopDomain: 's.myshopify.com', accessToken: 'x' }, 'https://app.example');
+      assert.ok(r.every(x => x.success === false), `malformed 422 must not be success: ${JSON.stringify(body)}`);
+    }
+  } finally { global.fetch = originalFetch; }
+});
+
+test('registerWebhooks reports success on a genuine 201 create', async () => {
+  const { registerWebhooks } = require('../services/webhook-registration.service');
+  const originalFetch = global.fetch;
+  global.fetch = async () => ({ ok: true, status: 201, json: async () => ({}) });
+  clearFlags();
+  try {
+    const r = await registerWebhooks({ shopDomain: 's.myshopify.com', accessToken: 'x' }, 'https://app.example');
+    assert.ok(r.every(x => x.success === true && x.duplicate === undefined));
+  } finally { global.fetch = originalFetch; }
 });
 
 test('registerWebhooks retry after a blocked attempt still cannot bypass the gate', async () => {

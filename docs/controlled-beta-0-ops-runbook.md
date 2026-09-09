@@ -232,14 +232,16 @@ Changing env vars typically triggers a **Render service restart**. This is **exp
 - **OAuth still completes.** `auth.routes.js` treats registration failure as non-fatal.
 - **No new** `orders/create`, `products/update`, or `app/uninstalled` subscriptions are created through this path while blocked.
 - ⚠️ **Do not assume existing subscriptions are absent.** This guard prevents new registrations; it says nothing about subscriptions created before it existed, or out-of-band. Verify in the store admin — absence must be observed, not inferred.
-- ⚠️ The guard is **not** an atomicity guarantee. When writes are permitted, a failure partway through the loop still leaves earlier topics registered; Shopify's 422-on-duplicate is what makes re-running safe.
+- ⚠️ The guard is **not** an atomicity guarantee. When writes are permitted, a failure partway through the loop still leaves earlier topics registered.
+- ⚠️ **Retry safety rests on verified duplicate detection, not on the 422 status.** Shopify returns 422 both for an already-registered topic *and* for validation errors (invalid topic, bad address, missing scope). Registration now inspects the response body and treats 422 as success **only** on a confirmed duplicate; validation errors and unparseable bodies fail closed. A "success" result no longer hides a rejected registration.
+- ⚠️ **A blocked registration does not prove push-based sync or uninstall detection is globally absent.** It prevents *new* subscriptions via this path only. Subscriptions created earlier, or out-of-band, may still exist and deliver events — verify in the store admin.
 
 **Operational impact — this remains an open D4 decision.** While blocked, the app receives no push-based sync events and **no uninstall detection**. Closing the bypass makes the behaviour explicit and observable; it does **not** select Option A, B, or C, and it does **not** alter the signed release posture. Owners must still record the lifecycle decision before any real-store OAuth install.
 
 **Two consequences the operator must understand:**
 
-1. **They produce no `BETA_READ_ONLY_WRITE_BLOCKED` event.** Because they never reach `shopifyFetch`, nothing blocks them and nothing is logged as blocked. They are therefore **invisible to the Section 16 blocked-event reconciliation** — do not expect the reconciliation to surface them.
-2. **"Zero Shopify writes" is not an accurate description of a Beta 0 run.** This runbook does not make that claim. See Section 20.1.
+1. **They are now visible.** With the guard in place, a blocked registration raises `BETA_READ_ONLY_WRITE_BLOCKED` from origin `registerWebhooks`, so the Section 16 reconciliation **does** surface it. *(Before the guard existed these writes were silent — that statement is now historical.)*
+2. **"Zero Shopify writes" is still not an accurate description of a Beta 0 run.** See Section 20.1. Blocking new registrations does not retroactively remove subscriptions created earlier.
 
 **What this behaviour is, and is not:**
 
@@ -720,7 +722,7 @@ Complete **after** the session. This is the evidence that Beta 0 was genuinely r
   - confirmed these are **not** product / theme / cart / checkout / storefront mutations
   - removed on uninstall / offboarding (where applicable): **yes / no**
   - status: **accepted as app-lifecycle behaviour** *(owner decision recorded)* **or marked as a blocker before real-store Beta 0**
-- [ ] `BETA_READ_ONLY_WRITE_BLOCKED` events reconciled by **count, origin, and timing**: events from **`ensureScriptTag` and `registerWebhooks`** within the OAuth install/auth window are recorded as expected kill-switch evidence. **Expect two per OAuth callback — one from each origin.** The count equals **2 × the number of OAuth install/auth callbacks actually performed**, and **no other occurrences exist**.
+- [ ] `BETA_READ_ONLY_WRITE_BLOCKED` events reconciled by **count, origin, and timing**. Expected origins during the OAuth install/auth window are **`ensureScriptTag`** and **`registerWebhooks`**. **Reconcile against the calls actually attempted, not a fixed multiplier** — both run inside `runInitialSync`, but either may be skipped or fail earlier on some paths, so record how many of each were attempted and match the events to that. **No occurrence from any other origin, and none outside the window.**
 - [ ] **No new webhook subscriptions** were created during the run — verified in the store admin, not inferred (Section 6.1).
 - [ ] **No ScriptTag / tracker registration endpoint was called** (`POST /auth/ensure-tracker` or equivalent) at any point during the run.
 - [ ] **Merchant did not interact with the CRODoctor embedded app UI** during the run — or any interaction was recorded and reviewed.
@@ -731,7 +733,7 @@ Complete **after** the session. This is the evidence that Beta 0 was genuinely r
 - [ ] No merchant-facing page changed.
 - [ ] Offboarding completed per Section 19.
 
-> **`BETA_READ_ONLY_WRITE_BLOCKED` — how to read it.** Occurrences originating from **`ensureScriptTag` or `registerWebhooks`** during the OAuth install/auth window are **expected** in Beta 0 and confirm the kill switch worked — **two per OAuth callback / install attempt, one from each origin** — so re-auth or re-install legitimately produces more (Sections 6 and 6.1). Reconcile the count against the number of callbacks performed rather than matching a fixed number; record them, do not abort. **Any occurrence from a different origin, outside the install/auth window, or in excess of the number of callbacks performed, is a stop condition**: our system attempted a write during a read-only run, and the call path must be investigated before continuing. A working safety net is not a licence to keep driving at it.
+> **`BETA_READ_ONLY_WRITE_BLOCKED` — how to read it.** Occurrences originating from **`ensureScriptTag` or `registerWebhooks`** during the OAuth install/auth window are **expected** in Beta 0 and confirm the kill switch worked. **Reconcile against the calls actually attempted** — record how many `ensureScriptTag` and `registerWebhooks` calls were made and match events to those, rather than assuming a fixed number per callback (Sections 6 and 6.1). Re-auth or re-install legitimately produces more; record them, do not abort. **Any occurrence from a different origin, outside the install/auth window, or in excess of the number of callbacks performed, is a stop condition**: our system attempted a write during a read-only run, and the call path must be investigated before continuing. A working safety net is not a licence to keep driving at it.
 
 > **Webhooks.** Shopify webhooks may arrive as part of normal app lifecycle and sync. Receiving them is **not** an operator write and should not be treated as one. However, **any webhook-triggered mutation toward Shopify would be a stop condition.** Check logs for unexpected webhook side effects before signing off this checklist.
 
