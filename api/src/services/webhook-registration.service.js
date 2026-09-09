@@ -14,6 +14,8 @@
 // orders/create and read_products for products/update.
 // ---------------------------------------------------------------------------
 
+const { shouldBlockShopifyWrites, createBetaReadOnlyError } = require('./beta-safety.service');
+
 const API_VERSION = '2024-01';
 
 const TOPICS = [
@@ -28,6 +30,23 @@ const TOPICS = [
  * @returns {Promise<Array<{ topic: string, success: boolean, error?: string }>>}
  */
 async function registerWebhooks(store, appBaseUrl) {
+  // Mandatory chokepoint guard: each topic below is a POST to webhooks.json via
+  // raw fetch, so it does NOT pass through shopifyFetch's mutation gate.
+  // Fail closed once, before the loop, so a blocked run registers nothing at
+  // all. This does NOT make registration atomic: when writes are permitted, a
+  // failure partway through the loop still leaves earlier topics registered.
+  // Shopify's 422-on-duplicate is what makes re-running safe.
+  //
+  // Operational effect when blocked: no webhook subscriptions are created, so
+  // the app receives no orders/create, products/update, or app/uninstalled
+  // events. The caller (auth.routes.js) already treats failure as non-fatal, so
+  // OAuth install still completes. Whether blocking is the right posture for a
+  // real merchant is the open webhook lifecycle decision — this guard only
+  // makes the behaviour explicit and observable instead of silently bypassing.
+  if (shouldBlockShopifyWrites()) {
+    throw createBetaReadOnlyError();
+  }
+
   const address = `${appBaseUrl}/webhooks/shopify`;
   const results = [];
 
