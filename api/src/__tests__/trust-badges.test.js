@@ -14,7 +14,7 @@
 const { test } = require('node:test');
 const assert   = require('node:assert');
 
-const { RULES } = require('../services/cro/rules');
+const { RULES, RULES_VERSION } = require('../services/cro/rules');
 const { generateTrustBadges, ALLOWED_BETA_BADGE_LABELS } = require('../services/cro/trust-badges');
 const { validateContentSafety } = require('../services/content-safety-validator');
 const { buildResultContent } = require('../services/content-execution.service');
@@ -219,4 +219,10 @@ test('generateTrustBadges returns the standard {bestGuess, variants} shape', () 
   const fix = generateTrustBadges(turboFlush);
   assert.ok(fix.bestGuess && typeof fix.bestGuess.content === 'string');
   assert.ok(Array.isArray(fix.variants) && fix.variants.length >= 1);
+});
+
+// RULES_VERSION — stable ruleset identifier, recorded against future executions.
+test('RULES_VERSION is exported as a non-empty string', () => {
+  assert.strictEqual(typeof RULES_VERSION, 'string');
+  assert.ok(RULES_VERSION.trim().length > 0, 'RULES_VERSION must not be empty');
 });
