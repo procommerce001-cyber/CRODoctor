@@ -199,5 +199,6 @@ All of the following must be satisfied, in addition to the runbook's own preflig
 | `docs/decisions/shopify-scopes-and-data-environment-beta0.md` | Covers `SHOPIFY_SCOPES` (§6.1) and the approved data environment (§6.2). Status: **signed 2026-08-25 — accepted for non-client dev-store rehearsal use only.** Does not approve real-store Beta 0. |
 | `docs/checkpoints/project-checkpoint-after-pr19-rehearsal-draft-2026-08-27.md` | Point-in-time checkpoint at main `a4c79e6`, taken before the dev-store rehearsal plan is cleaned and saved. |
 | `docs/rehearsals/non-client-dev-store-rehearsal-plan-beta0.md` | Non-client dev-store rehearsal plan, saved 2026-08-29. Status: **draft plan, not approved for execution.** Does not approve real-store Beta 0. |
+| `docs/checkpoints/product-engineering-checkpoint-2026-09-09.md` | **Latest checkpoint (2026-09-09).** RULES_VERSION + D1 write-safety guards + 422 discrimination committed on `fix/d1-write-safety-and-rules-version` (331/331 at `ebb8301`), unpushed and unmerged; migration history reconciled with one pending RLS migration. Real-store Beta 0 still blocked; D4 still open. |
 
 Related planning documents: `docs/product-opportunity-score-wiring-plan.md`, `docs/store-baseline-engine-plan.md`, `docs/supabase-rls-security-check.md`, `docs/cro-foundation.md`.
