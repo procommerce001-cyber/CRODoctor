@@ -272,6 +272,24 @@ function generateSizeGuideBlock(product) {
   };
 }
 
+// ---------------------------------------------------------------------------
+// RULES_VERSION — stable identifier for the ruleset as a whole.
+//
+// BUMP THIS whenever the ruleset's detection or fix-generation behaviour
+// changes: adding or removing a rule, or editing any rule's check() or
+// build(). Purely cosmetic edits (comments, titles, formatting) do not
+// require a bump.
+//
+// Why it exists: executions are recorded against the ruleset that produced
+// them. Without a version, an outcome measured under old rule logic cannot be
+// distinguished later from one measured under new logic, and the two are not
+// comparable.
+//
+// Format: date of change + same-day sequence, matching the repository's
+// existing date-based convention (see API_VERSION = '2024-01').
+// ---------------------------------------------------------------------------
+const RULES_VERSION = '2026-09-09.1';
+
 const RULES = [
 
   // ══════════════════════════════════════════════════════════════════════════
@@ -1457,4 +1475,4 @@ const RULES = [
 
 ];
 
-module.exports = { RULES };
+module.exports = { RULES, RULES_VERSION };

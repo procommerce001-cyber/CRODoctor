@@ -113,6 +113,12 @@ async function putAsset(store, themeId, assetKey, value) {
 }
 
 async function deleteAsset(store, themeId, assetKey) {
+  // Mandatory chokepoint guard: this path uses raw fetch (to tolerate a 404 as
+  // success), so it does NOT pass through shopifyFetch's mutation gate.
+  // Fail closed before any Shopify call.
+  if (shouldBlockShopifyWrites()) {
+    throw createBetaReadOnlyError();
+  }
   const res = await fetch(
     `${baseUrl(store.shopDomain)}/themes/${themeId}/assets.json?asset[key]=${encodeURIComponent(assetKey)}`,
     { method: 'DELETE', headers: headers(store.accessToken) }
