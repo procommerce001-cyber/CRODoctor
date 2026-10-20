@@ -615,18 +615,17 @@ router.get('/opportunity-diagnostics', async (req, res) => {
       contexts.push({ rawProduct, actions, profile });
     }
 
-    const result = buildOpportunityDiagnostics(contexts);
-
-    // OBSERVATION-ONLY store baseline (Store Baseline Engine).
-    // Attached as internal diagnostics metadata behind the SAME flag. It does
-    // NOT feed ProductOpportunityScore scoring and does NOT affect ranking.
+    // Store baseline (Store Baseline Engine), computed BEFORE scoring so it can
+    // feed ProductOpportunityScore (still internal diagnostics, same flag).
     //
     // Funnel fields (sessions/atc/orders) come from ProductPerformanceProfile
     // (rolling window). Revenue/orders for AOV come from the latest standalone
     // ProductMetricsSnapshot (cumulative) and are passed ONLY as the dedicated
     // AOV pair — never as funnel orders — so cumulative data can never
     // contaminate CVR / ATC→purchase. Raw product views stay null (PdpEvent
-    // deferred). Non-fatal: any failure leaves storeBaseline null.
+    // deferred). Non-fatal: any failure leaves storeBaseline null and scoring
+    // runs without a baseline (honest insufficient/no_clear_leak results).
+    let storeBaseline = null;
     try {
       const productIds = rawProducts.map((p) => p.id);
       // Single query (no N+1): latest standalone snapshot is selected in JS.
@@ -643,15 +642,27 @@ router.get('/opportunity-diagnostics', async (req, res) => {
         .find((d) => typeof d === 'number' && Number.isFinite(d)) ?? null;
 
       const baselineRows = assembleStoreBaselineRows(contexts, snapshots);
-      result.storeBaseline = buildStoreBaseline({
+      storeBaseline = buildStoreBaseline({
         shop: req.query.shop,
         timeWindow: days != null ? { days } : null,
         products: baselineRows,
         sources: ['performance_profile', 'metrics_snapshot'],
       });
+
+      // Same AOV-only pair per product for product-level AOV in scoring.
+      // Rows are index-aligned with contexts (assembleStoreBaselineRows maps 1:1).
+      baselineRows.forEach((row, i) => {
+        if (contexts[i] && row && row.productId === contexts[i].rawProduct.id) {
+          contexts[i].aovRevenue = row.aovRevenue;
+          contexts[i].aovOrders = row.aovOrders;
+        }
+      });
     } catch (_) {
-      result.storeBaseline = null;
+      storeBaseline = null;
     }
+
+    const result = buildOpportunityDiagnostics(contexts, { storeBaseline });
+    result.storeBaseline = storeBaseline;
 
     res.json(result);
   } catch (err) {

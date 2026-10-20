@@ -70,7 +70,13 @@ function funnelContext(input) {
   const productCvr = sessions && orders != null ? (orders / sessions) : null;
   const atcToPurchase = pos(atc) && orders != null ? clamp01(orders / atc) : null;
   const productRpv = sessions && revenue != null ? (revenue / sessions) : null;
-  const productAov = pos(orders) && revenue != null ? (revenue / orders) : null;
+  // AOV prefers a dedicated same-window revenue/orders pair (mirrors the Store
+  // Baseline aovRevenue/aovOrders contract) so a cumulative snapshot never has
+  // to be passed as funnel revenue. Falls back to the funnel pair when absent.
+  const aovRevenue = num(snap.aovRevenue);
+  const aovOrders  = num(snap.aovOrders);
+  const productAov = (pos(aovOrders) && aovRevenue != null) ? (aovRevenue / aovOrders)
+                   : (pos(orders) && revenue != null ? (revenue / orders) : null);
 
   // Store baseline — prefer explicit storeBaseline, else derive from snapshot store totals.
   const storeCvr = num(baseline.storeCvr)

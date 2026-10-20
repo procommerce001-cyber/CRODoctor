@@ -35,20 +35,55 @@ function isDiagnosticsEnabled(env = process.env) {
 const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
 
 // ---------------------------------------------------------------------------
-// toOpportunityInput(ctx) → ProductOpportunityScore input (pure, null-safe).
+// toScoringBaseline(storeBaseline) → ProductOpportunityScore storeBaseline
+// ({ storeCvr, storeRpv, storeAtcRate, storeAov }) or null. Pure.
+//
+// Maps the Store Baseline Engine contract onto the scoring contract:
+//   storeCvr     ← metrics.storeConversionRate  (paired Σorders / Σsessions, profile window)
+//   storeRpv     ← metrics.revenuePerSession    (null unless same-window revenue exists)
+//   storeAtcRate ← distribution.medianAtcRate   (per-product atc / sessions — same
+//                  denominator as the scoring layer's product atcRate)
+//   storeAov     ← metrics.averageOrderValue    (dedicated AOV pair)
+// Returns null when the baseline is absent, 'insufficient', or has no usable
+// metric — scoring then behaves exactly as before (no baseline).
+// ---------------------------------------------------------------------------
+function toScoringBaseline(storeBaseline) {
+  if (!storeBaseline || typeof storeBaseline !== 'object') return null;
+  const level = storeBaseline.reliability && storeBaseline.reliability.level;
+  if (level === 'insufficient') return null;
+  const metrics = storeBaseline.metrics || {};
+  const distribution = storeBaseline.distribution || {};
+  const mapped = {
+    storeCvr:     num(metrics.storeConversionRate),
+    storeRpv:     num(metrics.revenuePerSession),
+    storeAtcRate: num(distribution.medianAtcRate),
+    storeAov:     num(metrics.averageOrderValue),
+  };
+  return Object.values(mapped).some((x) => x != null) ? mapped : null;
+}
+
+// ---------------------------------------------------------------------------
+// toOpportunityInput(ctx, scoringBaseline?) → ProductOpportunityScore input
+// (pure, null-safe).
 //
 // ctx = {
 //   rawProduct: Prisma product row (with variants[], status, updatedAt),
 //   actions:    LLM-free action items from listProductRecommendations (no leakStage),
 //   profile:    latest ProductPerformanceProfile row (sessions/atcRate often null),
+//   aovRevenue, aovOrders: optional same-window AOV pair (latest standalone
+//               ProductMetricsSnapshot) — used ONLY for product AOV,
 // }
+// scoringBaseline: output of toScoringBaseline, or null/undefined.
 //
 // Honesty rules:
-//   - storeBaseline is intentionally OMITTED — no runtime source computes it.
+//   - storeBaseline is set only when a real baseline was mapped; else omitted.
 //   - eligibleIssues carry NO leakStage — real issues are not tagged with one.
 //   - snapshot fields are only set when a real value exists; nulls stay null.
+//   - Funnel orders come from the profile (same rolling window as sessions/atc).
+//     Cumulative snapshot revenue is NEVER passed as funnel revenue, so revenue
+//     per session (and any $ upside) stays null rather than mixing windows.
 // ---------------------------------------------------------------------------
-function toOpportunityInput(ctx = {}) {
+function toOpportunityInput(ctx = {}, scoringBaseline = null) {
   const rawProduct = (ctx && ctx.rawProduct) || {};
   const actions = Array.isArray(ctx && ctx.actions) ? ctx.actions : [];
   const profile = (ctx && ctx.profile) || null;
@@ -81,11 +116,14 @@ function toOpportunityInput(ctx = {}) {
     },
     variants,
     eligibleIssues,
-    // snapshot: only what we actually have. No orders/revenue source at this
-    // layer today, so those stay absent rather than being faked.
+    // snapshot: only what we actually have. Funnel orders share the profile's
+    // window; revenue enters only as the dedicated AOV pair (see honesty rules).
     snapshot: {
       productSessions: sessions,
       productAtcCount: atcCount,
+      orderCount: num(profile && profile.orderCount),
+      aovRevenue: num(ctx && ctx.aovRevenue),
+      aovOrders: num(ctx && ctx.aovOrders),
     },
     profile: {
       sessions,
@@ -94,9 +132,9 @@ function toOpportunityInput(ctx = {}) {
       dataGaps: Array.isArray(profile && profile.dataGaps) ? profile.dataGaps : [],
       archetype: (profile && profile.archetype) ?? null,
     },
-    // storeBaseline intentionally omitted — see honesty rules above.
     confoundFlags: [],
   };
+  if (scoringBaseline) input.storeBaseline = { ...scoringBaseline };
 
   return input;
 }
@@ -116,15 +154,18 @@ function diagnosticNotes(input, result) {
 }
 
 // ---------------------------------------------------------------------------
-// buildOpportunityDiagnostics(contexts) → internal diagnostics payload (pure).
+// buildOpportunityDiagnostics(contexts, options?) → internal diagnostics payload (pure).
 //
 // contexts: array of ctx objects (see toOpportunityInput).
+// options.storeBaseline: optional Store Baseline Engine output (buildStoreBaseline);
+//   mapped via toScoringBaseline and applied to every product.
 // Uses rankProductOpportunities so ordering matches the service's own ranking.
 // This is diagnostics only — it does NOT feed any merchant-facing ranking.
 // ---------------------------------------------------------------------------
-function buildOpportunityDiagnostics(contexts = []) {
+function buildOpportunityDiagnostics(contexts = [], options = {}) {
   const list = Array.isArray(contexts) ? contexts : [];
-  const inputs = list.map(toOpportunityInput);
+  const scoringBaseline = toScoringBaseline(options && options.storeBaseline);
+  const inputs = list.map((c) => toOpportunityInput(c, scoringBaseline));
 
   // Correlate ranked results back to their input by productId for note-building.
   const inputById = new Map();
@@ -151,15 +192,18 @@ function buildOpportunityDiagnostics(contexts = []) {
     enabled: true,
     flag: FLAG,
     dataGaps: {
-      // No runtime code computes a store baseline (storeCvr/storeRpv/storeAov).
-      noStoreBaseline: true,
+      // True when no usable store baseline reached scoring (absent/insufficient).
+      noStoreBaseline: !scoringBaseline,
       // Real issues are not tagged with leakStage, so interventionFit is blind.
       noLeakStageMapping: anyIssues ? !anyLeakStage : true,
+      // No revenue in the same window as sessions → revenue-per-session and
+      // estimated $ upside stay null by design (never mixed with cumulative data).
+      noSameWindowRevenue: !inputs.some((i) => i.snapshot && num(i.snapshot.revenue) != null),
     },
     note:
       'Internal diagnostics only. Scores are NOT used for any merchant-facing ' +
-      'ranking. Store baseline and issue leakStage are not yet available in ' +
-      'runtime, so many products will read as insufficient/no_clear_leak.',
+      'ranking. Issue leakStage and same-window revenue are not yet available in ' +
+      'runtime; products without product-level sessions read as insufficient.',
     count: products.length,
     products,
   };
@@ -168,6 +212,7 @@ function buildOpportunityDiagnostics(contexts = []) {
 module.exports = {
   FLAG,
   isDiagnosticsEnabled,
+  toScoringBaseline,
   toOpportunityInput,
   diagnosticNotes,
   buildOpportunityDiagnostics,
