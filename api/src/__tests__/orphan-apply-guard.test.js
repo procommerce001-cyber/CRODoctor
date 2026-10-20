@@ -313,12 +313,13 @@ test('reconcile: non-applying row is a no-op (no live read)', async () => {
 // ── Integration probe: the EXACT advisory-lock query form must execute on a
 // real Postgres (this is what the unit mocks could not catch). Acquires a
 // transient transaction-scoped lock (auto-released at commit) — no data
-// mutation. Skips cleanly when DATABASE_URL is not available.
+// mutation. Opt-in only: runs when RUN_DB_INTEGRATION_PROBE=true AND
+// DATABASE_URL is set in the shell. It never loads api/.env, so a plain
+// `npm test` can never connect to the configured (possibly live) database.
 // ---------------------------------------------------------------------------
 test('advisory-lock query uses a valid Postgres overload (integration probe)', async (t) => {
-  try { require('dotenv').config({ path: require('node:path').join(__dirname, '../../.env') }); } catch { /* dotenv optional */ }
-  if (!process.env.DATABASE_URL) {
-    t.skip('no DATABASE_URL — skipping live advisory-lock probe');
+  if (process.env.RUN_DB_INTEGRATION_PROBE !== 'true' || !process.env.DATABASE_URL) {
+    t.skip('opt-in DB probe — set RUN_DB_INTEGRATION_PROBE=true and DATABASE_URL (disposable DB only)');
     return;
   }
   const { PrismaClient } = require('@prisma/client');
