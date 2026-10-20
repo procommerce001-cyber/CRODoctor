@@ -44,13 +44,16 @@ const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
 //   storeAtcRate ← distribution.medianAtcRate   (per-product atc / sessions — same
 //                  denominator as the scoring layer's product atcRate)
 //   storeAov     ← metrics.averageOrderValue    (dedicated AOV pair)
-// Returns null when the baseline is absent, 'insufficient', or has no usable
-// metric — scoring then behaves exactly as before (no baseline).
+// Returns null unless reliability is 'usable' or 'good' (a 'weak' baseline lacks
+// either a denominator or orders, e.g. storeCvr = 0 for a zero-order store), or
+// when no metric is usable — scoring then behaves exactly as before.
 // ---------------------------------------------------------------------------
+const SCORABLE_BASELINE_LEVELS = new Set(['usable', 'good']);
+
 function toScoringBaseline(storeBaseline) {
   if (!storeBaseline || typeof storeBaseline !== 'object') return null;
   const level = storeBaseline.reliability && storeBaseline.reliability.level;
-  if (level === 'insufficient') return null;
+  if (!SCORABLE_BASELINE_LEVELS.has(level)) return null;
   const metrics = storeBaseline.metrics || {};
   const distribution = storeBaseline.distribution || {};
   const mapped = {
@@ -60,6 +63,34 @@ function toScoringBaseline(storeBaseline) {
     storeAov:     num(metrics.averageOrderValue),
   };
   return Object.values(mapped).some((x) => x != null) ? mapped : null;
+}
+
+// ---------------------------------------------------------------------------
+// alignProfileWindows(contexts) → contexts whose profile is from the newest
+// capture (same capturedAt + windowDays); any other profile is replaced by null
+// and flagged staleProfile, so a product's old 28-day window is never compared
+// with — or folded into — the current store baseline. Pure: returns copies.
+// ---------------------------------------------------------------------------
+function profileCaptureTime(profile) {
+  if (!profile || profile.capturedAt == null) return null;
+  const t = new Date(profile.capturedAt).getTime();
+  return Number.isFinite(t) ? t : null;
+}
+
+function alignProfileWindows(contexts) {
+  const list = Array.isArray(contexts) ? contexts : [];
+  let latest = null;
+  let latestDays = null;
+  for (const c of list) {
+    const t = profileCaptureTime(c && c.profile);
+    if (t != null && (latest == null || t > latest)) { latest = t; latestDays = c.profile.windowDays; }
+  }
+  return list.map((c) => {
+    if (!c || !c.profile) return c;
+    const current = latest != null && profileCaptureTime(c.profile) === latest &&
+      c.profile.windowDays === latestDays;
+    return current ? c : { ...c, profile: null, staleProfile: true };
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -135,6 +166,7 @@ function toOpportunityInput(ctx = {}, scoringBaseline = null) {
     confoundFlags: [],
   };
   if (scoringBaseline) input.storeBaseline = { ...scoringBaseline };
+  if (ctx && ctx.staleProfile) input.staleProfile = true;
 
   return input;
 }
@@ -144,6 +176,7 @@ function diagnosticNotes(input, result) {
   const notes = [];
   // Global-but-restated-per-product: no baseline means leakage/upside are blind.
   if (!input.storeBaseline) notes.push('no_store_baseline');
+  if (input.staleProfile) notes.push('stale_profile');
   // No leakStage on any eligible issue → interventionFit cannot be matched.
   const hasIssues = Array.isArray(input.eligibleIssues) && input.eligibleIssues.length > 0;
   const anyLeakStage = hasIssues && input.eligibleIssues.some((i) => i && i.leakStage);
@@ -199,6 +232,11 @@ function buildOpportunityDiagnostics(contexts = [], options = {}) {
       // No revenue in the same window as sessions → revenue-per-session and
       // estimated $ upside stay null by design (never mixed with cumulative data).
       noSameWindowRevenue: !inputs.some((i) => i.snapshot && num(i.snapshot.revenue) != null),
+      // Reliability of the store baseline offered to scoring (null when absent).
+      baselineReliability: (options && options.storeBaseline && options.storeBaseline.reliability &&
+        options.storeBaseline.reliability.level) || null,
+      // Products whose latest profile was not from the newest capture window.
+      staleProfiles: inputs.filter((i) => i.staleProfile).length,
     },
     note:
       'Internal diagnostics only. Scores are NOT used for any merchant-facing ' +
@@ -213,6 +251,7 @@ module.exports = {
   FLAG,
   isDiagnosticsEnabled,
   toScoringBaseline,
+  alignProfileWindows,
   toOpportunityInput,
   diagnosticNotes,
   buildOpportunityDiagnostics,

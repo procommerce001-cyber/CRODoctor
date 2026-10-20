@@ -348,3 +348,81 @@ test('route: enrollment and ownership gates are unchanged', async () => {
     assert.strictEqual(notEnrolled.status, 404);
   });
 });
+
+// ── Review fixes: stale profiles and weak baselines ─────────────────────────
+
+const { alignProfileWindows } = require('../services/product-opportunity-input.adapter');
+
+test('toScoringBaseline rejects weak or unlabelled baselines (fail closed)', () => {
+  assert.strictEqual(toScoringBaseline(storeBaselineFixture({ reliability: { level: 'weak' } })), null);
+  assert.strictEqual(toScoringBaseline(storeBaselineFixture({ reliability: {} })), null);
+  assert.ok(toScoringBaseline(storeBaselineFixture({ reliability: { level: 'good' } })));
+});
+
+test('alignProfileWindows keeps only newest-window profiles and flags the rest', () => {
+  const p = (capturedAt, windowDays = 28) => ({ capturedAt, windowDays, sessions: 500 });
+  const out = alignProfileWindows([
+    { rawProduct: { id: 'current' }, profile: p('2026-10-19T00:00:00Z') },
+    { rawProduct: { id: 'old' }, profile: p('2026-08-01T00:00:00Z') },
+    { rawProduct: { id: 'other_window' }, profile: p('2026-10-19T00:00:00Z', 7) },
+    { rawProduct: { id: 'none' }, profile: null },
+  ]);
+  assert.ok(out[0].profile && !out[0].staleProfile);
+  assert.strictEqual(out[1].profile, null);
+  assert.strictEqual(out[1].staleProfile, true);
+  assert.strictEqual(out[2].profile, null);
+  assert.strictEqual(out[2].staleProfile, true);
+  assert.strictEqual(out[3].profile, null);
+  assert.ok(!out[3].staleProfile, 'missing profile is not "stale"');
+});
+
+test('alignProfileWindows does not mutate its input', () => {
+  const ctxs = [{ rawProduct: { id: 'a' }, profile: { capturedAt: '2026-10-19', windowDays: 28 } },
+                { rawProduct: { id: 'b' }, profile: { capturedAt: '2026-01-01', windowDays: 28 } }];
+  const before = JSON.stringify(ctxs);
+  alignProfileWindows(ctxs);
+  assert.strictEqual(JSON.stringify(ctxs), before);
+});
+
+test('route: a stale profile is excluded from scoring and the baseline, and flagged', async () => {
+  await withDiagnosticsEnv(async () => {
+    const fx = routeFixture();
+    // Hoodie's latest profile is from an old window with very different traffic.
+    const hoodie = fx.profiles.find((x) => x.productId === 'hoodie');
+    hoodie.capturedAt = new Date('2026-07-01T00:00:00Z');
+    hoodie.sessions = 50000;
+    const router = require('../routes/action-center.routes');
+    const layer = router.stack.find((l) => l.route && l.route.path === '/opportunity-diagnostics');
+    const handler = layer.route.stack[layer.route.stack.length - 1].handle;
+    const prisma = fakePrisma(fx);
+    const { body } = await new Promise((resolve, reject) => {
+      const res = { statusCode: 200, status(c) { this.statusCode = c; return this; },
+        json(b) { resolve({ status: this.statusCode, body: b }); return this; } };
+      Promise.resolve(handler({ query: { shop: SHOP_A }, session: {}, app: { get: () => prisma } }, res)).catch(reject);
+    });
+    const by = Object.fromEntries(body.products.map((p) => [p.productId, p]));
+    assert.strictEqual(by.hoodie.opportunityScore, 0);
+    assert.ok(by.hoodie.notes.includes('stale_profile'));
+    assert.strictEqual(body.dataGaps.staleProfiles, 1);
+    assert.strictEqual(body.storeBaseline.sampleSize.sessions, 1720); // 900 + 800 + 20, no 50000
+  });
+});
+
+test('route: zero-order store yields a non-scorable baseline, not a fake healthy ranking', async () => {
+  await withDiagnosticsEnv(async () => {
+    const fx = routeFixture();
+    for (const p of fx.profiles) p.orderCount = 0;
+    const router = require('../routes/action-center.routes');
+    const layer = router.stack.find((l) => l.route && l.route.path === '/opportunity-diagnostics');
+    const handler = layer.route.stack[layer.route.stack.length - 1].handle;
+    const prisma = fakePrisma(fx);
+    const { body } = await new Promise((resolve, reject) => {
+      const res = { statusCode: 200, status(c) { this.statusCode = c; return this; },
+        json(b) { resolve({ status: this.statusCode, body: b }); return this; } };
+      Promise.resolve(handler({ query: { shop: SHOP_A }, session: {}, app: { get: () => prisma } }, res)).catch(reject);
+    });
+    assert.strictEqual(body.storeBaseline.reliability.level, 'weak');
+    assert.strictEqual(body.dataGaps.noStoreBaseline, true);
+    assert.strictEqual(body.dataGaps.baselineReliability, 'weak');
+  });
+});

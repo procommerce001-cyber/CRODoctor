@@ -18,6 +18,7 @@ const {
 
 const { getLatestProductPerformanceProfile } = require('../services/product-performance.service');
 const {
+  alignProfileWindows,
   buildOpportunityDiagnostics,
 } = require('../services/product-opportunity-input.adapter');
 const { buildStoreBaseline, assembleStoreBaselineRows } = require('../services/store-baseline.service');
@@ -615,6 +616,10 @@ router.get('/opportunity-diagnostics', async (req, res) => {
       contexts.push({ rawProduct, actions, profile });
     }
 
+    // Only profiles from the newest capture window feed the baseline and scoring;
+    // older ones are dropped (flagged stale) rather than mixed across windows.
+    const alignedContexts = alignProfileWindows(contexts);
+
     // Store baseline (Store Baseline Engine), computed BEFORE scoring so it can
     // feed ProductOpportunityScore (still internal diagnostics, same flag).
     //
@@ -637,11 +642,11 @@ router.get('/opportunity-diagnostics', async (req, res) => {
           })
         : [];
 
-      const days = contexts
+      const days = alignedContexts
         .map((c) => c.profile && c.profile.windowDays)
         .find((d) => typeof d === 'number' && Number.isFinite(d)) ?? null;
 
-      const baselineRows = assembleStoreBaselineRows(contexts, snapshots);
+      const baselineRows = assembleStoreBaselineRows(alignedContexts, snapshots);
       storeBaseline = buildStoreBaseline({
         shop: req.query.shop,
         timeWindow: days != null ? { days } : null,
@@ -652,16 +657,17 @@ router.get('/opportunity-diagnostics', async (req, res) => {
       // Same AOV-only pair per product for product-level AOV in scoring.
       // Rows are index-aligned with contexts (assembleStoreBaselineRows maps 1:1).
       baselineRows.forEach((row, i) => {
-        if (contexts[i] && row && row.productId === contexts[i].rawProduct.id) {
-          contexts[i].aovRevenue = row.aovRevenue;
-          contexts[i].aovOrders = row.aovOrders;
+        const c = alignedContexts[i];
+        if (c && row && row.productId === c.rawProduct.id) {
+          c.aovRevenue = row.aovRevenue;
+          c.aovOrders = row.aovOrders;
         }
       });
     } catch (_) {
       storeBaseline = null;
     }
 
-    const result = buildOpportunityDiagnostics(contexts, { storeBaseline });
+    const result = buildOpportunityDiagnostics(alignedContexts, { storeBaseline });
     result.storeBaseline = storeBaseline;
 
     res.json(result);
