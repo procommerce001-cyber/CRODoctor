@@ -70,6 +70,14 @@ function sumField(products, field) {
   return seen ? sum : null;
 }
 
+// Ratio of sums over ONLY the products that supplied both fields, so a product
+// with orders but no sessions (e.g. analytics unavailable) can never inflate a
+// rate's numerator without contributing to its denominator.
+function pairedRate(products, numField, denField, digits = 4) {
+  const paired = products.filter((p) => num(p && p[numField]) != null && num(p && p[denField]) != null);
+  return computeRate(sumField(paired, numField), sumField(paired, denField), digits);
+}
+
 function summarizeBaselineSources(input) {
   if (input && Array.isArray(input.sources) && input.sources.length > 0) {
     return input.sources.slice();
@@ -185,13 +193,15 @@ function buildStoreBaseline(input = {}) {
   const averageOrderValue =
     computeRate(sums.aovRevenue, sums.aovOrders, 2) ??
     computeRate(sums.revenue, sums.orders, 2);
+  // Funnel rates are paired per product (see pairedRate) — identical to the
+  // ratio of global sums whenever every product supplies both fields.
   const metrics = {
     averageOrderValue,
-    revenuePerSession:     computeRate(sums.revenue, sums.sessions, 4),
-    revenuePerProductView: computeRate(sums.revenue, sums.productViews, 4),
-    storeConversionRate:   computeRate(sums.orders, sums.sessions, 4),
-    productViewToAtcRate:  computeRate(sums.atc, sums.productViews, 4),
-    atcToPurchaseRate:     computeRate(sums.orders, sums.atc, 4),
+    revenuePerSession:     pairedRate(products, 'revenue', 'sessions'),
+    revenuePerProductView: pairedRate(products, 'revenue', 'productViews'),
+    storeConversionRate:   pairedRate(products, 'orders', 'sessions'),
+    productViewToAtcRate:  pairedRate(products, 'atc', 'productViews'),
+    atcToPurchaseRate:     pairedRate(products, 'orders', 'atc'),
   };
 
   // Distribution context is per-product (equal-weight) — deliberately distinct
