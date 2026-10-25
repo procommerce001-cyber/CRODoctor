@@ -12,14 +12,20 @@
 //   toScoringFunnels(aggregate)                     → POS-compatible funnel per product
 //
 // Measurement contract (never mixed with other sources or units):
-//   - source 'web_pixel', unit 'viewer_day': one pseudonymous visitor on one UTC
-//     day. It is NOT a Shopify session; one event is never one session.
+//   - source 'web_pixel', unit 'viewer_day': one pseudonymous visitor on one
+//     store-local calendar day (UTC when the store time zone is unknown). It is
+//     NOT a Shopify session; one event is never one session.
+//   - cohort 'same_day_after_view': ATC and purchases count only when they
+//     happen on the same viewer-day AT OR AFTER that day's first view. Rates
+//     are therefore same-day, view-anchored proxies — not session CVR, not
+//     multi-day cohort conversion and not confirmed-order conversion. A view
+//     today and a purchase tomorrow is reported as outside the cohort.
 //   - viewDays     = viewer-days with a product_viewed for the product.
-//   - atcDays      = those viewer-days that also added the product to cart.
-//   - purchaseDays = those viewer-days that also completed a checkout containing
-//     the product. Pixel checkouts are observations only; Admin orders/revenue
-//     are never added to them. Admin order refs are used solely to measure how
-//     much of the store's checkout volume the pixel observed.
+//   - atcDays      = those viewer-days with an ATC at/after the first view.
+//   - purchaseDays = those viewer-days with a completed checkout containing the
+//     product at/after the first view. Pixel checkouts are observations only;
+//     Admin orders/revenue are never added to them. Admin order refs are used
+//     solely to measure how much of the store's checkout volume the pixel saw.
 //
 // Guarantees:
 //   - No I/O: no Prisma, no Shopify, no network, no env, no clock (time comes
@@ -32,6 +38,7 @@
 
 const MEASUREMENT_SOURCE = 'web_pixel';
 const MEASUREMENT_UNIT = 'viewer_day';
+const MEASUREMENT_COHORT = 'same_day_after_view';
 
 const EVENT_KINDS = {
   product_viewed: 'view',
@@ -109,12 +116,27 @@ function validQuantity(q, max) {
   return Number.isInteger(q) && q >= 1 && q <= max;
 }
 
-// Checkout reference: the order id when present, else the checkout token.
-function orderRefOf(checkout) {
+// Checkout references: the order id and/or the checkout token. Either one
+// identifies the same checkout, so both are used for de-duplication.
+function checkoutRefsOf(checkout) {
   const order = parseShopifyId(checkout.order && checkout.order.id, ['Order', 'OrderIdentity']);
-  if (order.id) return `order:${order.id}`;
   const token = boundedString(checkout.token, DEFAULTS.maxIdLength);
-  return token ? `token:${token}` : null;
+  return {
+    orderRef: order.id ? `order:${order.id}` : null,
+    tokenRef: token ? `token:${token}` : null,
+  };
+}
+
+// Calendar-day key in the store's time zone (YYYY-MM-DD), or UTC when unknown.
+function dayKeyFn(timeZone) {
+  if (timeZone == null) return (t) => new Date(t).toISOString().slice(0, 10);
+  let fmt;
+  try {
+    fmt = new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' });
+  } catch (_) {
+    throw new TypeError(`normalizeProductEvents: invalid storeContext.timeZone "${timeZone}"`);
+  }
+  return (t) => fmt.format(new Date(t));
 }
 
 // ---------------------------------------------------------------------------
@@ -130,6 +152,7 @@ function orderRefOf(checkout) {
 // }
 // storeContext = {
 //   storeId, shopDomain, active,
+//   timeZone: optional IANA zone of the store (day boundaries); UTC if absent,
 //   products: Map|object shopifyProductId → { productId, variantIds[] },
 // }
 //
@@ -144,11 +167,15 @@ function normalizeProductEvents(envelopes, storeContext, options = {}) {
   const list = Array.isArray(envelopes) ? envelopes : [];
   const shopDomain = String(storeContext.shopDomain).toLowerCase();
   const products = productLookup(storeContext);
+  const dayKey = dayKeyFn(storeContext.timeZone);
+  const dayBasis = storeContext.timeZone || 'UTC';
 
   const facts = [];
   const rejected = [];
   const seenEventIds = new Set();
-  const seenPurchases = new Set(); // `${orderRef}|${productId}`
+  // One group per checkout, reachable through any of its refs. The group's
+  // ref is the order id once known (upgraded from a token-only first event).
+  const checkoutByRef = new Map();
   let duplicates = 0;
 
   const reject = (eventId, reason, extra) => rejected.push({ eventId: eventId ?? null, reason, ...(extra || {}) });
@@ -182,7 +209,8 @@ function normalizeProductEvents(envelopes, storeContext, options = {}) {
       storeId: storeContext.storeId,
       eventId,
       visitorKey,
-      day: new Date(occurredAt).toISOString().slice(0, 10),
+      day: dayKey(occurredAt),
+      dayBasis,
       occurredAt: new Date(occurredAt).toISOString(),
     };
     const data = isObj(ev.data) ? ev.data : {};
@@ -209,8 +237,8 @@ function normalizeProductEvents(envelopes, storeContext, options = {}) {
     // purchase (checkout_completed)
     const checkout = isObj(data.checkout) ? data.checkout : null;
     if (!checkout) { reject(eventId, 'missing_checkout'); continue; }
-    const orderRef = orderRefOf(checkout);
-    if (!orderRef) { reject(eventId, 'missing_order_ref'); continue; }
+    const { orderRef, tokenRef } = checkoutRefsOf(checkout);
+    if (!orderRef && !tokenRef) { reject(eventId, 'missing_order_ref'); continue; }
     const lines = Array.isArray(checkout.lineItems) ? checkout.lineItems : [];
     if (lines.length === 0) { reject(eventId, 'missing_line_items'); continue; }
 
@@ -223,15 +251,25 @@ function normalizeProductEvents(envelopes, storeContext, options = {}) {
       if (!validQuantity(li.quantity, cfg.maxQuantity)) { reject(eventId, 'invalid_quantity', { line: i }); return; }
       const prev = byProduct.get(m.productId);
       if (prev) prev.quantity += li.quantity;
-      else byProduct.set(m.productId, { ...base, kind, orderRef, productId: m.productId, shopifyProductId: m.shopifyProductId, variantId: m.variantId, quantity: li.quantity });
+      else byProduct.set(m.productId, { ...base, kind, productId: m.productId, shopifyProductId: m.shopifyProductId, variantId: m.variantId, quantity: li.quantity });
     });
+
+    let group = (orderRef && checkoutByRef.get(orderRef)) || (tokenRef && checkoutByRef.get(tokenRef));
+    if (!group) group = { ref: orderRef || tokenRef, facts: [], productIds: new Set() };
+    if (orderRef && group.ref !== orderRef && group.ref.startsWith('token:')) {
+      group.ref = orderRef;
+      for (const f of group.facts) f.orderRef = orderRef;
+    }
+    if (orderRef) checkoutByRef.set(orderRef, group);
+    if (tokenRef) checkoutByRef.set(tokenRef, group);
 
     let added = 0;
     let repeated = 0;
     for (const fact of byProduct.values()) {
-      const key = `${orderRef}|${fact.productId}`;
-      if (seenPurchases.has(key)) { repeated += 1; continue; }
-      seenPurchases.add(key);
+      if (group.productIds.has(fact.productId)) { repeated += 1; continue; }
+      group.productIds.add(fact.productId);
+      fact.orderRef = group.ref;
+      group.facts.push(fact);
       facts.push(fact);
       added += 1;
     }
@@ -294,19 +332,27 @@ function aggregateProductEvents(facts, window, options = {}) {
     return false;
   });
 
+  // Per product and viewer-day: first view time, last ATC time, last purchase
+  // time. An ATC/purchase is in the cohort when its last occurrence that day is
+  // at or after the day's first view (i.e. at least one happened after a view).
   const byProduct = new Map();
   const pixelOrderRefs = new Set();
+  const dayBases = new Set();
+  const keepMin = (map, k, t) => { if (!map.has(k) || t < map.get(k)) map.set(k, t); };
+  const keepMax = (map, k, t) => { if (!map.has(k) || t > map.get(k)) map.set(k, t); };
   for (const f of usable) {
     let p = byProduct.get(f.productId);
     if (!p) {
-      p = { views: new Set(), atcs: new Set(), purchases: new Set(), orders: new Set() };
+      p = { firstView: new Map(), lastAtc: new Map(), lastPurchase: new Map(), orders: new Set() };
       byProduct.set(f.productId, p);
     }
+    dayBases.add(f.dayBasis || 'UTC');
     const viewerDay = `${f.visitorKey}|${f.day}`;
-    if (f.kind === 'view') p.views.add(viewerDay);
-    else if (f.kind === 'atc') p.atcs.add(viewerDay);
+    const t = toTime(f.occurredAt);
+    if (f.kind === 'view') keepMin(p.firstView, viewerDay, t);
+    else if (f.kind === 'atc') keepMax(p.lastAtc, viewerDay, t);
     else if (f.kind === 'purchase') {
-      p.purchases.add(viewerDay);
+      keepMax(p.lastPurchase, viewerDay, t);
       p.orders.add(f.orderRef);
       pixelOrderRefs.add(f.orderRef);
     }
@@ -315,25 +361,32 @@ function aggregateProductEvents(facts, window, options = {}) {
   const products = [...byProduct.entries()]
     .sort(([a], [b]) => String(a).localeCompare(String(b)))
     .map(([productId, p]) => {
-      const count = (set, within) => [...set].filter((k) => within.has(k)).length;
-      const viewDays = p.views.size;
-      const atcDays = count(p.atcs, p.views);
-      const purchaseDays = count(p.purchases, p.views);
+      const inCohort = (lastByDay) => new Set([...lastByDay]
+        .filter(([k, t]) => p.firstView.has(k) && t >= p.firstView.get(k))
+        .map(([k]) => k));
+      const atcCohort = inCohort(p.lastAtc);
+      const purchaseCohort = inCohort(p.lastPurchase);
+      const viewDays = p.firstView.size;
+      const atcDays = atcCohort.size;
+      const purchaseDays = purchaseCohort.size;
+      const atcOutsideCohortDays = p.lastAtc.size - atcDays;
+      const purchaseOutsideCohortDays = p.lastPurchase.size - purchaseDays;
+      const purchaseWithoutAtcDays = [...purchaseCohort].filter((k) => !atcCohort.has(k)).length;
       const dataQuality = [];
-      const atcWithoutViewDays = p.atcs.size - atcDays;
-      const purchaseWithoutViewDays = p.purchases.size - purchaseDays;
-      if (atcWithoutViewDays > 0) dataQuality.push('atc_without_view');
-      if (purchaseWithoutViewDays > 0) dataQuality.push('purchase_without_view');
+      if (atcOutsideCohortDays > 0) dataQuality.push('atc_outside_cohort');
+      if (purchaseOutsideCohortDays > 0) dataQuality.push('purchase_outside_cohort');
+      if (purchaseWithoutAtcDays > 0) dataQuality.push('purchase_without_atc');
       if (purchaseDays > atcDays) dataQuality.push('purchase_exceeds_atc');
       return {
         productId,
         viewDays,
         atcDays,
         purchaseDays,
-        atcRate: viewDays > 0 ? round4(atcDays / viewDays) : null,
-        purchaseRate: viewDays > 0 ? round4(purchaseDays / viewDays) : null,
-        atcWithoutViewDays,
-        purchaseWithoutViewDays,
+        sameDayAtcRate: viewDays > 0 ? round4(atcDays / viewDays) : null,
+        sameDayPurchaseRate: viewDays > 0 ? round4(purchaseDays / viewDays) : null,
+        atcOutsideCohortDays,       // no earlier view that day (next-day, quick-add, ATC before view)
+        purchaseOutsideCohortDays,  // e.g. viewed yesterday, bought today
+        purchaseWithoutAtcDays,     // buy-now / express checkout inside the cohort
         checkoutOrders: p.orders.size, // observation only, never a funnel input
         dataQuality,
       };
@@ -375,10 +428,13 @@ function aggregateProductEvents(facts, window, options = {}) {
     dataQuality.push('admin_orders_unavailable');
   }
   if (excluded.suspicious > 0) dataQuality.push('suspicious_activity_excluded');
+  const dayBasis = dayBases.size === 1 ? [...dayBases][0] : (dayBases.size === 0 ? null : 'mixed');
+  if (dayBasis === 'UTC') dataQuality.push('utc_day_boundary');
+  if (dayBasis === 'mixed') dataQuality.push('mixed_day_basis');
 
   return {
     storeId: window.storeId,
-    measurement: { source: MEASUREMENT_SOURCE, unit: MEASUREMENT_UNIT },
+    measurement: { source: MEASUREMENT_SOURCE, unit: MEASUREMENT_UNIT, cohort: MEASUREMENT_COHORT, dayBasis },
     window: {
       start: new Date(start).toISOString(),
       end: new Date(end).toISOString(),
@@ -403,22 +459,31 @@ function aggregateProductEvents(facts, window, options = {}) {
 //
 // `funnel` uses the field names ProductOpportunityScore reads from a profile
 // (sessions / atcCount / atcRate / orderCount), all in viewer-days of one
-// population. `measurement` carries source/unit/coverage alongside — never in
-// dataGaps, which scoring penalizes. Ineligible products get a null funnel so
-// scoring reads them as insufficient rather than guessing.
+// same-day cohort; atcRate is the same-day rate. `measurement` carries
+// source/unit/cohort/coverage alongside — never in dataGaps, which scoring
+// penalizes. Ineligible products get a null funnel so scoring reads them as
+// insufficient rather than guessing.
+//
+// purchase_exceeds_atc blocks scoring because the engine's ATC→purchase step
+// divides cohort purchases by cohort ATCs; with buy-now/express checkout that
+// ratio would be overstated. This suppresses such products (fail-closed) until
+// scoring can read an ATC-cohort purchase count.
 // ---------------------------------------------------------------------------
-const STORE_BLOCKERS = ['collection_start_unknown', 'insufficient_coverage'];
+const STORE_BLOCKERS = ['collection_start_unknown', 'insufficient_coverage', 'mixed_day_basis'];
 const PRODUCT_BLOCKERS = ['purchase_exceeds_atc'];
 
 function toScoringFunnels(aggregate) {
   if (!isObj(aggregate) || !isObj(aggregate.measurement) ||
-      aggregate.measurement.source !== MEASUREMENT_SOURCE || aggregate.measurement.unit !== MEASUREMENT_UNIT) {
-    throw new TypeError('toScoringFunnels: expected a web_pixel / viewer_day aggregate');
+      aggregate.measurement.source !== MEASUREMENT_SOURCE || aggregate.measurement.unit !== MEASUREMENT_UNIT ||
+      aggregate.measurement.cohort !== MEASUREMENT_COHORT) {
+    throw new TypeError('toScoringFunnels: expected a web_pixel / viewer_day / same_day_after_view aggregate');
   }
   const storeReasons = (aggregate.dataQuality || []).filter((q) => STORE_BLOCKERS.includes(q));
   const measurement = {
     source: aggregate.measurement.source,
     unit: aggregate.measurement.unit,
+    cohort: aggregate.measurement.cohort,
+    dayBasis: aggregate.measurement.dayBasis,
     windowStart: aggregate.window.start,
     windowEnd: aggregate.window.end,
     windowDays: aggregate.window.days,
@@ -434,7 +499,7 @@ function toScoringFunnels(aggregate) {
       reasons,
       measurement,
       funnel: eligible
-        ? { sessions: p.viewDays, atcCount: p.atcDays, atcRate: p.atcRate, orderCount: p.purchaseDays }
+        ? { sessions: p.viewDays, atcCount: p.atcDays, atcRate: p.sameDayAtcRate, orderCount: p.purchaseDays }
         : { sessions: null, atcCount: null, atcRate: null, orderCount: null },
     };
   });
@@ -443,6 +508,7 @@ function toScoringFunnels(aggregate) {
 module.exports = {
   MEASUREMENT_SOURCE,
   MEASUREMENT_UNIT,
+  MEASUREMENT_COHORT,
   DEFAULTS,
   parseShopifyId,
   normalizeProductEvents,

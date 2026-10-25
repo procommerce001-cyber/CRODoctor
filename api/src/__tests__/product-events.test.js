@@ -226,12 +226,12 @@ test('viewer-days collapse repeat views; ATC and purchases count only within vie
   assert.deepStrictEqual(toScoringFunnels(agg)[0].funnel, { sessions: 3, atcCount: 1, atcRate: round(1 / 3), orderCount: 1 });
   assert.strictEqual(hoodie.viewDays, 3);
   assert.strictEqual(hoodie.atcDays, 1);
-  assert.strictEqual(hoodie.atcWithoutViewDays, 1);
+  assert.strictEqual(hoodie.atcOutsideCohortDays, 1);
   assert.strictEqual(hoodie.purchaseDays, 1);
-  assert.strictEqual(hoodie.purchaseWithoutViewDays, 1);
+  assert.strictEqual(hoodie.purchaseOutsideCohortDays, 1);
   assert.strictEqual(hoodie.checkoutOrders, 2, 'all observed orders, reported separately');
-  assert.strictEqual(hoodie.atcRate, round(1 / 3));
-  assert.deepStrictEqual(hoodie.dataQuality, ['atc_without_view', 'purchase_without_view']);
+  assert.strictEqual(hoodie.sameDayAtcRate, round(1 / 3));
+  assert.deepStrictEqual(hoodie.dataQuality, ['atc_outside_cohort', 'purchase_outside_cohort']);
 });
 
 function round(v) { return Math.round(v * 10000) / 10000; }
@@ -304,6 +304,7 @@ test('toScoringFunnels keeps unit metadata out of dataGaps and nulls ineligible 
   assert.deepStrictEqual(ok[0].funnel, { sessions: 1, atcCount: 1, atcRate: 1, orderCount: 0 });
   assert.deepStrictEqual(ok[0].measurement.source, 'web_pixel');
   assert.deepStrictEqual(ok[0].measurement.unit, 'viewer_day');
+  assert.deepStrictEqual(ok[0].measurement.cohort, 'same_day_after_view');
   assert.strictEqual('dataGaps' in ok[0], false);
 
   const thin = toScoringFunnels(aggregateProductEvents(norm.facts, { ...WINDOW, collectionStartedAt: '2026-10-19T00:00:00Z' }));
@@ -311,7 +312,15 @@ test('toScoringFunnels keeps unit metadata out of dataGaps and nulls ineligible 
   assert.deepStrictEqual(thin[0].reasons, ['insufficient_coverage']);
   assert.deepStrictEqual(thin[0].funnel, { sessions: null, atcCount: null, atcRate: null, orderCount: null });
 
-  assert.throws(() => toScoringFunnels({ measurement: { source: 'shopify_sessions', unit: 'session' } }), TypeError);
+  // A complete aggregate whose measurement differs in one field must be refused.
+  const full = aggregateProductEvents(norm.facts, WINDOW);
+  for (const measurement of [
+    { ...full.measurement, source: 'shopify_sessions' },
+    { ...full.measurement, unit: 'session' },
+    { ...full.measurement, cohort: 'multi_day' },
+  ]) {
+    assert.throws(() => toScoringFunnels({ ...full, measurement }), /expected a web_pixel \/ viewer_day \/ same_day_after_view aggregate/);
+  }
 });
 
 test('a purchase-heavy funnel (purchases > ATC) is ineligible rather than clamped', () => {
@@ -400,6 +409,104 @@ test('a product below the traffic threshold stays insufficient', () => {
   const hoodie = out.products.find((p) => p.productId === 'hoodie');
   assert.strictEqual(hoodie.primaryLeak, 'insufficient_data');
   assert.strictEqual(hoodie.estimatedRevenueUpside, null);
+});
+
+// ── Cohort semantics (same-day, view-anchored proxy) ───────────────────────
+
+const at = (iso) => ({ timestamp: iso, receivedAt: iso });
+
+test('ATC before the first view of the day is outside the cohort', () => {
+  const norm = normalizeProductEvents([
+    added('101', '1011', 1, at('2026-10-10T10:00:00Z')),
+    viewed('101', null, at('2026-10-10T12:00:00Z')),
+  ], STORE);
+  const [p] = aggregateProductEvents(norm.facts, WINDOW).products;
+  assert.strictEqual(p.atcDays, 0);
+  assert.strictEqual(p.atcOutsideCohortDays, 1);
+});
+
+test('next-day ATC and purchase are reported outside the cohort, not dropped silently', () => {
+  const norm = normalizeProductEvents([
+    viewed('101', null, at('2026-10-10T12:00:00Z')),
+    added('101', '1011', 1, at('2026-10-11T09:00:00Z')),
+    completed('9060', [['101', '1011']], at('2026-10-11T09:05:00Z')),
+  ], STORE);
+  const [p] = aggregateProductEvents(norm.facts, WINDOW).products;
+  assert.deepStrictEqual([p.viewDays, p.atcDays, p.purchaseDays], [1, 0, 0]);
+  assert.deepStrictEqual([p.atcOutsideCohortDays, p.purchaseOutsideCohortDays], [1, 1]);
+  assert.deepStrictEqual(p.dataQuality, ['atc_outside_cohort', 'purchase_outside_cohort']);
+});
+
+test('the store time zone decides the day boundary; UTC is flagged when unknown', () => {
+  const events = [
+    viewed('101', null, at('2026-10-10T23:50:00Z')),          // 19:50 in New York
+    added('101', '1011', 1, at('2026-10-11T00:10:00Z')),      // 20:10 in New York
+  ];
+  const utc = aggregateProductEvents(normalizeProductEvents(events, STORE).facts, WINDOW);
+  assert.strictEqual(utc.products[0].atcDays, 0);
+  assert.strictEqual(utc.measurement.dayBasis, 'UTC');
+  assert.ok(utc.dataQuality.includes('utc_day_boundary'));
+
+  const ny = aggregateProductEvents(normalizeProductEvents(events, { ...STORE, timeZone: 'America/New_York' }).facts, WINDOW);
+  assert.strictEqual(ny.products[0].atcDays, 1);
+  assert.strictEqual(ny.measurement.dayBasis, 'America/New_York');
+  assert.ok(!ny.dataQuality.includes('utc_day_boundary'));
+
+  assert.throws(() => normalizeProductEvents([], { ...STORE, timeZone: 'Mars/Olympus' }), TypeError);
+});
+
+test('facts with different day bases are not scored together', () => {
+  const a = normalizeProductEvents([viewed('101', null)], STORE).facts;
+  const b = normalizeProductEvents([viewed('102', null)], { ...STORE, timeZone: 'Asia/Jerusalem' }).facts;
+  const agg = aggregateProductEvents([...a, ...b], WINDOW);
+  assert.strictEqual(agg.measurement.dayBasis, 'mixed');
+  assert.ok(toScoringFunnels(agg).every((f) => !f.eligible && f.reasons.includes('mixed_day_basis')));
+});
+
+test('a visitor returning on several days counts one viewer-day per day', () => {
+  const days = ['10', '11', '12', '13', '14'].map((d) => viewed('101', null, at(`2026-10-${d}T12:00:00Z`)));
+  const norm = normalizeProductEvents([
+    ...days,
+    added('101', '1011', 1, at('2026-10-14T12:05:00Z')),
+    completed('9061', [['101', '1011']], at('2026-10-14T12:10:00Z')),
+  ], STORE);
+  const [p] = aggregateProductEvents(norm.facts, WINDOW).products;
+  assert.deepStrictEqual([p.viewDays, p.atcDays, p.purchaseDays], [5, 1, 1]);
+  assert.strictEqual(p.sameDayPurchaseRate, 0.2, 'one buyer reads as 20%: the documented multi-day bias');
+});
+
+test('several orders by one visitor on one day are one purchase viewer-day', () => {
+  const norm = normalizeProductEvents([
+    viewed('101', null),
+    added('101', '1011'),
+    completed('9062', [['101', '1011']]),
+    completed('9063', [['101', '1011']]),
+  ], STORE);
+  const [p] = aggregateProductEvents(norm.facts, WINDOW).products;
+  assert.strictEqual(p.purchaseDays, 1);
+  assert.strictEqual(p.checkoutOrders, 2);
+});
+
+test('buy-now purchases without ATC are visible and block scoring', () => {
+  const norm = normalizeProductEvents([viewed('101', null), completed('9064', [['101', '1011']])], STORE);
+  const agg = aggregateProductEvents(norm.facts, WINDOW);
+  assert.strictEqual(agg.products[0].purchaseWithoutAtcDays, 1);
+  assert.deepStrictEqual(agg.products[0].dataQuality, ['purchase_without_atc', 'purchase_exceeds_atc']);
+  assert.strictEqual(toScoringFunnels(agg)[0].eligible, false);
+});
+
+test('a checkout seen first by token then by order id is one order and matches Admin', () => {
+  const norm = normalizeProductEvents([
+    completed(null, [['101', '1011']], {}, 'tok_9'),
+    completed('gid://shopify/Order/9065', [['101', '1011']], {}, 'tok_9'),
+  ], STORE);
+  assert.strictEqual(norm.facts.length, 1);
+  assert.strictEqual(norm.facts[0].orderRef, 'order:9065', 'token ref upgraded to the order id');
+  assert.deepStrictEqual(reasons(norm), ['duplicate_order']);
+  const agg = aggregateProductEvents(norm.facts, { ...WINDOW, adminOrderRefs: ['9065'] });
+  assert.strictEqual(agg.coverage.pixelCheckoutOrders, 1);
+  assert.strictEqual(agg.coverage.observedOrderShare, 1);
+  assert.ok(!agg.dataQuality.includes('unmatched_checkout_tokens'));
 });
 
 // ── 10. Purity and privacy ──────────────────────────────────────────────────
