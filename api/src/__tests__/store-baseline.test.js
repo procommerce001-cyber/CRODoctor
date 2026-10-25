@@ -188,3 +188,25 @@ test('classifyBaselineReliability lists every absent raw input in missingData', 
     assert.ok(r.missingData.includes(k));
   }
 });
+
+// ── paired funnel denominators ───────────────────────────────────────────────
+
+test('orders from a product without sessions do not inflate storeConversionRate', () => {
+  const b = buildStoreBaseline(baseInput({
+    products: [
+      { sessions: 1000, atc: 80, orders: 20 },
+      { sessions: 1000, atc: 60, orders: 10 },
+      { sessions: null, atc: null, orders: 50 }, // analytics unavailable
+    ],
+  }));
+  assert.strictEqual(b.metrics.storeConversionRate, 0.015); // 30 / 2000, not 80 / 2000
+  assert.strictEqual(b.metrics.atcToPurchaseRate, 0.2143);  // 30 / 140
+  assert.strictEqual(b.sampleSize.orders, 80);              // raw sums still reported
+});
+
+test('paired rates equal ratio of global sums when every product has both fields', () => {
+  const b = buildStoreBaseline(baseInput());
+  const s = b.sampleSize;
+  assert.strictEqual(b.metrics.storeConversionRate, computeRate(s.orders, s.sessions, 4));
+  assert.strictEqual(b.metrics.atcToPurchaseRate, computeRate(s.orders, s.atc, 4));
+});

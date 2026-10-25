@@ -206,3 +206,23 @@ test('explanations never contain forbidden academic/over-claim wording', () => {
     assert.ok(!FORBIDDEN.test(r.explanation), `forbidden wording: ${r.explanation}`);
   }
 });
+
+// ── dedicated AOV pair ──────────────────────────────────────────────────────
+
+test('product AOV prefers the dedicated aovRevenue/aovOrders pair over funnel revenue', () => {
+  const r = computeProductOpportunity(ctx({
+    snapshot: { productSessions: 1000, productAtcCount: 80, orderCount: 30, aovRevenue: 600, aovOrders: 30 },
+  }));
+  // $20 AOV vs $50 store AOV with healthy conversion → AOV leak, without any funnel revenue.
+  assert.strictEqual(r.primaryLeak, 'good_conversion_low_aov');
+  assert.strictEqual(r.estimatedRevenueUpside, null);
+});
+
+test('AOV pair does not create revenue-per-session or $ upside', () => {
+  const r = computeProductOpportunity(ctx({
+    snapshot: { productSessions: 1500, productAtcCount: 15, orderCount: 6, aovRevenue: 150, aovOrders: 6 },
+  }));
+  assert.strictEqual(r.primaryLeak, 'low_view_to_atc');
+  assert.strictEqual(r.subScores.revenueUpside, 0);
+  assert.strictEqual(r.estimatedRevenueUpside, null);
+});

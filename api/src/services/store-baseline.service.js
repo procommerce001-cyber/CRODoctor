@@ -8,9 +8,10 @@
 // store-level baseline — "what normal looks like for this store" — with honest
 // reliability labelling.
 //
-// See docs/store-baseline-engine-plan.md. This is OBSERVATION-ONLY: it does NOT
-// feed ProductOpportunityScore scoring, does NOT change ranking, and is exposed
-// only inside the internal PRODUCT_OPPORTUNITY_DIAGNOSTICS diagnostics flow.
+// See docs/store-baseline-engine-plan.md. It feeds ProductOpportunityScore only
+// inside the internal PRODUCT_OPPORTUNITY_DIAGNOSTICS diagnostics flow (mapped
+// by product-opportunity-input.adapter.js); it does NOT change any
+// merchant-facing ranking.
 //
 // Guarantees:
 //   - No I/O: no Prisma, no Shopify, no network, no env, no side effects.
@@ -68,6 +69,14 @@ function sumField(products, field) {
     if (v != null) { sum += v; seen = true; }
   }
   return seen ? sum : null;
+}
+
+// Ratio of sums over ONLY the products that supplied both fields, so a product
+// with orders but no sessions (e.g. analytics unavailable) can never inflate a
+// rate's numerator without contributing to its denominator.
+function pairedRate(products, numField, denField, digits = 4) {
+  const paired = products.filter((p) => num(p && p[numField]) != null && num(p && p[denField]) != null);
+  return computeRate(sumField(paired, numField), sumField(paired, denField), digits);
 }
 
 function summarizeBaselineSources(input) {
@@ -185,13 +194,15 @@ function buildStoreBaseline(input = {}) {
   const averageOrderValue =
     computeRate(sums.aovRevenue, sums.aovOrders, 2) ??
     computeRate(sums.revenue, sums.orders, 2);
+  // Funnel rates are paired per product (see pairedRate) — identical to the
+  // ratio of global sums whenever every product supplies both fields.
   const metrics = {
     averageOrderValue,
-    revenuePerSession:     computeRate(sums.revenue, sums.sessions, 4),
-    revenuePerProductView: computeRate(sums.revenue, sums.productViews, 4),
-    storeConversionRate:   computeRate(sums.orders, sums.sessions, 4),
-    productViewToAtcRate:  computeRate(sums.atc, sums.productViews, 4),
-    atcToPurchaseRate:     computeRate(sums.orders, sums.atc, 4),
+    revenuePerSession:     pairedRate(products, 'revenue', 'sessions'),
+    revenuePerProductView: pairedRate(products, 'revenue', 'productViews'),
+    storeConversionRate:   pairedRate(products, 'orders', 'sessions'),
+    productViewToAtcRate:  pairedRate(products, 'atc', 'productViews'),
+    atcToPurchaseRate:     pairedRate(products, 'orders', 'atc'),
   };
 
   // Distribution context is per-product (equal-weight) — deliberately distinct
@@ -224,8 +235,8 @@ function buildStoreBaseline(input = {}) {
   }
 
   const notes =
-    'Internal observation-only store baseline. Not used for ProductOpportunityScore ' +
-    'scoring or any merchant-facing ranking. Metrics without a denominator are null ' +
+    'Internal store baseline. Used for ProductOpportunityScore internal diagnostics ' +
+    'only, not for any merchant-facing ranking. Metrics without a denominator are null ' +
     'and listed in reliability.missingData; values are never fabricated.';
 
   return {

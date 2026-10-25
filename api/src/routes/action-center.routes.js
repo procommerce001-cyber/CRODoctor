@@ -18,6 +18,7 @@ const {
 
 const { getLatestProductPerformanceProfile } = require('../services/product-performance.service');
 const {
+  alignProfileWindows,
   buildOpportunityDiagnostics,
 } = require('../services/product-opportunity-input.adapter');
 const { buildStoreBaseline, assembleStoreBaselineRows } = require('../services/store-baseline.service');
@@ -615,18 +616,21 @@ router.get('/opportunity-diagnostics', async (req, res) => {
       contexts.push({ rawProduct, actions, profile });
     }
 
-    const result = buildOpportunityDiagnostics(contexts);
+    // Only profiles from the newest capture window feed the baseline and scoring;
+    // older ones are dropped (flagged stale) rather than mixed across windows.
+    const alignedContexts = alignProfileWindows(contexts);
 
-    // OBSERVATION-ONLY store baseline (Store Baseline Engine).
-    // Attached as internal diagnostics metadata behind the SAME flag. It does
-    // NOT feed ProductOpportunityScore scoring and does NOT affect ranking.
+    // Store baseline (Store Baseline Engine), computed BEFORE scoring so it can
+    // feed ProductOpportunityScore (still internal diagnostics, same flag).
     //
     // Funnel fields (sessions/atc/orders) come from ProductPerformanceProfile
     // (rolling window). Revenue/orders for AOV come from the latest standalone
     // ProductMetricsSnapshot (cumulative) and are passed ONLY as the dedicated
     // AOV pair — never as funnel orders — so cumulative data can never
     // contaminate CVR / ATC→purchase. Raw product views stay null (PdpEvent
-    // deferred). Non-fatal: any failure leaves storeBaseline null.
+    // deferred). Non-fatal: any failure leaves storeBaseline null and scoring
+    // runs without a baseline (honest insufficient/no_clear_leak results).
+    let storeBaseline = null;
     try {
       const productIds = rawProducts.map((p) => p.id);
       // Single query (no N+1): latest standalone snapshot is selected in JS.
@@ -638,20 +642,33 @@ router.get('/opportunity-diagnostics', async (req, res) => {
           })
         : [];
 
-      const days = contexts
+      const days = alignedContexts
         .map((c) => c.profile && c.profile.windowDays)
         .find((d) => typeof d === 'number' && Number.isFinite(d)) ?? null;
 
-      const baselineRows = assembleStoreBaselineRows(contexts, snapshots);
-      result.storeBaseline = buildStoreBaseline({
+      const baselineRows = assembleStoreBaselineRows(alignedContexts, snapshots);
+      storeBaseline = buildStoreBaseline({
         shop: req.query.shop,
         timeWindow: days != null ? { days } : null,
         products: baselineRows,
         sources: ['performance_profile', 'metrics_snapshot'],
       });
+
+      // Same AOV-only pair per product for product-level AOV in scoring.
+      // Rows are index-aligned with contexts (assembleStoreBaselineRows maps 1:1).
+      baselineRows.forEach((row, i) => {
+        const c = alignedContexts[i];
+        if (c && row && row.productId === c.rawProduct.id) {
+          c.aovRevenue = row.aovRevenue;
+          c.aovOrders = row.aovOrders;
+        }
+      });
     } catch (_) {
-      result.storeBaseline = null;
+      storeBaseline = null;
     }
+
+    const result = buildOpportunityDiagnostics(alignedContexts, { storeBaseline });
+    result.storeBaseline = storeBaseline;
 
     res.json(result);
   } catch (err) {
