@@ -1,0 +1,65 @@
+name: API tests
+
+# Runs the API unit suite (`npm test` in api/) on every PR to main and on main
+# itself. No secrets, no database, no Shopify: application code is network-blocked
+# by .github/ci/no-network.cjs, and the opt-in DB probe stays disabled.
+# Dependencies install with --ignore-scripts: the unit suite needs no generated
+# Prisma client or engines, so no lifecycle script runs and PrismaClient cannot
+# even be constructed in CI.
+#
+# Known gap: api/src/__tests__/placement-anchor.test.js is not part of `npm test`
+# (it never was) and has one stale assertion after 33b3a86 moved no_trust_bullets
+# to the top of the description. Tracked separately; not silently fixed here.
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: api-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  api-unit-tests:
+    name: api-unit-tests (node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # package.json declares no engines and the production Node version is
+        # unverified, so cover both maintained LTS lines.
+        node: [22, 24]
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: api
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+          cache-dependency-path: api/package-lock.json
+
+      - name: Refuse to run with an env file present
+        run: test ! -e .env
+
+      # Registry access is needed here only.
+      - name: Install dependencies (no lifecycle scripts)
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
+      - name: Run unit tests (network blocked, DB probe disabled)
+        env:
+          DATABASE_URL: ''
+          RUN_DB_INTEGRATION_PROBE: 'false'
+          NODE_OPTIONS: --require ${{ github.workspace }}/.github/ci/no-network.cjs
+        run: npm test
