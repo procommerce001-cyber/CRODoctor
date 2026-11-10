@@ -176,6 +176,7 @@ function normalizeProductEvents(envelopes, storeContext, options = {}) {
   // One group per checkout, reachable through any of its refs. The group's
   // ref is the order id once known (upgraded from a token-only first event).
   const checkoutByRef = new Map();
+  const dropped = new Set();
   let duplicates = 0;
 
   const reject = (eventId, reason, extra) => rejected.push({ eventId: eventId ?? null, reason, ...(extra || {}) });
@@ -190,7 +191,8 @@ function normalizeProductEvents(envelopes, storeContext, options = {}) {
     if (env.analyticsAllowed !== true) { reject(eventId, 'no_analytics_consent'); continue; }
     if (!eventId) { reject(null, 'missing_event_id'); continue; }
 
-    const kind = EVENT_KINDS[ev.name];
+    // Own keys only: 'constructor', 'toString' etc. must not resolve to a kind.
+    const kind = Object.hasOwn(EVENT_KINDS, ev.name) ? EVENT_KINDS[ev.name] : null;
     if (!kind) { reject(eventId, 'unsupported_event'); continue; }
 
     const visitorKey = boundedString(env.visitorKey, cfg.maxIdLength);
@@ -254,8 +256,23 @@ function normalizeProductEvents(envelopes, storeContext, options = {}) {
       else byProduct.set(m.productId, { ...base, kind, productId: m.productId, shopifyProductId: m.shopifyProductId, variantId: m.variantId, quantity: li.quantity });
     });
 
-    let group = (orderRef && checkoutByRef.get(orderRef)) || (tokenRef && checkoutByRef.get(tokenRef));
+    const byOrder = orderRef && checkoutByRef.get(orderRef);
+    const byToken = tokenRef && checkoutByRef.get(tokenRef);
+    let group = byOrder || byToken;
     if (!group) group = { ref: orderRef || tokenRef, facts: [], productIds: new Set() };
+    // An earlier token-only group and an earlier order-only group turn out to be
+    // the same checkout: fold the token group into the order group so neither
+    // its products nor its checkout are counted twice.
+    if (byOrder && byToken && byToken !== byOrder && byToken.ref.startsWith('token:')) {
+      let folded = 0;
+      for (const f of byToken.facts) {
+        if (byOrder.productIds.has(f.productId)) { dropped.add(f); folded += 1; continue; }
+        f.orderRef = byOrder.ref;
+        byOrder.productIds.add(f.productId);
+        byOrder.facts.push(f);
+      }
+      if (folded > 0) duplicates += 1;
+    }
     if (orderRef && group.ref !== orderRef && group.ref.startsWith('token:')) {
       group.ref = orderRef;
       for (const f of group.facts) f.orderRef = orderRef;
@@ -276,12 +293,13 @@ function normalizeProductEvents(envelopes, storeContext, options = {}) {
     if (added === 0 && repeated > 0) { duplicates += 1; reject(eventId, 'duplicate_order'); }
   }
 
+  const kept = dropped.size > 0 ? facts.filter((f) => !dropped.has(f)) : facts;
   return {
-    facts,
+    facts: kept,
     rejected,
     stats: {
       received: list.length,
-      facts: facts.length,
+      facts: kept.length,
       rejected: rejected.length,
       duplicates,
     },

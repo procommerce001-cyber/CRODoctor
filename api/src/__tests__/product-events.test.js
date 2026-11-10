@@ -509,6 +509,28 @@ test('a checkout seen first by token then by order id is one order and matches A
   assert.ok(!agg.dataQuality.includes('unmatched_checkout_tokens'));
 });
 
+test('token-only and order-only events of one checkout fold into one order when a later event links them', () => {
+  const norm = normalizeProductEvents([
+    completed(null, [['101', '1011'], ['102', '1021']], {}, 'tok_10'),
+    completed('9066', [['101', '1011']]),
+    completed('9066', [['101', '1011']], {}, 'tok_10'),
+  ], STORE);
+  const refs = norm.facts.map((f) => `${f.productId}:${f.orderRef}`).sort();
+  assert.deepStrictEqual(refs, ['hoodie:order:9066', 'tee:order:9066'], 'one fact per product, all on the order ref');
+  assert.strictEqual(norm.stats.facts, 2);
+  assert.strictEqual(norm.stats.duplicates, 2);
+  const agg = aggregateProductEvents(norm.facts, { ...WINDOW, adminOrderRefs: ['9066'] });
+  assert.strictEqual(agg.coverage.pixelCheckoutOrders, 1);
+  assert.ok(!agg.dataQuality.includes('unmatched_checkout_tokens'));
+});
+
+test('event names that are Object.prototype keys are unsupported, not purchases', () => {
+  const data = { checkout: { order: { id: '9067' }, lineItems: [{ quantity: 1, variant: { id: '1011', product: { id: '101' } } }] } };
+  const out = normalizeProductEvents([env('constructor', data), env('toString', data), env('__proto__', data)], STORE);
+  assert.strictEqual(out.facts.length, 0);
+  assert.deepStrictEqual(reasons(out), ['unsupported_event', 'unsupported_event', 'unsupported_event']);
+});
+
 // ── 10. Purity and privacy ──────────────────────────────────────────────────
 
 test('inputs are not mutated and raw client ids never reach the output', () => {
